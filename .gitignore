@@ -1,0 +1,66 @@
+# Secrets / env
+.env
+.env.*
+!env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+.uv-cache/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+pip-wheel-metadata/
+
+# Test / coverage / type / lint caches
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.dmypy.json
+
+# Logs / runtime
+*.log
+logs/
+*.pid
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursor/
+.cursorignore
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local-only artifacts
+ngrok.yml
+ngrok.log
+recordings/
+*.wav
+*.mp3
+*.flac
