@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
 
+from call_log_db import init_db
+
 load_dotenv(override=True)
 
 # ── Select which bot to run ────────────────────────────────────────────────────
@@ -112,6 +114,13 @@ async def lifespan(app: FastAPI):
         logger.info("[startup] Pre-import done — first call will have no import lag")
     except Exception as exc:
         logger.warning(f"[startup] Pre-import warning ({exc}); continuing anyway")
+
+    db_path = os.getenv("CALL_LOG_DB_PATH", "./data/call_logs.db")
+    try:
+        init_db(db_path)
+        logger.info(f"[startup] Call log DB ready at {db_path}")
+    except Exception as exc:
+        logger.warning(f"[startup] Call log DB init failed ({exc}); continuing without persistence")
 
     app.state.session = aiohttp.ClientSession()
     yield
@@ -257,6 +266,11 @@ async def ws_endpoint(
             body_data = json.loads(base64.b64decode(urllib.parse.unquote(body)).decode())
         except Exception:
             pass
+    if not isinstance(body_data, dict):
+        body_data = {}
+    # Correlate with POST /start response `call_id` (UUID). Not set for ad-hoc WS tests.
+    if call_id:
+        body_data["_session_call_id"] = call_id
 
     runner_args = WebSocketRunnerArguments(
         websocket=websocket,

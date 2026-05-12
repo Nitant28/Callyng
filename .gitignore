@@ -57,6 +57,9 @@ logs/
 Thumbs.db
 desktop.ini
 
+# Local SQLite call logs (see CALL_LOG_DB_PATH)
+/data/
+
 # Local-only artifacts
 ngrok.yml
 ngrok.log

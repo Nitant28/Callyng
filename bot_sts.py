@@ -1,15 +1,17 @@
 #
-# bot_sts.py — Gemini Live STS bot for Plivo telephony
-# Drop-in replacement for bot_cascade.py
-# All tunable STS options are documented inline
+# bot_sts.py — Aakashvani | Diya — Pyramid Constructions
+# Gemini 3.1 Flash Live | Marathi Real Estate Agent
 #
 
 import os
 import time
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from loguru import logger
 
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -23,164 +25,332 @@ from pipecat.services.google.gemini_live.llm import (
     GeminiLiveLLMService,
     GeminiVADParams,
 )
+from pipecat.services.llm_service import FunctionCallParams
+from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
 
+from call_transcript import TranscriptBuffer, attach_pipeline_finalize
+
 load_dotenv(override=True)
 
-# ── System prompt ──────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """
-You are Diya, a premium relationship manager for Pyramid Constructions.
-You are calling about "Pyramid Parkland Nxt" — a 2 BHK project in Bhukum, Pune.
 
-RULES:
-- Speak ONLY in Marathi
-- Keep every response to 1-2 sentences maximum
-- Use respectful "Aapan" / "Tumhi" — never "Tu"
-- Never make up any project details
-- If asked something you don't know: "Me exact details check karun 5 minitat call karte"
-- Pronounce: Bhukum = "Bhoo-koom", Hinjawadi = "Hin-ja-wa-dee"
+# ── System Instruction Builder ─────────────────────────────────────────────────
+# Structure: AUDIO PROFILE → SCENE → DIRECTOR'S NOTES → PERSONA → RULES → FACTS → GUARDRAILS
+# Performance direction lives in DIRECTOR'S NOTES (not inline [tags] — Live is not
+# `gemini-3.1-flash-tts-preview`, bracket tags may be spoken literally).
+# ──────────────────────────────────────────────────────────────────────────────
 
-GREETING (two steps — do not combine):
-Step 1: Say ONLY "Namaskar, {lead_name} anshi boltiye ka?" and wait.
-Step 2: After they respond, say "Me Diya, Bhukum madhil Pyramid Parkland Nxt madhun boltiye. 2 BHK sathi inquiry keli hoti — bolayla vel aahe ka?"
+def build_system_instruction(lead_name: str) -> str:
+    return f"""
+# AUDIO PROFILE: Diya
+## "Pyramid Parkland Nxt — Bhukum, Pune"
 
-PROJECT FACTS:
-- Location: Bhukum, Paud Road, near Bharat Petrol Pump, Manas Lake view
-- Size: 768 to 816 sq ft
+## THE SCENE
+Diya is sitting at a warm, professional real estate office in Pune.
+It is a calm weekday morning. She is making a friendly outbound call to {lead_name}
+about a 2 BHK project. The atmosphere is helpful and low-pressure — like a trusted
+friend who works in real estate, not a pushy salesperson.
+
+### DIRECTOR'S NOTES
+Style: Warm, confident, unhurried. Natural conversational Pune Marathi — not formal
+textbook Marathi. Vocal smile throughout — the listener should feel welcomed, not sold to.
+A few soft, natural fillers in Marathi are fine ("haan", "achha", "barं", "ho na").
+Pace: Moderate. A small natural breath between sentences. Slight pause before key
+information so it lands. Never robotic, never rushed.
+Accent: Pune Marathi — clear, warm, slightly musical intonation.
+
+---
+
+## PERSONA
+Tumche naav Diya aahe.
+Tumhi Pyramid Constructions chi professional relationship manager aahat.
+Tumhi {lead_name} la Pyramid Parkland Nxt — Bhukum madhil 2 BHK project baddal
+outbound call karat aahat.
+
+RESPOND IN MARATHI. YOU MUST RESPOND UNMISTAKABLY IN MARATHI.
+Fakt Marathi bolaychi — English ya Hindi madhye jaayche nahi.
+Aadarneey "Tumhi" / "Aapan" vapra. KABHI "Tu" nahi.
+
+---
+
+## CONVERSATIONAL RULES
+
+**Rule 1 — Opening (one-time, do not repeat):**
+Call connect zaalyaavar PAHILE FAKT heech vaakye warm, smiling tonet bola — mag thamba:
+"Namaskar... {lead_name} ji bolat aahaat kaa?"
+Tyanchya jawabachi vaat paha. Pudhe jaau nako.
+
+**Rule 2 — Introduction (one-time, only after they confirm with "haan"):**
+Bola, mag thamba:
+"Mee Diya boltiye Pyramid Constructions kadoon. Aapan aamacha Bhoo-koom
+madhla 2 BHK project baddal inquiry keli hoti — sadhya 2 minit vel aahe kaa?"
+
+**Rule 3 — Interest check (one-time, only after they confirm time):**
+"Chhan... toh Bhoo-koom, Paud Road var aamacha ek sundar project aahe —
+Manas Lake saamor. Aapan sadhya gharaa baddal vichaar karat aahaat kaa?"
+Ek prashna — mag thamba.
+
+**Rule 4 — Conversational loop (repeat as long as needed):**
+Interested asel tar — ya topics var gappe maaru shakata aahaat:
+location, size, possession, amenities, connectivity, site visit.
+Caller jitka vicharail titka saangaa — pressure nahi.
+Ekaveli ek prashna. KABHI do prashna eka breath madhe vichu nako.
+
+**Rule 5 — Site visit pitch (only when caller seems satisfied or curious):**
+Pressure nahi — fakt ek soft suggestion:
+"Ekda site bghoon yaaychi arrangement karto mee tumchyasaathi.
+Kadhi vel aahe tumhaalaa?"
+Tyani "nako" mhantla tar PARAT vichu naka — respect kara aani pudhe ja.
+
+---
+
+## SPECIAL SITUATIONS (lines to speak in each case)
+
+**BUSY:**
+"Bilkul theek aahe... kiti vaajata call karaavaa? Exact time saangaa —
+tumchyaa veles pahoon parat call karte mee."
+
+**NOT INTERESTED:**
+"Kahi harakat naahi... tumachyaa veles sathi khup khup dhanyavaad.
+Tumacha divas chhan jaau de — namaskar!"
+
+**BROCHURE REQUEST:**
+"Haa bilkul... tumchaa WhatsApp number yaach number var aahe kaa?
+Aatach pathavte mee tumhaalaa."
+
+**WRONG PROPERTY TYPE (plot / shop / office / rent / commercial):**
+"Theek aahe... aamacha focus sadhya residential 2 BHK aahe Bhoo-koom madhe.
+Tumachi requirement note keli — khup dhanyavaad!"
+
+**TRUST QUESTION (number kuthoon milalaa):**
+"Tumachaa number aamhaalaa property inquiry database madhoon milaalaa.
+Mee Pyramid Constructions chi Diya boltiye — tumhi kaahihi vicharu shakata."
+
+**AUDIO ISSUE (garbhal / cutting / no response):**
+"Sir... lagat aahe connection thoda weak aahe aataa...
+Ekhaadhyaa changlyaa jaagi jaavoon parat bolaata aayeil kaa?"
+
+---
+
+## PROJECT FACTS (use ONLY these — never invent)
+- Location: Bhoo-koom, Paud Road, Bharat Petrol Pump javal, Manas Lake view
+- Size: 768 te 816 sq ft (Total Area)
 - Floors: 12
-- RERA possession: December 2030 | Our commitment: Late 2027
-- Price: Ask customer for site visit — do not quote price over phone
-- Hinjawadi IT Park: 20 mins | Chandani Chowk: 15 mins | Pirangut: 5 mins
+- RERA possession: December 2030 | Aamchi commitment: Late 2027
+- Price: Phone var sangaayche naahi — fakt site visit suchavaa
+- Distances: Hinjawadi IT Park 20 mins | Chandani Chowk 15 mins | Pirangut 5 mins
 - Amenities: Gym, kids play area, amphitheatre, walking track, indoor games
 
-NOT INTERESTED: "Kahi harakat nahi, tumchya velesathi dhanyawad."
-BROCHURE REQUEST: "Me brochure WhatsApp var pathavte."
+---
+
+## PRONUNCIATION GUIDE (critical — always follow when speaking these words)
+- Bhukum     → "Bhoo-koom"        — NEVER "Bhutum" or "Bhukam"
+- Hinjawadi  → "Hin-ja-waa-dee"   — clear on each syllable
+- Paud Road  → "Poud Road"        — rhymes with "loud"
+- Kothrud    → "Koth-rood"
+- Chandani   → "Chan-da-nee"
+(Do NOT speak the hyphens — they are guides only.)
+
+---
+
+## GUARDRAILS
+- KABHI 2 prashna ekat vichu nako — ek prashna, mag thamba.
+- Caller kaay mhantla te AADHEE aikaa — mag uttar dya.
+- KONITIHI price quote karu naka phone var — fakt site visit suchavaa.
+- Maahiti navhti tar saangaa: "Me exact details check karun 5 minitat parat call karte."
+- KONITIHI made-up information deu naka — FAKT above PROJECT FACTS vapra.
+- Caller ne "nako" mhantla tar parat tochcha prashna vichu nako — respect kara.
+
+---
+
+## END-OF-CALL TOOL RULE (read carefully)
+The `push_lead_data` function is the LAST action of the call. It records
+the outcome to our CRM. Treat it as a one-time, terminal action.
+
+CALL IT ONLY WHEN ALL of these are true:
+  1. The caller has clearly indicated the conversation is ending
+     (busy, not interested, callback requested, wrong property,
+      or audio/connection problem they cannot recover from), AND
+  2. You are about to speak the goodbye sentence for that situation, AND
+  3. You have NOT already called `push_lead_data` in this call.
+
+DO NOT call `push_lead_data`:
+  - After "haan" / "हो" / "हेलो" / acknowledgement words.
+  - After short replies while the caller is still gathering information.
+  - "Just in case" or to save partial progress.
+  - More than once. It is a single, terminal action.
+
+When you DO call it, in the SAME turn also speak the appropriate goodbye
+line from "SPECIAL SITUATIONS" above. Never call it silently.
 """
 
 
-async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, t0: float):
+# ── Tool Definition ────────────────────────────────────────────────────────────
+
+def build_tools() -> ToolsSchema:
+    push_lead_fn = FunctionSchema(
+        name="push_lead_data",
+        description=(
+            "Terminal action — call this EXACTLY ONCE, in the FINAL turn of "
+            "the call, IMMEDIATELY before speaking the goodbye sentence. "
+            "Do NOT call this function while the conversation is ongoing. "
+            "Do NOT call this in response to short caller acknowledgements "
+            "like 'haan', 'हो', 'हेलो', 'ok'. Do NOT call this to save "
+            "partial progress. Only call it when the caller has clearly "
+            "indicated the call is ending (busy, not interested, callback "
+            "requested, wrong property, or unrecoverable audio issue) AND "
+            "you are about to speak the goodbye line. After calling this "
+            "function, in the same turn, also produce the spoken goodbye."
+        ),
+        properties={
+            "intent_status": {
+                "type": "string",
+                "enum": [
+                    "Interested",
+                    "Not_Interested",
+                    "Busy",
+                    "Callback_Requested",
+                    "Wrong_Requirement",
+                    "Audio_Issue",
+                    "Disconnected",
+                ],
+                "description": "The outcome of this call.",
+            },
+            "bhk_preference": {
+                "type": "string",
+                "description": "BHK preference explicitly stated by caller: '2BHK', '3BHK', or 'NULL' if not collected.",
+            },
+            "location_preference": {
+                "type": "string",
+                "description": "Preferred Pune location explicitly stated by caller, or 'NULL' if not collected.",
+            },
+            "site_visit_agreed": {
+                "type": "boolean",
+                "description": "True if caller agreed to a site visit, False otherwise.",
+            },
+            "callback_time": {
+                "type": "string",
+                "description": "Exact callback time requested by caller, or 'NULL' if not applicable.",
+            },
+            "language_used": {
+                "type": "string",
+                "enum": ["Marathi", "Hindi", "English", "Mixed"],
+                "description": "Primary language used by caller during the call.",
+            },
+            "caller_notes": {
+                "type": "string",
+                "description": "Any other relevant detail the caller mentioned: budget, timeline, end-use, etc. 'NULL' if nothing notable.",
+            },
+        },
+        required=["intent_status"],
+    )
+    return ToolsSchema(standard_tools=[push_lead_fn])
+
+
+# ── Main bot runner ────────────────────────────────────────────────────────────
+
+async def run_bot(
+    transport: BaseTransport,
+    runner_args: RunnerArguments,
+    t0: float,
+    *,
+    plivo_call_id: str,
+):
     _lap(t0, "run_bot() entered — building pipeline")
 
-    body = getattr(runner_args, "body", {})
+    body = getattr(runner_args, "body", {}) or {}
     lead_name = body.get("lead_name", "Sir / Madam")
-    prompt = SYSTEM_PROMPT.replace("{lead_name}", lead_name)
 
     # ── Gemini Live (STT + LLM + TTS in one) ──────────────────────────────────
-    # Pattern below mirrors the official pipecat Gemini Live examples
-    # (pipecat-ai/pipecat-examples/gemini-live-starters): we pre-seed the
-    # LLMContext with a user-role bootstrap message and leave
-    # inference_on_context_initialization at its default (True). Combined with
-    # `queue_frames([LLMRunFrame()])` in on_client_connected, this lets pipecat
-    # fire the first generation the *instant* the Gemini WS handshake finishes,
-    # overlapping the handshake with all other startup work instead of
-    # serializing poll → sleep → seed.
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
-
-        # system_instruction: sets the bot's persona/rules at the session level.
-        # Takes precedence over any system message added via LLMContext.
-        system_instruction=prompt,
+        system_instruction=build_system_instruction(lead_name),
+        tools=build_tools(),
 
         settings=GeminiLiveLLMService.Settings(
 
             # ── Model ──────────────────────────────────────────────────────────
-            # Always include the "models/" prefix — required for Gemini Live API.
-            # models/gemini-3.1-flash-live-preview  → latest, lowest latency
-            #                                          no proactivity/affective dialog
-            # models/gemini-2.5-flash-native-audio-preview-12-17 → previous gen,
-            #                                          supports proactivity + affective
+            # gemini-3.1-flash-live-preview = latest, lowest latency.
+            # Always include "models/" prefix.
             model="models/gemini-3.1-flash-live-preview",
 
             # ── Voice ──────────────────────────────────────────────────────────
-            # Options (as of 2025): Aoede, Charon, Fenrir, Kore, Puck,
-            #                       Erinome, Leda, Orus, Zephyr
-            # Aoede / Kore / Erinome → warmer, female-leaning
-            # Charon / Puck          → neutral
-            # Fenrir / Orus          → deeper, male-leaning
+            # Aoede = warmest female voice; good naturalness for Indian languages.
             voice="Aoede",
 
             # ── Language ───────────────────────────────────────────────────────
-            # Set explicitly for non-English to improve VAD + transcription accuracy.
-            # Examples: "hi-IN" (Hindi), "mr-IN" (Marathi), "en-IN" (Indian English)
-            # Leave commented to let Gemini auto-detect from audio.
-            # language="mr-IN",
+            # Marathi enum → Gemini "mr-IN". Improves transcription + prosody.
+            language=Language.MR_IN,
 
-            # ── VAD (Voice Activity Detection) ────────────────────────────────
-            # Gemini Live uses server-side VAD by default.
-            # For telephony (8 kHz mulaw), server VAD works well without Silero.
+            # ── VAD (server-side) ──────────────────────────────────────────────
+            # 700 ms = Gemini default. Sales-pitch tempo, fast turn-taking.
+            # Raise to ~900 ms only if callers get cut off mid-thought.
             vad=GeminiVADParams(
-                # silence_duration_ms: how long silence (ms) before end-of-turn.
-                # Default ~700 ms. Increase if callers get cut off mid-sentence.
-                silence_duration_ms=800,
-
-                # prefix_padding_ms: audio before speech onset to include.
-                # Helps catch the first syllable. Default ~200 ms.
-                prefix_padding_ms=200,
-
-                # disabled=True → turns off server VAD entirely.
-                # Use only if you plug in a local SileroVADAnalyzer via
-                # LLMUserAggregatorParams instead.
-                # disabled=False,
+                silence_duration_ms=700,
+                prefix_padding_ms=300,  # catch the soft first syllable
             ),
 
-            # ── Sampling / generation ─────────────────────────────────────────
-            # temperature=0.8,   # 0.0–2.0; lower = more deterministic responses
-            # max_tokens=256,    # cap response length (in output tokens)
-            # top_p=0.95,        # nucleus sampling probability mass
-            # top_k=40,          # top-k sampling cutoff
+            # ── Sampling ──────────────────────────────────────────────────────
+            # 0.5 = deterministic-enough to stay on-script while sounding natural.
+            # Default is None (~0.8). Lowering reduces off-script tool calls.
+            temperature=0.5,
 
-            # ── Thinking / reasoning (gemini-3.1 only) ────────────────────────
-            # Adds a reasoning pass before responding. Increases latency noticeably.
-            # Levels: "minimal", "low", "medium", "high"
-            # from google.genai.types import ThinkingConfig
-            # thinking=ThinkingConfig(thinking_level="minimal"),
-
-            # ── Context window compression ────────────────────────────────────
-            # Prevents hitting token limits on long calls by summarising older turns.
-            # context_window_compression={"enabled": True},
-
-            # ── Affective dialog (gemini-2.5 only — NOT gemini-3.1) ───────────
-            # Adapts tone/prosody to match the caller's detected emotional state.
-            # enable_affective_dialog=True,
-
-            # ── Proactivity (gemini-2.5 only — NOT gemini-3.1) ────────────────
-            # Lets the model speak unprompted — e.g. fill silence, ask follow-ups.
-            # from google.genai.types import ProactivityConfig
-            # proactivity=ProactivityConfig(enabled=True),
+            # ── Notes ─────────────────────────────────────────────────────────
+            # affective_dialog / proactivity → 2.5-native-audio only, NOT 3.1.
+            # thinking_budget / context_window_compression → enable if needed.
         ),
     )
     _lap(t0, "GeminiLiveLLMService object created (not yet connected)")
 
-    # ── Context ────────────────────────────────────────────────────────────────
-    # Pre-seed the context with a user-role bootstrap turn. pipecat's
-    # GeminiLiveLLMService picks this up on the first LLMContextFrame and, if
-    # the Gemini WS isn't ready yet, defers via `_run_llm_when_session_ready`
-    # so generation kicks off the *moment* the handshake completes — i.e. zero
-    # additional wall-clock cost beyond the unavoidable WS connect.
+    # ── Function handler ───────────────────────────────────────────────────────
+    async def handle_push_lead_data(params: FunctionCallParams):
+        data = params.arguments or {}
+        logger.info("=" * 55)
+        logger.info(f"  LEAD CAPTURED — {lead_name}")
+        logger.info(f"  Phone         : {body.get('phone_number', 'N/A')}")
+        logger.info(f"  Intent        : {data.get('intent_status')}")
+        logger.info(f"  BHK           : {data.get('bhk_preference')}")
+        logger.info(f"  Location      : {data.get('location_preference')}")
+        logger.info(f"  Site visit    : {data.get('site_visit_agreed')}")
+        logger.info(f"  Callback time : {data.get('callback_time', 'NULL')}")
+        logger.info(f"  Language      : {data.get('language_used')}")
+        logger.info(f"  Notes         : {data.get('caller_notes', 'NULL')}")
+        logger.info("=" * 55)
+        await params.result_callback(
+            {"status": "saved", "message": "Lead data recorded successfully"}
+        )
+
+    llm.register_function("push_lead_data", handle_push_lead_data)
+
+    # ── Bootstrap context ──────────────────────────────────────────────────────
+    # Pre-seed a user-role turn so Gemini fires the greeting the moment the WS
+    # handshake completes (pipecat's standard pattern).
     bootstrap_messages = [
         {
             "role": "user",
             "content": (
-                "The call has just connected. Begin with Step 1 of your "
-                f"greeting: say only 'Namaskar, {lead_name} anshi boltiye ka?' "
-                "and then stop and wait for the caller's response."
+                f"The call has just connected. {lead_name} has answered. "
+                f"Execute Rule 1 from your conversational rules: say ONLY "
+                f"'Namaskar... {lead_name} ji bolat aahaat kaa?' in a warm, "
+                f"smiling Marathi voice — then stop and wait for their response. "
+                f"Do not say anything else."
             ),
         }
     ]
     context = LLMContext(bootstrap_messages)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
-    # ── Pipeline: transport.input → aggregator → Gemini Live → transport.output ─
+    # ── Pipeline ───────────────────────────────────────────────────────────────
     pipeline = Pipeline([
         transport.input(),
-        user_aggregator,       # ← required: buffers/routes audio to Gemini
+        user_aggregator,
         llm,
         transport.output(),
-        assistant_aggregator,  # ← required: captures assistant turns
+        assistant_aggregator,
     ])
     _lap(t0, "Pipeline built")
 
@@ -196,13 +366,26 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, t0: fl
     )
     _lap(t0, "PipelineTask created — registering event handlers")
 
+    started_at_iso = datetime.now(timezone.utc).isoformat()
+    perf_pipeline = time.perf_counter()
+    transcript_buffer = TranscriptBuffer()
+    transcript_buffer.register(user_aggregator, assistant_aggregator)
+    session_call_id = body.get("_session_call_id")
+    attach_pipeline_finalize(
+        task,
+        transcript_buffer,
+        context,
+        route=os.getenv("BOT_ROUTE", "sts"),
+        session_call_id=session_call_id,
+        plivo_call_id=plivo_call_id,
+        started_at_iso=started_at_iso,
+        perf_start=perf_pipeline,
+        strip_bootstrap=True,
+    )
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        # Official pipecat pattern: just queue LLMRunFrame and let the
-        # service's `_run_llm_when_session_ready` mechanism handle the race
-        # between Gemini WS handshake completion and context arrival. No
-        # polling, no artificial sleep, no late add_message.
-        _lap(t0, "on_client_connected fired — queueing LLMRunFrame")
+        _lap(t0, f"on_client_connected fired — queueing LLMRunFrame for {lead_name}")
         await task.queue_frames([LLMRunFrame()])
         _lap(t0, "LLMRunFrame queued — Gemini will greet as soon as WS is ready")
 
@@ -244,7 +427,7 @@ async def bot(runner_args: RunnerArguments):
     )
     _lap(t0, "FastAPIWebsocketTransport created — calling run_bot()")
 
-    await run_bot(transport, runner_args, t0)
+    await run_bot(transport, runner_args, t0, plivo_call_id=call_data["call_id"])
 
 
 def _lap(t0: float, label: str) -> None:

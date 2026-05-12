@@ -10,9 +10,9 @@
 | Field             | Value                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
 | Phase             | **Phase 0 — Foundation** (week 1 of 2)                                                            |
-| Last milestone    | `bot_sts.py` (Gemini Live STS) and `bot_cascade.py` (Sarvam STT + Groq + Cartesia) place real outbound calls via Plivo. STS first-utterance lag down from ~30 s to ~1–2 s after migrating to the official pipecat pattern. |
-| Current focus     | Developer ergonomics + scaffolding (this commit): rename to `aakashvani`, add `justfile`, hoist imports, instrument cost. |
-| Next milestone    | SQLite call-log persistence + post-call transcript capture + per-call cost from pipecat `MetricsFrame`. |
+| Last milestone    | Post-call **transcript capture** (Pipecat `on_*_turn_stopped`) + **SQLite** `call_logs` table (`call_transcript.py`, `call_log_db.py`). Server passes `_session_call_id` from `/ws?call_id=` for correlation with `POST /start`. |
+| Current focus     | Per-call cost from pipecat `MetricsFrame`, post-call Gemini extraction, n8n webhook. |
+| Next milestone    | Cost columns + webhooks + downstream extraction (see [ROADMAP.md](ROADMAP.md)). |
 | Full plan         | See [ROADMAP.md](ROADMAP.md).                                                                     |
 
 ---
@@ -61,6 +61,12 @@ just call +919123866924 Satyam Pune
 
 That's it. The callee's phone rings; on pickup, Diya greets them in Marathi.
 
+### Call logs and transcripts
+
+- Each completed pipeline run appends one row to the SQLite DB at `CALL_LOG_DB_PATH` (default `./data/call_logs.db`). Columns include `session_call_id` (UUID from `POST /start`), `plivo_call_id`, `route`, timestamps, `duration_ms`, and `transcript_json` (array of `{role, content, timestamp, …}`).
+- Transcripts are built from Pipecat universal aggregator **`on_user_turn_stopped`** / **`on_assistant_turn_stopped`** events. For STS, the synthetic bootstrap user line (“The call has just connected…”) is **stripped** before persistence.
+- Verify SQLite from Python: `uv run python -c "import sqlite3; print(sqlite3.sqlite_version)"` (no extra pip package; uses the standard library).
+
 ### Without `just`
 
 Same flow, no `just` install required:
@@ -78,9 +84,12 @@ scripts/call.sh +919123866924 Satyam Pune
 ```
 aakashvani/
 ├── server.py                FastAPI app: /start, /answer (Plivo XML), /ws, /health
+├── call_transcript.py       Turn-level transcript buffer + pipeline-finished logging + DB insert
+├── call_log_db.py           SQLite schema/init + insert for `call_logs`
 ├── bot.py                   Stock pipecat outbound example (kept as reference)
 ├── bot_sts.py               Route B: Gemini Live speech-to-speech (Diya, Marathi)
 ├── bot_cascade.py           Route A: Sarvam STT + Groq LLM + Cartesia TTS
+├── data/                    Default location for `call_logs.db` (gitignored; see CALL_LOG_DB_PATH)
 ├── justfile                 Dev commands (dev, dev-sts, dev-cascade, tunnel, call, health, route, sync)
 ├── scripts/
 │   └── call.sh              Standalone call trigger (no `just` dependency)
@@ -158,7 +167,7 @@ This README mirrors what I'm working on right now. For the longer vision (pricin
 
 Immediate next deliverables (Phase 0 continuation):
 
-1. SQLite call-log persistence: every `/ws` call writes one row with `call_id`, duration, route, transcript.
+1. ~~SQLite call-log persistence + transcript capture~~ — done (`call_logs` + turn events; see **Call logs and transcripts** above).
 2. Cost capture via pipecat's `MetricsFrame` (already enabled with `enable_metrics=True`).
 3. Post-call extraction: Gemini Flash reads the transcript, returns a JSON schema per bot config.
 4. `POST /webhooks/n8n` fire after every call.

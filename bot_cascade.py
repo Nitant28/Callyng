@@ -1,6 +1,8 @@
 import os
 import asyncio
 import json
+import time
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -30,6 +32,8 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
+
+from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 
 load_dotenv(override=True)
 
@@ -100,7 +104,7 @@ If data missing, pass "NULL".
 Call function FIRST, then send final goodbye. Never skip the function call.
 """
 
-async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
+async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_call_id: str):
     logger.info("Starting Hindi bot — Diya (Prowave)")
 
     body = getattr(runner_args, "body", {})
@@ -216,6 +220,23 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         ),
     )
 
+    started_at_iso = datetime.now(timezone.utc).isoformat()
+    perf_pipeline = time.perf_counter()
+    transcript_buffer = TranscriptBuffer()
+    transcript_buffer.register(user_aggregator, assistant_aggregator)
+    body = getattr(runner_args, "body", {}) or {}
+    attach_pipeline_finalize(
+        task,
+        transcript_buffer,
+        context,
+        route=os.getenv("BOT_ROUTE", "cascade"),
+        session_call_id=body.get("_session_call_id"),
+        plivo_call_id=plivo_call_id,
+        started_at_iso=started_at_iso,
+        perf_start=perf_pipeline,
+        strip_bootstrap=False,
+    )
+
     @transport.event_handler("on_client_connected")
     async def on_connected(transport, client):
         logger.info("Call connected — Diya starting")
@@ -252,4 +273,4 @@ async def bot(runner_args: RunnerArguments):
         ),
     )
 
-    await run_bot(transport, runner_args)
+    await run_bot(transport, runner_args, call_data["call_id"])
