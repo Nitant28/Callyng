@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -11,7 +13,9 @@ from loguru import logger
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext, LLMSpecificMessage
 
-from call_log_db import insert_call_log
+from call_log_db import insert_call_log, update_call_log_extraction
+from call_metrics import UsageMetricsAccumulator
+from post_call_extract import extract_post_call, normalize_post_call_extraction
 
 # STS bootstrap user message prefix (see bot_sts.py) — omit from stored transcripts.
 _STS_BOOTSTRAP_PREFIX = "The call has just connected."
@@ -118,6 +122,7 @@ def attach_pipeline_finalize(
     started_at_iso: str,
     perf_start: float,
     strip_bootstrap: bool = False,
+    usage_accumulator: UsageMetricsAccumulator | None = None,
 ) -> None:
     @task.event_handler("on_pipeline_finished")
     async def _on_pipeline_finished(task, frame):
@@ -126,6 +131,9 @@ def attach_pipeline_finalize(
         transcript = finalize_transcript(
             buffer, context, strip_bootstrap=strip_bootstrap
         )
+        usage_summary: dict[str, Any] | None = None
+        if usage_accumulator is not None:
+            usage_summary = usage_accumulator.to_summary()
         summary = {
             "session_call_id": session_call_id,
             "plivo_call_id": plivo_call_id,
@@ -135,6 +143,13 @@ def attach_pipeline_finalize(
             "duration_ms": round(duration_ms, 2),
             "turn_count": len(transcript),
         }
+        if usage_summary is not None:
+            summary["usage"] = {
+                "llm_prompt_tokens": usage_summary.get("llm_prompt_tokens"),
+                "llm_completion_tokens": usage_summary.get("llm_completion_tokens"),
+                "llm_total_tokens": usage_summary.get("llm_total_tokens"),
+                "tts_characters": usage_summary.get("tts_characters"),
+            }
         logger.info(
             "call_transcript_summary {}",
             json.dumps(summary, ensure_ascii=False),
@@ -149,8 +164,17 @@ def attach_pipeline_finalize(
         else:
             logger.info("call_transcript_payload {}", preview)
 
+        usage_metrics_blob: str | None = None
+        up, uc, ut, tts_c = 0, 0, 0, 0
+        if usage_summary is not None:
+            usage_metrics_blob = json.dumps(usage_summary, ensure_ascii=False)
+            up = int(usage_summary.get("llm_prompt_tokens") or 0)
+            uc = int(usage_summary.get("llm_completion_tokens") or 0)
+            ut = int(usage_summary.get("llm_total_tokens") or 0)
+            tts_c = int(usage_summary.get("tts_characters") or 0)
+
         try:
-            insert_call_log(
+            row_id = insert_call_log(
                 session_call_id=session_call_id,
                 plivo_call_id=plivo_call_id,
                 route=route,
@@ -158,6 +182,49 @@ def attach_pipeline_finalize(
                 ended_at=ended_at,
                 duration_ms=duration_ms,
                 transcript=transcript,
+                usage_prompt_tokens=up,
+                usage_completion_tokens=uc,
+                usage_total_tokens=ut,
+                usage_tts_characters=tts_c,
+                usage_metrics_json=usage_metrics_blob,
             )
         except Exception as exc:
             logger.error("call_log_db insert failed: {}", exc)
+            return
+
+        if os.getenv("GROQ_API_KEY"):
+            async def _extract_and_patch() -> None:
+                try:
+                    parsed, err, model_used = await extract_post_call(transcript)
+                    if parsed is not None and err is None:
+                        parsed = normalize_post_call_extraction(parsed)
+                        update_call_log_extraction(
+                            row_id,
+                            extraction_json=json.dumps(parsed, ensure_ascii=False),
+                            extraction_error=None,
+                            extraction_model=model_used,
+                        )
+                    else:
+                        update_call_log_extraction(
+                            row_id,
+                            extraction_json=None,
+                            extraction_error=err or "extraction_failed",
+                            extraction_model=model_used,
+                        )
+                except Exception as exc:
+                    logger.exception("post_call extraction failed: {}", exc)
+                    try:
+                        update_call_log_extraction(
+                            row_id,
+                            extraction_json=None,
+                            extraction_error=f"{type(exc).__name__}: {exc}",
+                            extraction_model=os.getenv(
+                                "POST_CALL_MODEL", "llama-3.3-70b-versatile"
+                            ),
+                        )
+                    except Exception:
+                        logger.exception("call_log extraction update failed")
+
+            asyncio.create_task(_extract_and_patch())
+        else:
+            logger.debug("post_call_extract skipped: GROQ_API_KEY not set")

@@ -10,9 +10,9 @@
 | Field             | Value                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
 | Phase             | **Phase 0 — Foundation** (week 1 of 2)                                                            |
-| Last milestone    | Post-call **transcript capture** (Pipecat `on_*_turn_stopped`) + **SQLite** `call_logs` table (`call_transcript.py`, `call_log_db.py`). Server passes `_session_call_id` from `/ws?call_id=` for correlation with `POST /start`. |
-| Current focus     | Per-call cost from pipecat `MetricsFrame`, post-call Gemini extraction, n8n webhook. |
-| Next milestone    | Cost columns + webhooks + downstream extraction (see [ROADMAP.md](ROADMAP.md)). |
+| Last milestone    | **STS post-call-only leads** — Gemini Live runs with `tools=None` (no live `push_lead_data`); structured fields from **Groq** on transcript + `Interested` intent + `normalize_post_call_extraction` (`post_call_extract.py`, `call_transcript.py`, `call_log_db.py`). |
+| Current focus     | n8n webhook after each call; optional INR cost from token pricing. |
+| Next milestone    | Webhooks + browser `SmallWebRTCTransport` dev path (see [ROADMAP.md](ROADMAP.md)). |
 | Full plan         | See [ROADMAP.md](ROADMAP.md).                                                                     |
 
 ---
@@ -22,7 +22,7 @@
 Two voice pipelines that can call any Indian phone number via Plivo and hold a conversation:
 
 - **Route A — Cascaded** ([bot_cascade.py](bot_cascade.py)): Sarvam STT (Hindi/Marathi/auto) → Groq Llama 3.3 70B → Cartesia TTS. Tight script control, function-calling, easy to audit. ~1.5–2.5 s round-trip.
-- **Route B — STS** ([bot_sts.py](bot_sts.py)): Gemini Live (speech-to-speech) — single model handles STT + LLM + TTS. ~0.5–1 s round-trip. Currently configured as **Diya**, a Marathi real-estate concierge for Pyramid Constructions.
+- **Route B — STS** ([bot_sts.py](bot_sts.py), [bot_sts_hi.py](bot_sts_hi.py)): Gemini Live (speech-to-speech) — single model handles STT + LLM + TTS. ~0.5–1 s round-trip. **Diya** outbound scripts (Marathi: Pyramid Parkland Nxt; Hindi: Tesseract Nilaya). Lead JSON is **not** captured via live tools; after hang-up, `call_transcript.py` runs **Groq** extraction into `call_logs.extraction_json`.
 
 Calls are placed by hitting `POST /start` on the FastAPI server in [server.py](server.py). Pipecat handles the audio pipeline; Plivo handles the PSTN leg.
 
@@ -63,7 +63,7 @@ That's it. The callee's phone rings; on pickup, Diya greets them in Marathi.
 
 ### Call logs and transcripts
 
-- Each completed pipeline run appends one row to the SQLite DB at `CALL_LOG_DB_PATH` (default `./data/call_logs.db`). Columns include `session_call_id` (UUID from `POST /start`), `plivo_call_id`, `route`, timestamps, `duration_ms`, and `transcript_json` (array of `{role, content, timestamp, …}`).
+- Each completed pipeline run appends one row to the SQLite DB at `CALL_LOG_DB_PATH` (default `./data/call_logs.db`). Columns include `session_call_id` (UUID from `POST /start`), `plivo_call_id`, `route`, timestamps, `duration_ms`, `transcript_json` (array of `{role, content, timestamp, …}`), **token usage** (`usage_prompt_tokens`, `usage_completion_tokens`, `usage_total_tokens`, `usage_tts_characters`, `usage_metrics_json`), and **post-call extraction** (`extraction_json`, `extraction_error`, `extraction_model`) when `GROQ_API_KEY` is set. `extraction_json` includes `intent_status` (values include **`Interested`**, `Not_Interested`, `Busy`, `Callback_Requested`, `Wrong_Requirement`, `Unknown`) plus preferences; a small **normalizer** upgrades inconsistent pairs (e.g. `site_visit_agreed: true` with `Unknown` intent → `Interested`) before the row is updated.
 - Transcripts are built from Pipecat universal aggregator **`on_user_turn_stopped`** / **`on_assistant_turn_stopped`** events. For STS, the synthetic bootstrap user line (“The call has just connected…”) is **stripped** before persistence.
 - Verify SQLite from Python: `uv run python -c "import sqlite3; print(sqlite3.sqlite_version)"` (no extra pip package; uses the standard library).
 
@@ -84,10 +84,13 @@ scripts/call.sh +919123866924 Satyam Pune
 ```
 aakashvani/
 ├── server.py                FastAPI app: /start, /answer (Plivo XML), /ws, /health
-├── call_transcript.py       Turn-level transcript buffer + pipeline-finished logging + DB insert
-├── call_log_db.py           SQLite schema/init + insert for `call_logs`
+├── call_transcript.py       Turn buffer + pipeline end → call_logs + async Groq extract + normalize
+├── call_log_db.py           SQLite schema/migrations + insert + extraction update
+├── call_metrics.py          UsageMetricsTap: sums LLM/TTS usage from Pipecat MetricsFrame
+├── post_call_extract.py     Groq post-call JSON extraction + normalize_post_call_extraction
 ├── bot.py                   Stock pipecat outbound example (kept as reference)
-├── bot_sts.py               Route B: Gemini Live speech-to-speech (Diya, Marathi)
+├── bot_sts.py               Route B (MR): Gemini Live — Diya, Pyramid Parkland Nxt
+├── bot_sts_hi.py            Route B (HI): Gemini Live — Diya, Tesseract Nilaya
 ├── bot_cascade.py           Route A: Sarvam STT + Groq LLM + Cartesia TTS
 ├── data/                    Default location for `call_logs.db` (gitignored; see CALL_LOG_DB_PATH)
 ├── justfile                 Dev commands (dev, dev-sts, dev-cascade, tunnel, call, health, route, sync)
@@ -129,9 +132,10 @@ sequenceDiagram
     Server-->>Plivo: <Stream> XML pointing at /ws
     Plivo->>Server: WSS /ws (audio stream)
     Server->>Pipecat: bot(runner_args)
-    Pipecat->>Gemini: open live session + send seed turn
+    Pipecat->>Gemini: open live session (tools=None) + send seed turn
     Gemini-->>Pipecat: first audio chunk (~0.5-1 s after handshake)
     Pipecat-->>Callee: Diya speaks the greeting
+    Note over Pipecat: On pipeline end: transcript → SQLite; if GROQ_API_KEY, Groq JSON + normalizer → extraction_json
 ```
 
 ---
@@ -168,7 +172,7 @@ This README mirrors what I'm working on right now. For the longer vision (pricin
 Immediate next deliverables (Phase 0 continuation):
 
 1. ~~SQLite call-log persistence + transcript capture~~ — done (`call_logs` + turn events; see **Call logs and transcripts** above).
-2. Cost capture via pipecat's `MetricsFrame` (already enabled with `enable_metrics=True`).
-3. Post-call extraction: Gemini Flash reads the transcript, returns a JSON schema per bot config.
+2. ~~Cost capture via pipecat's `MetricsFrame`~~ — done (`call_metrics.UsageMetricsTap` → usage columns + `usage_metrics_json`).
+3. ~~Post-call extraction~~ — done via **Groq** (`post_call_extract.py`); uses `GROQ_API_KEY` and optional `POST_CALL_MODEL` in `.env`. INR cost from tokens deferred until pricing is finalized.
 4. `POST /webhooks/n8n` fire after every call.
 5. Browser test path via `SmallWebRTCTransport` so we stop burning Plivo minutes during dev.

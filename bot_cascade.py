@@ -33,6 +33,7 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 
 load_dotenv(override=True)
@@ -200,6 +201,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         ),
     )
 
+    transcript_buffer = TranscriptBuffer()
+    usage_accumulator = UsageMetricsAccumulator()
+    usage_tap = UsageMetricsTap(usage_accumulator)
+    transcript_buffer.register(user_aggregator, assistant_aggregator)
+
     pipeline = Pipeline([
         transport.input(),
         stt,
@@ -207,6 +213,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         llm,
         tts,
         transport.output(),
+        usage_tap,
         assistant_aggregator,
     ])
 
@@ -217,13 +224,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
             audio_out_sample_rate=8000,
             allow_interruptions=True,
             enable_metrics=True,
+            enable_usage_metrics=True,
         ),
     )
 
     started_at_iso = datetime.now(timezone.utc).isoformat()
     perf_pipeline = time.perf_counter()
-    transcript_buffer = TranscriptBuffer()
-    transcript_buffer.register(user_aggregator, assistant_aggregator)
     body = getattr(runner_args, "body", {}) or {}
     attach_pipeline_finalize(
         task,
@@ -235,6 +241,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         started_at_iso=started_at_iso,
         perf_start=perf_pipeline,
         strip_bootstrap=False,
+        usage_accumulator=usage_accumulator,
     )
 
     @transport.event_handler("on_client_connected")

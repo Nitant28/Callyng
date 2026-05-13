@@ -74,7 +74,7 @@ flowchart LR
 | Aspect                  | Route A (Cascaded)                              | Route B (STS — Gemini Live)              |
 | ----------------------- | ----------------------------------------------- | ---------------------------------------- |
 | Latency (round-trip)    | ~1.5-2.5 s                                      | ~0.5-1 s                                 |
-| Script adherence        | High — full prompt control, function-calling    | Medium — Gemini interprets the prompt    |
+| Script adherence        | High — full prompt control, function-calling    | Medium — prompt-led; **no live lead tool**; Groq fills `extraction_json` after hang-up |
 | Auditability            | Easy — STT/LLM/TTS each emit separate frames    | Harder — single black-box model          |
 | Indian language quality | Excellent (Sarvam saarika)                      | Good (Marathi, Hindi, English)           |
 | Cost / min              | ₹1.48 (verified)                                | TBD — re-derive per audio-token rates    |
@@ -106,7 +106,7 @@ flowchart LR
 | TTS English       | Deepgram          | `aura-2`                             | maybe       |
 | TTS premium       | ElevenLabs        | `eleven_turbo_v2_5`                  | maybe       |
 | VAD               | Gemini server VAD (STS) / Silero (cascaded) | Turn detection             | done        |
-| Post-call extraction | Gemini Flash   | `gemini-2.0-flash`                   | planned     |
+| Post-call extraction | Groq              | `llama-3.3-70b-versatile` (HTTP)     | done        |
 
 ### Infrastructure
 
@@ -430,7 +430,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | Pipecat `MetricsFrame` → SQLite call_logs row per call                          | next          |
 | Post-call transcript capture from `on_user/assistant_turn_stopped` events       | next          |
 | Cost calculation in INR from token counts (not from duration)                   | next          |
-| Post-call Gemini Flash extraction → JSON                                        | next          |
+| Post-call Groq extraction → `extraction_json` (`Interested` + normalizer)       | done          |
 | `POST /webhooks/n8n` after every call                                           | next          |
 | Browser test path via `SmallWebRTCTransport` (no Plivo minutes during dev)      | next          |
 
@@ -522,8 +522,8 @@ If you (an LLM agent) are reading this to help build Aakashvani, here is the che
 
 1. WSL2 + Python 3.12 + uv environment, all imports working.
 2. `server.py` — FastAPI app exposing `/start`, `/answer`, `/ws`, `/health`. Picks `bot_sts` or `bot_cascade` from `BOT_ROUTE` env at module load.
-3. `bot_sts.py` — Gemini Live STS bot ("Diya", Marathi, Pyramid Constructions). Migrated to the official pipecat pattern (pre-seeded `LLMContext`, default `inference_on_context_initialization=True`, simple `on_client_connected` → `queue_frames([LLMRunFrame()])`). First-utterance latency ~1-2 s.
-4. `bot_cascade.py` — Sarvam STT + Groq Llama 3.3 + Cartesia TTS. Has a `push_lead_data` function-call. Uses Silero VAD for turn-taking.
+3. `bot_sts.py` / `bot_sts_hi.py` — Gemini Live STS ("Diya": Marathi Pyramid script; Hindi Tesseract script). `GeminiLiveLLMService` with **`tools=None`** — no live `push_lead_data`; lead fields come from post-call Groq on the transcript (`call_transcript.py`). Pre-seeded `LLMContext`, `on_client_connected` → `queue_frames([LLMRunFrame()])`. First-utterance latency ~1-2 s.
+4. `bot_cascade.py` — Sarvam STT + Groq Llama 3.3 + Cartesia TTS. Still has a live **`push_lead_data`** function-call for end-of-call capture. Uses Silero VAD for turn-taking.
 5. `bot.py` — vanilla pipecat outbound example, kept as reference.
 6. `_prewarm_gemini` in `server.py` opens a throwaway Gemini Live session during `/start` to warm DNS/TLS/Google backend caches. `/answer` waits up to 3 s for it.
 7. `justfile` + `scripts/call.sh` for dev ergonomics.
@@ -581,7 +581,7 @@ In order:
 1. SQLite call-log persistence (`call_logs` table, one row per call).
 2. `MetricsFrame` listener → persist `audio_in_tokens` / `audio_out_tokens` / cost.
 3. Transcript capture from `on_user_turn_stopped` + `on_assistant_turn_stopped` aggregator events.
-4. Post-call Gemini Flash extraction with a JSON schema.
+4. Post-call **Groq** JSON extraction (`post_call_extract.py`) into `call_logs.extraction_json`, with `normalize_post_call_extraction` for deterministic fixes before persist.
 5. `POST` to n8n webhook from `.env`.
 6. `SmallWebRTCTransport` browser-test route.
 

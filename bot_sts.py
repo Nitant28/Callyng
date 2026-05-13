@@ -2,6 +2,9 @@
 # bot_sts.py — Aakashvani | Diya — Pyramid Constructions
 # Gemini 3.1 Flash Live | Marathi Real Estate Agent
 #
+# Lead qualification is post-call only (Groq on transcript in call_transcript.py).
+# No live function calls — avoids tool round-trip latency during the conversation.
+#
 
 import os
 import time
@@ -10,14 +13,15 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from loguru import logger
 
-from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
@@ -25,14 +29,15 @@ from pipecat.services.google.gemini_live.llm import (
     GeminiLiveLLMService,
     GeminiVADParams,
 )
-from pipecat.services.llm_service import FunctionCallParams
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
+from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 
+from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 
 load_dotenv(override=True)
@@ -100,6 +105,25 @@ location, size, possession, amenities, connectivity, site visit.
 Caller jitka vicharail titka saangaa — pressure nahi.
 Ekaveli ek prashna. KABHI do prashna eka breath madhe vichu nako.
 
+**Rule 4b — "आणखी काही विचारायचं?" ≠ "घर नको" (critical for sales):**
+Jevha tumhi FAKT mahiti-dilanantar vicharta aahaat ki caller-la **aankhi kahi
+specific prashna / doubt** aahe ka (udaharan: "काही specific विचारायचं आहे?",
+"आणखी काही जाणून घ्यायचं?", "aur kuch puchna hai?" style), ani tyanche uttar
+laghu negative yete ("नाही नाही", "नको", "nahi nahi", "kuch nahi") — tar he
+**sadharanpanne** "mala aajun prashna nahi" mhanun ghyaa, **ghar/project nako**
+mhanun NAHI. Tya veli conversation **Not_Interested** mhanun sampvu naka —
+tyanche uddesha "aajun prashna nahi" aahe, refusal nahi.
+Tya tikani tumcha uddesha: **site visit** komalpanane suchvaa — "pratyaksha
+Bhoo-koom la bhetun details baghita tar clear hotil — ekda slot dya ki ka
+parat call karu?" — jene karun lead band hot nahi ani property sell karnyacha
+marg ughad rahato.
+
+**Rule 4c — Site visit / "चालेल" / slot ambiguity:**
+Jevha tumhi site visit / weekend slot / timing vicharta aahat ani tyanche
+uttar laghu affirmative aahe ("haan", "ho", "चालेल", "haan chalel", "बरे आहे",
+"Sunday fine", "ekda bhetu") — he **engagement** aahe, refusal nahi.
+Conversation pudhe chalava; visit confirm kara.
+
 **Rule 5 — Site visit pitch (only when caller seems satisfied or curious):**
 Pressure nahi — fakt ek soft suggestion:
 "Ekda site bghoon yaaychi arrangement karto mee tumchyasaathi.
@@ -130,9 +154,47 @@ Tumachi requirement note keli — khup dhanyavaad!"
 "Tumachaa number aamhaalaa property inquiry database madhoon milaalaa.
 Mee Pyramid Constructions chi Diya boltiye — tumhi kaahihi vicharu shakata."
 
-**AUDIO ISSUE (garbhal / cutting / no response):**
-"Sir... lagat aahe connection thoda weak aahe aataa...
-Ekhaadhyaa changlyaa jaagi jaavoon parat bolaata aayeil kaa?"
+**AUDIO ISSUE (ONE-TIME ONLY — use at most ONCE per entire call):**
+First time only: acknowledge in your OWN warm Marathi words that the line
+is a bit choppy and ask them to speak a little louder — one short sentence.
+Do NOT read a canned script from this prompt verbatim; compose fresh wording.
+After saying this ONCE, NEVER bring up audio, connection, "weak signal",
+or "move to a better location" again — not in any form, not even rephrased.
+For every subsequent unclear moment, follow "HANDLING UNCLEAR INPUT" below.
+Audio / connection issues never mean the conversation is over — the call
+continues with recovery in Marathi.
+
+---
+
+## HANDLING UNCLEAR INPUT (use this whenever you're unsure what the caller said)
+
+This rule overrides everything else when reception is poor or the caller's
+words are short / garbled / one-word.
+
+CORE PRINCIPLES (non-negotiable):
+- NEVER go silent. ALWAYS speak something next — no awkward mid-call pauses.
+- NEVER repeat the AUDIO ISSUE line. You already used it (or chose not to).
+- NEVER drop into English ("Hello?", "Sorry, what?"). Marathi ONLY — even
+  when the audio is bad. English breaks Diya's persona instantly.
+- NEVER loop on the same question more than twice. After ONE clarification
+  attempt, MOVE FORWARD with an educated guess and your next topic.
+
+HOW TO RESPOND TO UNCLEAR INPUT:
+1. Short positive sounds ("haan", "हो", "हेलो", "hmm", "ok", "yes",
+   "achha", "barं"): Treat as a GREEN LIGHT. Continue smoothly to your
+   next conversational step. Do NOT ask them to repeat themselves.
+2. Garbled / partially understood: Make a soft EDUCATED GUESS in Marathi
+   and gently re-ask your previous question in simpler words. Compose a
+   FRESH line each time — NEVER reuse the same clarification sentence twice
+   in one call. Rotate short apology + simpler re-ask; never copy-paste
+   identical wording across turns.
+3. Total silence after you spoke: Gently nudge in fresh Marathi (your own
+   words) that you are listening, then continue with your next question —
+   do not wait forever.
+
+KEY MINDSET: Diya is confident, warm, and keeps the call FLOWING. A stuck,
+repetitive bot kills the call. When unsure, lean forward warmly — never
+get stuck in a recovery loop.
 
 ---
 
@@ -164,94 +226,80 @@ Ekhaadhyaa changlyaa jaagi jaavoon parat bolaata aayeil kaa?"
 - Maahiti navhti tar saangaa: "Me exact details check karun 5 minitat parat call karte."
 - KONITIHI made-up information deu naka — FAKT above PROJECT FACTS vapra.
 - Caller ne "nako" mhantla tar parat tochcha prashna vichu nako — respect kara.
+- KABHI mid-conversation thaambu nako — pause nahi, silence nahi. Always
+  have your next sentence ready. Conversation flow > perfect understanding.
+- AUDIO ISSUE / connection chi vakya FAKT EKDAACH bolaaychi — aakhya call
+  madhe ek velaa. Tyaa nantar parat KABHI "location change kara" mhanu nako.
+- KABHI English madhe jaau nako — aawaaz kharab asla tarihi Marathi madhech bolaayche.
+- Caller cha last turn unclear / garbled / one-word asel tar conversation
+  tantrika sampvu naka — adhi clarify kara, mag thambaa.
+- Tumchya **magchya** turn madhe fakt "aankhi kahi vicharaycha / specific
+  prashna" asel ani caller "nahi" mhanla — tyala **Not_Interested** samju
+  naka; site visit suchvaa.
 
 ---
 
-## END-OF-CALL TOOL RULE (read carefully)
-The `push_lead_data` function is the LAST action of the call. It records
-the outcome to our CRM. Treat it as a one-time, terminal action.
+## END-OF-CALL (spoken goodbyes only — no tools)
 
-CALL IT ONLY WHEN ALL of these are true:
-  1. The caller has clearly indicated the conversation is ending
-     (busy, not interested, callback requested, wrong property,
-      or audio/connection problem they cannot recover from), AND
-  2. You are about to speak the goodbye sentence for that situation, AND
-  3. You have NOT already called `push_lead_data` in this call.
+Structured lead fields (intent, preferences, site visit, callback) are filled
+**after disconnect** from the call transcript — never during the live
+conversation via any function. Your job is natural Marathi dialogue.
 
-DO NOT call `push_lead_data`:
-  - After "haan" / "हो" / "हेलो" / acknowledgement words.
-  - After short replies while the caller is still gathering information.
-  - "Just in case" or to save partial progress.
-  - More than once. It is a single, terminal action.
+When the call should end, **speak** the matching goodbye line from "SPECIAL
+SITUATIONS" in warm Marathi in that same turn — then stop. Do not describe
+CRM, databases, or "saving" data on the line.
 
-When you DO call it, in the SAME turn also speak the appropriate goodbye
-line from "SPECIAL SITUATIONS" above. Never call it silently.
+END THE CALL verbally only when ALL of these are true:
+  1. The caller's LAST FULLY-UNDERSTOOD turn clearly expresses one of:
+       - Not_Interested   — explicit refusal of the **home / project** (e.g.
+                            "ghar nako", "naahi pahije", "not looking") — NOT
+                            a short "nahi" only answering "anything else to ask?"
+       - Busy             — asks to call later, no specific time given
+       - Callback_Requested — caller stated a specific, concrete time
+                              (a single garbled or partial mention is NOT
+                              enough — they must clearly confirm the time)
+       - Wrong_Requirement — caller clearly wants plot / shop / office /
+                             rent / commercial / 3BHK / 1BHK (not 2BHK)
+     AND
+  2. You have had at least 4–5 substantive caller turns in this call
+     (not counting one-word acknowledgements like "haan", "हो", "हेलो").
+     AND
+  3. You are about to speak the matching goodbye line in the SAME turn.
+     AND
+  4. You have NOT already given a terminal goodbye for this outcome in this call.
+
+DO NOT treat the call as finished (STRICT — when in doubt, keep the conversation going):
+  - When the LAST caller utterance was garbled, partial, single-word, or
+    you are not 100% sure what they said. Re-ask politely in Marathi
+    instead. NEVER infer a terminal intent from a noisy transcription.
+  - When the last turn mixes Devanagari with a long English word (typical
+    STT glitch) — treat as unclear, re-ask; do NOT end the call.
+  - When the last turn mentions "site" or "visit" (any spelling) or looks
+    like a mangled "site visit करा" / "shouldn't visit" — that is almost
+    always INTEREST in a visit, NOT refusal. Re-ask in Marathi; default to
+    engagement, not goodbye.
+  - After short acknowledgements ("haan", "हो", "हेलो", "hmm", "ok",
+    "yes", "achha") while the caller is still engaged.
+  - When the caller is still asking questions, requesting a brochure,
+    or in any way continuing the conversation — they are NOT ending it.
+  - When YOUR previous assistant turn only asked whether they had **more
+    questions** / **anything specific to ask** / **काही specific विचारायचं**,
+    and their reply is a short negative — that means "no further questions",
+    NOT property refusal. Pivot to a **site visit** suggestion; do NOT
+    speak a Not_Interested-style goodbye.
+  - During or because of audio / connection problems. Those are recovery
+    moments, never end-of-call signals.
+  - "Just in case" or speculatively — never end early to "save state".
+
+WHEN UNSURE: Continue the conversation in Marathi by asking ONE clear
+follow-up question that confirms the caller's true intent. A slightly longer
+call is ALWAYS better than a wrongly-ended one. The transcript captures
+everything — the caller cannot be brought back once they hang up.
+
+When you speak a terminal goodbye, use the line from "SPECIAL SITUATIONS"
+above — warmly, clearly, once.
 """
 
-
-# ── Tool Definition ────────────────────────────────────────────────────────────
-
-def build_tools() -> ToolsSchema:
-    push_lead_fn = FunctionSchema(
-        name="push_lead_data",
-        description=(
-            "Terminal action — call this EXACTLY ONCE, in the FINAL turn of "
-            "the call, IMMEDIATELY before speaking the goodbye sentence. "
-            "Do NOT call this function while the conversation is ongoing. "
-            "Do NOT call this in response to short caller acknowledgements "
-            "like 'haan', 'हो', 'हेलो', 'ok'. Do NOT call this to save "
-            "partial progress. Only call it when the caller has clearly "
-            "indicated the call is ending (busy, not interested, callback "
-            "requested, wrong property, or unrecoverable audio issue) AND "
-            "you are about to speak the goodbye line. After calling this "
-            "function, in the same turn, also produce the spoken goodbye."
-        ),
-        properties={
-            "intent_status": {
-                "type": "string",
-                "enum": [
-                    "Interested",
-                    "Not_Interested",
-                    "Busy",
-                    "Callback_Requested",
-                    "Wrong_Requirement",
-                    "Audio_Issue",
-                    "Disconnected",
-                ],
-                "description": "The outcome of this call.",
-            },
-            "bhk_preference": {
-                "type": "string",
-                "description": "BHK preference explicitly stated by caller: '2BHK', '3BHK', or 'NULL' if not collected.",
-            },
-            "location_preference": {
-                "type": "string",
-                "description": "Preferred Pune location explicitly stated by caller, or 'NULL' if not collected.",
-            },
-            "site_visit_agreed": {
-                "type": "boolean",
-                "description": "True if caller agreed to a site visit, False otherwise.",
-            },
-            "callback_time": {
-                "type": "string",
-                "description": "Exact callback time requested by caller, or 'NULL' if not applicable.",
-            },
-            "language_used": {
-                "type": "string",
-                "enum": ["Marathi", "Hindi", "English", "Mixed"],
-                "description": "Primary language used by caller during the call.",
-            },
-            "caller_notes": {
-                "type": "string",
-                "description": "Any other relevant detail the caller mentioned: budget, timeline, end-use, etc. 'NULL' if nothing notable.",
-            },
-        },
-        required=["intent_status"],
-    )
-    return ToolsSchema(standard_tools=[push_lead_fn])
-
-
-# ── Main bot runner ────────────────────────────────────────────────────────────
 
 async def run_bot(
     transport: BaseTransport,
@@ -269,7 +317,7 @@ async def run_bot(
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
         system_instruction=build_system_instruction(lead_name),
-        tools=build_tools(),
+        tools=None,
 
         settings=GeminiLiveLLMService.Settings(
 
@@ -287,16 +335,16 @@ async def run_bot(
             language=Language.MR_IN,
 
             # ── VAD (server-side) ──────────────────────────────────────────────
-            # 700 ms = Gemini default. Sales-pitch tempo, fast turn-taking.
-            # Raise to ~900 ms only if callers get cut off mid-thought.
+            # 800 ms — slightly longer tail after speech ends; reduces spurious
+            # micro-turns from PSTN noise before Gemini commits a user turn.
             vad=GeminiVADParams(
-                silence_duration_ms=700,
+                silence_duration_ms=800,
                 prefix_padding_ms=300,  # catch the soft first syllable
             ),
 
             # ── Sampling ──────────────────────────────────────────────────────
             # 0.5 = deterministic-enough to stay on-script while sounding natural.
-            # Default is None (~0.8). Lowering reduces off-script tool calls.
+            # Default is None (~0.8). Lowering reduces drifting off persona.
             temperature=0.5,
 
             # ── Notes ─────────────────────────────────────────────────────────
@@ -306,25 +354,10 @@ async def run_bot(
     )
     _lap(t0, "GeminiLiveLLMService object created (not yet connected)")
 
-    # ── Function handler ───────────────────────────────────────────────────────
-    async def handle_push_lead_data(params: FunctionCallParams):
-        data = params.arguments or {}
-        logger.info("=" * 55)
-        logger.info(f"  LEAD CAPTURED — {lead_name}")
-        logger.info(f"  Phone         : {body.get('phone_number', 'N/A')}")
-        logger.info(f"  Intent        : {data.get('intent_status')}")
-        logger.info(f"  BHK           : {data.get('bhk_preference')}")
-        logger.info(f"  Location      : {data.get('location_preference')}")
-        logger.info(f"  Site visit    : {data.get('site_visit_agreed')}")
-        logger.info(f"  Callback time : {data.get('callback_time', 'NULL')}")
-        logger.info(f"  Language      : {data.get('language_used')}")
-        logger.info(f"  Notes         : {data.get('caller_notes', 'NULL')}")
-        logger.info("=" * 55)
-        await params.result_callback(
-            {"status": "saved", "message": "Lead data recorded successfully"}
-        )
-
-    llm.register_function("push_lead_data", handle_push_lead_data)
+    # ── Transcript buffer (for post-call Groq extraction + call_logs) ───────────
+    transcript_buffer = TranscriptBuffer()
+    usage_accumulator = UsageMetricsAccumulator()
+    usage_tap = UsageMetricsTap(usage_accumulator)
 
     # ── Bootstrap context ──────────────────────────────────────────────────────
     # Pre-seed a user-role turn so Gemini fires the greeting the moment the WS
@@ -342,7 +375,16 @@ async def run_bot(
         }
     ]
     context = LLMContext(bootstrap_messages)
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+    # Mute the user audio path until the bot's first utterance completes.
+    # Drops InputAudioRawFrame / Interruption / VAD signals at the aggregator,
+    # so Gemini never sees user audio during the greeting → greeting is
+    # truly uninterruptible. Normal interruptions resume after first turn.
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+        ),
+    )
 
     # ── Pipeline ───────────────────────────────────────────────────────────────
     pipeline = Pipeline([
@@ -350,6 +392,7 @@ async def run_bot(
         user_aggregator,
         llm,
         transport.output(),
+        usage_tap,
         assistant_aggregator,
     ])
     _lap(t0, "Pipeline built")
@@ -368,7 +411,6 @@ async def run_bot(
 
     started_at_iso = datetime.now(timezone.utc).isoformat()
     perf_pipeline = time.perf_counter()
-    transcript_buffer = TranscriptBuffer()
     transcript_buffer.register(user_aggregator, assistant_aggregator)
     session_call_id = body.get("_session_call_id")
     attach_pipeline_finalize(
@@ -381,6 +423,7 @@ async def run_bot(
         started_at_iso=started_at_iso,
         perf_start=perf_pipeline,
         strip_bootstrap=True,
+        usage_accumulator=usage_accumulator,
     )
 
     @transport.event_handler("on_client_connected")
