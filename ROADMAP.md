@@ -427,11 +427,12 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | Route B (STS / Gemini Live) working end-to-end as Diya                          | done          |
 | First-utterance lag investigated and reduced (~30 s → ~1-2 s)                   | done          |
 | Repo renamed to `aakashvani`, `justfile` + `scripts/call.sh` + .env BOT_ROUTE   | done          |
-| Pipecat `MetricsFrame` → SQLite call_logs row per call                          | next          |
-| Post-call transcript capture from `on_user/assistant_turn_stopped` events       | next          |
-| Cost calculation in INR from token counts (not from duration)                   | next          |
+| Pipecat `MetricsFrame` → SQLite call_logs row per call                          | done          |
+| Post-call transcript capture from `on_user/assistant_turn_stopped` events       | done          |
+| Cost calculation in INR from token counts (STS; env USD/M rates + `USD_INR`)  | done          |
 | Post-call Groq extraction → `extraction_json` (`Interested` + normalizer)       | done          |
-| `POST /webhooks/n8n` after every call                                           | next          |
+| Outbound JSON POST to n8n workflow URL (`N8N_WEBHOOK_URL` in `.env`)            | done          |
+| Max call duration watchdog + `end_call` tool (cascade + STS, `call_limits.py`)   | done          |
 | Browser test path via `SmallWebRTCTransport` (no Plivo minutes during dev)      | next          |
 
 **Deliverable:** Make a real call → see structured extraction + cost in SQLite + n8n receives a webhook.
@@ -522,7 +523,7 @@ If you (an LLM agent) are reading this to help build Aakashvani, here is the che
 
 1. WSL2 + Python 3.12 + uv environment, all imports working.
 2. `server.py` — FastAPI app exposing `/start`, `/answer`, `/ws`, `/health`. Picks `bot_sts` or `bot_cascade` from `BOT_ROUTE` env at module load.
-3. `bot_sts.py` / `bot_sts_hi.py` — Gemini Live STS ("Diya": Marathi Pyramid script; Hindi Tesseract script). `GeminiLiveLLMService` with **`tools=None`** — no live `push_lead_data`; lead fields come from post-call Groq on the transcript (`call_transcript.py`). Pre-seeded `LLMContext`, `on_client_connected` → `queue_frames([LLMRunFrame()])`. First-utterance latency ~1-2 s.
+3. `bot_sts.py` / `bot_sts_hi.py` — Gemini Live STS ("Diya": Marathi Pyramid script; Hindi Pyramid script). `GeminiLiveLLMService` with optional **`end_call`** tool + `MAX_CALL_MINUTES` watchdog (`call_limits.py`); lead fields come from post-call Groq on the transcript (`call_transcript.py`). Pre-seeded `LLMContext`, `on_client_connected` → `queue_frames([LLMRunFrame()])`. First-utterance latency ~1-2 s.
 4. `bot_cascade.py` — Sarvam STT + Groq Llama 3.3 + Cartesia TTS. Still has a live **`push_lead_data`** function-call for end-of-call capture. Uses Silero VAD for turn-taking.
 5. `bot.py` — vanilla pipecat outbound example, kept as reference.
 6. `_prewarm_gemini` in `server.py` opens a throwaway Gemini Live session during `/start` to warm DNS/TLS/Google backend caches. `/answer` waits up to 3 s for it.
@@ -579,10 +580,11 @@ Deprecated, do not use: `OpenAILLMContext`, `pipecat.transports.services.daily`,
 
 In order:
 1. SQLite call-log persistence (`call_logs` table, one row per call).
-2. `MetricsFrame` listener → persist `audio_in_tokens` / `audio_out_tokens` / cost.
+2. `MetricsFrame` listener → persist usage token columns + `usage_metrics_json` (per-modality audio tokens deferred).
 3. Transcript capture from `on_user_turn_stopped` + `on_assistant_turn_stopped` aggregator events.
 4. Post-call **Groq** JSON extraction (`post_call_extract.py`) into `call_logs.extraction_json`, with `normalize_post_call_extraction` for deterministic fixes before persist.
-5. `POST` to n8n webhook from `.env`.
-6. `SmallWebRTCTransport` browser-test route.
+5. Outbound JSON `POST` to n8n workflow URL from `N8N_WEBHOOK_URL` (optional `N8N_WEBHOOK_SECRET`); optional STS `cost_inr` via env Gemini rates (`pricing_sts.py`).
+6. Max call duration (`MAX_CALL_MINUTES`) + `end_call` LLM tool for margin guard (`call_limits.py`).
+7. `SmallWebRTCTransport` browser-test route.
 
 That's all.

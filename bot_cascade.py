@@ -33,6 +33,12 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+from call_limits import (
+    end_call_function_schema,
+    make_end_call_handler,
+    parse_max_call_minutes,
+    schedule_max_call_duration,
+)
 from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 
@@ -102,7 +108,9 @@ MANDATORY:
 Before every call end, ALWAYS call push_lead_data.
 Applies to ALL cases: Interested, Not interested, Busy, Callback later, Unclear audio, Call disconnected.
 If data missing, pass "NULL".
-Call function FIRST, then send final goodbye. Never skip the function call.
+Order for a normal hangup: (1) call push_lead_data, (2) speak your final goodbye in the current language,
+(3) call end_call exactly once to disconnect. Never skip push_lead_data. The platform may also disconnect
+after a maximum call duration regardless of tools.
 """
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_call_id: str):
@@ -148,7 +156,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         required=["intent_status", "bhk_preference", "location_preference"]
     )
 
-    tools = ToolsSchema(standard_tools=[push_lead_data_fn])
+    end_call_fn = end_call_function_schema()
+    tools = ToolsSchema(standard_tools=[push_lead_data_fn, end_call_fn])
 
     # --- STT ---
     stt = SarvamSTTService(
@@ -169,19 +178,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         )
     )
 
-    # --- Function handler ---
-    async def handle_push_lead_data(params: FunctionCallParams):
-        data = params.arguments
-        logger.info(f"LEAD DATA CAPTURED: {json.dumps(data, ensure_ascii=False, indent=2)}")
-        logger.info(f"Phone: {lead_phone} | Name: {lead_name}")
-
-        # TODO: send to n8n webhook or CRM here
-        # await send_to_n8n(lead_phone, lead_name, data)
-
-        await params.result_callback({"status": "saved"})
-
-    llm.register_function("push_lead_data", handle_push_lead_data)
-
     # --- TTS ---
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
@@ -193,7 +189,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         sample_rate=8000,
     )
 
-    context = LLMContext()
+    context = LLMContext(tools=tools)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -228,6 +224,25 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         ),
     )
 
+    max_minutes = parse_max_call_minutes()
+    call_limits = schedule_max_call_duration(
+        task, max_minutes, "max_call_duration"
+    )
+    coordinator = call_limits.coordinator
+
+    async def handle_push_lead_data(params: FunctionCallParams):
+        data = params.arguments
+        logger.info(f"LEAD DATA CAPTURED: {json.dumps(data, ensure_ascii=False, indent=2)}")
+        logger.info(f"Phone: {lead_phone} | Name: {lead_name}")
+
+        # TODO: send to n8n webhook or CRM here
+        # await send_to_n8n(lead_phone, lead_name, data)
+
+        await params.result_callback({"status": "saved"})
+
+    llm.register_function("push_lead_data", handle_push_lead_data)
+    llm.register_function("end_call", make_end_call_handler(coordinator))
+
     started_at_iso = datetime.now(timezone.utc).isoformat()
     perf_pipeline = time.perf_counter()
     body = getattr(runner_args, "body", {}) or {}
@@ -253,6 +268,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     @transport.event_handler("on_client_disconnected")
     async def on_disconnected(transport, client):
         logger.info("Call disconnected")
+        wt = call_limits.watchdog_task
+        if wt is not None and not wt.done():
+            wt.cancel()
+            try:
+                await wt
+            except asyncio.CancelledError:
+                pass
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=False)

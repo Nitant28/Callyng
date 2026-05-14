@@ -15,10 +15,15 @@ from pipecat.processors.aggregators.llm_context import LLMContext, LLMSpecificMe
 
 from call_log_db import insert_call_log, update_call_log_extraction
 from call_metrics import UsageMetricsAccumulator
+from n8n_webhook import send_call_completed_webhook
 from post_call_extract import extract_post_call, normalize_post_call_extraction
+from pricing_sts import compute_sts_cost_inr
 
 # STS bootstrap user message prefix (see bot_sts.py) — omit from stored transcripts.
 _STS_BOOTSTRAP_PREFIX = "The call has just connected."
+
+# Cap JSON size of transcript in n8n payload (full transcript remains in SQLite).
+_MAX_WEBHOOK_TRANSCRIPT_JSON_CHARS = 120_000
 
 
 class TranscriptBuffer:
@@ -111,6 +116,74 @@ def finalize_transcript(
     return turns
 
 
+def _transcript_for_webhook(
+    transcript: list[dict[str, Any]],
+    max_json_chars: int = _MAX_WEBHOOK_TRANSCRIPT_JSON_CHARS,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return a prefix of ``transcript`` whose JSON fits within ``max_json_chars``."""
+    if not transcript:
+        return [], False
+    lo, hi = 0, len(transcript)
+    best: list[dict[str, Any]] = []
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        chunk = transcript[:mid]
+        size = len(json.dumps(chunk, ensure_ascii=False))
+        if size <= max_json_chars:
+            best = chunk
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    truncated = len(best) < len(transcript)
+    return best, truncated
+
+
+def _build_n8n_payload(
+    *,
+    row_id: int,
+    session_call_id: str | None,
+    plivo_call_id: str | None,
+    route: str,
+    started_at: str,
+    ended_at: str,
+    duration_ms: float,
+    transcript: list[dict[str, Any]],
+    usage_prompt_tokens: int,
+    usage_completion_tokens: int,
+    usage_total_tokens: int,
+    usage_tts_characters: int,
+    cost_inr: float | None,
+    extraction: dict[str, Any] | None,
+    extraction_error: str | None,
+    extraction_model: str | None,
+    post_call_extraction_skipped: bool,
+) -> dict[str, Any]:
+    tw, trunc = _transcript_for_webhook(transcript)
+    return {
+        "event": "call_completed",
+        "call_log_id": row_id,
+        "session_call_id": session_call_id,
+        "plivo_call_id": plivo_call_id,
+        "route": route,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_ms": round(duration_ms, 2),
+        "usage": {
+            "llm_prompt_tokens": usage_prompt_tokens,
+            "llm_completion_tokens": usage_completion_tokens,
+            "llm_total_tokens": usage_total_tokens,
+            "tts_characters": usage_tts_characters,
+        },
+        "cost_inr": cost_inr,
+        "transcript": tw,
+        "transcript_truncated": trunc,
+        "extraction": extraction,
+        "extraction_error": extraction_error,
+        "extraction_model": extraction_model,
+        "post_call_extraction_skipped": post_call_extraction_skipped,
+    }
+
+
 def attach_pipeline_finalize(
     task: PipelineTask,
     buffer: TranscriptBuffer,
@@ -173,6 +246,12 @@ def attach_pipeline_finalize(
             ut = int(usage_summary.get("llm_total_tokens") or 0)
             tts_c = int(usage_summary.get("tts_characters") or 0)
 
+        cost_inr = compute_sts_cost_inr(
+            route,
+            usage_prompt_tokens=up,
+            usage_completion_tokens=uc,
+        )
+
         try:
             row_id = insert_call_log(
                 session_call_id=session_call_id,
@@ -187,37 +266,45 @@ def attach_pipeline_finalize(
                 usage_total_tokens=ut,
                 usage_tts_characters=tts_c,
                 usage_metrics_json=usage_metrics_blob,
+                cost_inr=cost_inr,
             )
         except Exception as exc:
             logger.error("call_log_db insert failed: {}", exc)
             return
 
         if os.getenv("GROQ_API_KEY"):
-            async def _extract_and_patch() -> None:
+
+            async def _extract_patch_and_webhook() -> None:
+                extraction: dict[str, Any] | None = None
+                extraction_error: str | None = None
+                extraction_model: str | None = None
                 try:
                     parsed, err, model_used = await extract_post_call(transcript)
+                    extraction_model = model_used
                     if parsed is not None and err is None:
-                        parsed = normalize_post_call_extraction(parsed)
+                        extraction = normalize_post_call_extraction(parsed)
                         update_call_log_extraction(
                             row_id,
-                            extraction_json=json.dumps(parsed, ensure_ascii=False),
+                            extraction_json=json.dumps(extraction, ensure_ascii=False),
                             extraction_error=None,
                             extraction_model=model_used,
                         )
                     else:
+                        extraction_error = err or "extraction_failed"
                         update_call_log_extraction(
                             row_id,
                             extraction_json=None,
-                            extraction_error=err or "extraction_failed",
+                            extraction_error=extraction_error,
                             extraction_model=model_used,
                         )
                 except Exception as exc:
                     logger.exception("post_call extraction failed: {}", exc)
+                    extraction_error = f"{type(exc).__name__}: {exc}"
                     try:
                         update_call_log_extraction(
                             row_id,
                             extraction_json=None,
-                            extraction_error=f"{type(exc).__name__}: {exc}",
+                            extraction_error=extraction_error,
                             extraction_model=os.getenv(
                                 "POST_CALL_MODEL", "llama-3.3-70b-versatile"
                             ),
@@ -225,6 +312,47 @@ def attach_pipeline_finalize(
                     except Exception:
                         logger.exception("call_log extraction update failed")
 
-            asyncio.create_task(_extract_and_patch())
+                payload = _build_n8n_payload(
+                    row_id=row_id,
+                    session_call_id=session_call_id,
+                    plivo_call_id=plivo_call_id,
+                    route=route,
+                    started_at=started_at_iso,
+                    ended_at=ended_at,
+                    duration_ms=duration_ms,
+                    transcript=transcript,
+                    usage_prompt_tokens=up,
+                    usage_completion_tokens=uc,
+                    usage_total_tokens=ut,
+                    usage_tts_characters=tts_c,
+                    cost_inr=cost_inr,
+                    extraction=extraction,
+                    extraction_error=extraction_error,
+                    extraction_model=extraction_model,
+                    post_call_extraction_skipped=False,
+                )
+                await send_call_completed_webhook(payload)
+
+            asyncio.create_task(_extract_patch_and_webhook())
         else:
             logger.debug("post_call_extract skipped: GROQ_API_KEY not set")
+            payload = _build_n8n_payload(
+                row_id=row_id,
+                session_call_id=session_call_id,
+                plivo_call_id=plivo_call_id,
+                route=route,
+                started_at=started_at_iso,
+                ended_at=ended_at,
+                duration_ms=duration_ms,
+                transcript=transcript,
+                usage_prompt_tokens=up,
+                usage_completion_tokens=uc,
+                usage_total_tokens=ut,
+                usage_tts_characters=tts_c,
+                cost_inr=cost_inr,
+                extraction=None,
+                extraction_error=None,
+                extraction_model=None,
+                post_call_extraction_skipped=True,
+            )
+            await send_call_completed_webhook(payload)

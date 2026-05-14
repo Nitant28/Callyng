@@ -10,9 +10,9 @@
 | Field             | Value                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
 | Phase             | **Phase 0 — Foundation** (week 1 of 2)                                                            |
-| Last milestone    | **STS post-call-only leads** — Gemini Live runs with `tools=None` (no live `push_lead_data`); structured fields from **Groq** on transcript + `Interested` intent + `normalize_post_call_extraction` (`post_call_extract.py`, `call_transcript.py`, `call_log_db.py`). |
-| Current focus     | n8n webhook after each call; optional INR cost from token pricing. |
-| Next milestone    | Webhooks + browser `SmallWebRTCTransport` dev path (see [ROADMAP.md](ROADMAP.md)). |
+| Last milestone    | **Call limits** — `MAX_CALL_MINUTES` watchdog + `end_call` LLM tool on cascade and STS (`call_limits.py`); Plivo hangup via `EndFrame`. |
+| Current focus     | Browser `SmallWebRTCTransport` dev path (no Plivo minutes during dev). |
+| Next milestone    | See [ROADMAP.md](ROADMAP.md) — SmallWebRTCTransport. |
 | Full plan         | See [ROADMAP.md](ROADMAP.md).                                                                     |
 
 ---
@@ -21,8 +21,8 @@
 
 Two voice pipelines that can call any Indian phone number via Plivo and hold a conversation:
 
-- **Route A — Cascaded** ([bot_cascade.py](bot_cascade.py)): Sarvam STT (Hindi/Marathi/auto) → Groq Llama 3.3 70B → Cartesia TTS. Tight script control, function-calling, easy to audit. ~1.5–2.5 s round-trip.
-- **Route B — STS** ([bot_sts.py](bot_sts.py), [bot_sts_hi.py](bot_sts_hi.py)): Gemini Live (speech-to-speech) — single model handles STT + LLM + TTS. ~0.5–1 s round-trip. **Diya** outbound scripts (Marathi: Pyramid Parkland Nxt; Hindi: Tesseract Nilaya). Lead JSON is **not** captured via live tools; after hang-up, `call_transcript.py` runs **Groq** extraction into `call_logs.extraction_json`.
+- **Route A — Cascaded** ([bot_cascade.py](bot_cascade.py)): Sarvam STT (Hindi/Marathi/auto) → Groq Llama 3.3 70B → Cartesia TTS. Tight script control, function-calling (`push_lead_data`, `end_call`), easy to audit. ~1.5–2.5 s round-trip.
+- **Route B — STS** ([bot_sts.py](bot_sts.py), [bot_sts_hi.py](bot_sts_hi.py)): Gemini Live (speech-to-speech) — single model handles STT + LLM + TTS. ~0.5–1 s round-trip. **Diya** outbound scripts (Marathi: Pyramid Parkland Nxt; Hindi: Tesseract Nilaya). Lead JSON is **not** captured via live tools; after hang-up, `call_transcript.py` runs **Groq** extraction into `call_logs.extraction_json`. Optional **`end_call`** tool ends the PSTN leg after the closing script; **`MAX_CALL_MINUTES`** caps duration.
 
 Calls are placed by hitting `POST /start` on the FastAPI server in [server.py](server.py). Pipecat handles the audio pipeline; Plivo handles the PSTN leg.
 
@@ -63,7 +63,8 @@ That's it. The callee's phone rings; on pickup, Diya greets them in Marathi.
 
 ### Call logs and transcripts
 
-- Each completed pipeline run appends one row to the SQLite DB at `CALL_LOG_DB_PATH` (default `./data/call_logs.db`). Columns include `session_call_id` (UUID from `POST /start`), `plivo_call_id`, `route`, timestamps, `duration_ms`, `transcript_json` (array of `{role, content, timestamp, …}`), **token usage** (`usage_prompt_tokens`, `usage_completion_tokens`, `usage_total_tokens`, `usage_tts_characters`, `usage_metrics_json`), and **post-call extraction** (`extraction_json`, `extraction_error`, `extraction_model`) when `GROQ_API_KEY` is set. `extraction_json` includes `intent_status` (values include **`Interested`**, `Not_Interested`, `Busy`, `Callback_Requested`, `Wrong_Requirement`, `Unknown`) plus preferences; a small **normalizer** upgrades inconsistent pairs (e.g. `site_visit_agreed: true` with `Unknown` intent → `Interested`) before the row is updated.
+- Each completed pipeline run appends one row to the SQLite DB at `CALL_LOG_DB_PATH` (default `./data/call_logs.db`). Columns include `session_call_id` (UUID from `POST /start`), `plivo_call_id`, `route`, timestamps, `duration_ms`, `transcript_json` (array of `{role, content, timestamp, …}`), **token usage** (`usage_prompt_tokens`, `usage_completion_tokens`, `usage_total_tokens`, `usage_tts_characters`, `usage_metrics_json`), optional **`cost_inr`** (STS only, when `GEMINI_LIVE_INPUT_USD_PER_1M` and `GEMINI_LIVE_OUTPUT_USD_PER_1M` are set), and **post-call extraction** (`extraction_json`, `extraction_error`, `extraction_model`) when `GROQ_API_KEY` is set. `extraction_json` includes `intent_status` (values include **`Interested`**, `Not_Interested`, `Busy`, `Callback_Requested`, `Wrong_Requirement`, `Unknown`) plus preferences; a small **normalizer** upgrades inconsistent pairs (e.g. `site_visit_agreed: true` with `Unknown` intent → `Interested`) before the row is updated.
+- **Call duration:** `MAX_CALL_MINUTES` (default `10`, `0` = no timer) starts a background watchdog that queues an `EndFrame` (Plivo hangup). Cascade and STS also expose an **`end_call`** LLM tool via [`call_limits.py`](call_limits.py) so the model can hang up after the final goodbye; cascade order is `push_lead_data` then goodbye then `end_call`.
 - Transcripts are built from Pipecat universal aggregator **`on_user_turn_stopped`** / **`on_assistant_turn_stopped`** events. For STS, the synthetic bootstrap user line (“The call has just connected…”) is **stripped** before persistence.
 - Verify SQLite from Python: `uv run python -c "import sqlite3; print(sqlite3.sqlite_version)"` (no extra pip package; uses the standard library).
 
@@ -84,9 +85,12 @@ scripts/call.sh +919123866924 Satyam Pune
 ```
 aakashvani/
 ├── server.py                FastAPI app: /start, /answer (Plivo XML), /ws, /health
-├── call_transcript.py       Turn buffer + pipeline end → call_logs + async Groq extract + normalize
+├── call_transcript.py       Turn buffer + pipeline end → call_logs + Groq + n8n POST
 ├── call_log_db.py           SQLite schema/migrations + insert + extraction update
 ├── call_metrics.py          UsageMetricsTap: sums LLM/TTS usage from Pipecat MetricsFrame
+├── call_limits.py           MAX_CALL_MINUTES watchdog + shared ``end_call`` coordinator
+├── pricing_sts.py           Optional STS `cost_inr` from token counts + env USD rates
+├── n8n_webhook.py           Outbound POST of call payload to `N8N_WEBHOOK_URL`
 ├── post_call_extract.py     Groq post-call JSON extraction + normalize_post_call_extraction
 ├── bot.py                   Stock pipecat outbound example (kept as reference)
 ├── bot_sts.py               Route B (MR): Gemini Live — Diya, Pyramid Parkland Nxt
@@ -135,7 +139,7 @@ sequenceDiagram
     Pipecat->>Gemini: open live session (tools=None) + send seed turn
     Gemini-->>Pipecat: first audio chunk (~0.5-1 s after handshake)
     Pipecat-->>Callee: Diya speaks the greeting
-    Note over Pipecat: On pipeline end: transcript → SQLite; if GROQ_API_KEY, Groq JSON + normalizer → extraction_json
+    Note over Pipecat: On pipeline end: transcript + cost_inr → SQLite; Groq extract if set; POST to n8n URL if set
 ```
 
 ---
@@ -173,6 +177,6 @@ Immediate next deliverables (Phase 0 continuation):
 
 1. ~~SQLite call-log persistence + transcript capture~~ — done (`call_logs` + turn events; see **Call logs and transcripts** above).
 2. ~~Cost capture via pipecat's `MetricsFrame`~~ — done (`call_metrics.UsageMetricsTap` → usage columns + `usage_metrics_json`).
-3. ~~Post-call extraction~~ — done via **Groq** (`post_call_extract.py`); uses `GROQ_API_KEY` and optional `POST_CALL_MODEL` in `.env`. INR cost from tokens deferred until pricing is finalized.
-4. `POST /webhooks/n8n` fire after every call.
+3. ~~Post-call extraction~~ — done via **Groq** (`post_call_extract.py`); uses `GROQ_API_KEY` and optional `POST_CALL_MODEL` in `.env`.
+4. ~~Outbound n8n webhook + optional STS `cost_inr`~~ — done (`n8n_webhook.py`, `pricing_sts.py`, `call_transcript.py`); configure `N8N_WEBHOOK_URL` and optional Gemini Live USD/M rates in `.env` (see `env.example`).
 5. Browser test path via `SmallWebRTCTransport` so we stop burning Plivo minutes during dev.

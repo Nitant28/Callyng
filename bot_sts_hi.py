@@ -3,9 +3,10 @@
 # Gemini 3.1 Flash Live | Hindi real-estate voice agent
 #
 # Lead qualification is post-call only (Groq on transcript in call_transcript.py).
-# No live function calls — avoids tool round-trip latency during the conversation.
+# Single live tool: ``end_call`` — hang up after the closing line (evaluate latency in testing).
 #
 
+import asyncio
 import os
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from loguru import logger
 
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -37,11 +39,31 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 
+from call_limits import (
+    end_call_function_schema,
+    make_end_call_handler,
+    parse_goodbye_hangup_delay_s,
+    parse_goodbye_hangup_enabled,
+    parse_max_call_minutes,
+    register_goodbye_hangup_fallback,
+    schedule_max_call_duration,
+)
 from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 
 load_dotenv(override=True)
 
+# Scripted terminal lines (SPECIAL SITUATIONS) — substrings for STS goodbye hangup fallback.
+_GOODBYE_HANGUP_MARKERS_HI = (
+    "आपका दिन शुभ हो",
+    "सटीक समय बता दीजिए",
+    "मैं अभी भेज देती हूँ",
+    "ज़रूरत नोट कर ली",
+    "जरूरत नोट कर ली",
+    "कोई बात नहीं... आपके समय के लिए",
+    "din shubh ho",
+    "abhi bhej deti hun",
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PREVIOUS HINDI SCRIPT (Tesseract Nilaya / Baner–Balewadi) — kept for reference only, May 2026
@@ -230,49 +252,29 @@ MINDSET: दीया आत्मविश्वासी, गर्मजो�
 
 ---
 
-## कॉल का अंत (सिर्फ़ बोलकर — कोई टूल नहीं)
+## कॉल का अंत (अलविदा बोलकर + ``end_call`` टूल)
 
-लीड की संरचित जानकारी (इरादा, प्रेफ़रेंस, साइट विज़िट, कॉलबैक) **डिसकनेक्ट के
-बाद** ट्रांसक्रिप्ट से भरी जाती है — लाइव कॉल के दौरान किसी फ़ंक्शन से नहीं।
-आपकी जिम्मेदारी स्वाभाविक हिंदी संवाद है।
+लीड की संरचित जानकारी **डिसकनेक्ट के बाद** ट्रांसक्रिप्ट से भरी जाती है — लाइव
+में सिर्फ़ अच्छी बातचीत और सही समय पर कट करना।
 
-जब कॉल खत्म होनी चाहिए, उसी टर्न में "SPECIAL SITUATIONS" से मेल खाता **अलविदा**
-वाक्य गर्मजोशी से बोलें — फिर रुकें। फ़ोन पर CRM / डेटाबेस / "सेव कर रही हूँ"
-जैसी बात न करें।
+जब टर्मिनल शर्तें पूरी हों, उसी टर्न में पहले "SPECIAL SITUATIONS" से मेल खाता
+अलविदा गर्मजोशी से बोलें, फिर **तुरंत** ``end_call`` **एक बार** चलाएँ। दूसरी
+बार मत सोचें, CRM/"सेव" की बात मत करें — यहाँ टूल अनुमत और अपेक्षित है।
+प्लेटफ़ॉर्म अधिकतम अवधि के बाद भी काट सकता है।
 
-कॉल को **मौखिक रूप से** तभी समाप्त मानें जब ये सब सच हों:
-  1. कॉलर का आख़िरी **पूरी तरह समझ आया हुआ** टर्न साफ़ तौर पर बताता है:
-       - Not_Interested — घर/प्रोजेक्ट का साफ़ इनकार ("नहीं चाहिए", "इंटरेस्ट नहीं")
-         — सिर्फ़ "कुछ और पूछना है?" पर मिला छोटा "नहीं" **इनकार नहीं** है।
-       - Busy — बाद में कॉल, बिना सटीक समय के
-       - Callback_Requested — सटीक समय दिया (अधूरा / गड़बड़ ट्रांसक्रिप्ट नहीं)
-       - Wrong_Requirement — प्लॉट / दुकान / ऑफ़िस / किराया / कमर्शियल / 3BHK / 1BHK
-     AND
-  2. कम से कम 4–5 substantive कॉलर टर्न हो चुके हों (हाँ / हेलो / ok जैसे छोटे ack नहीं)।
-     AND
-  3. उसी टर्न में matching goodbye बोलने वाली हों।
-     AND
-  4. इसी नतीजे के लिए पहले से टर्मिनल अलविदा न बोला हो (दोहराव न करें)।
+कॉल **तभी** समाप्त करें जब: (1) आख़िरी **साफ़ समझा हुआ** यूज़र टर्न टर्मिनल
+केस से मेल खाता हो (Not_Interested = असली प्रॉपर्टी इनकार, सिर्फ़ "और सवाल?"
+पर छोटा "नहीं" नहीं; Busy; साफ़ समय वाला Callback; Wrong_Requirement), (2) कम
+से कम 4–5 मायने रखने वाले कॉलर टर्न हों, (3) यह टर्न मैचिंग अलविदा दे रहा हो
+— पहले वाला टर्मिनल अलविदा दोहराएँ नहीं।
 
-कॉल को **खत्म न समझें** (संदेह हो तो बातचीत जारी रखें):
-  - आख़िरी उत्तर गड़बड़ / एक शब्द / पूरा यकीन न हो — हिंदी में फिर से पूछें।
-  - देवनागरी + लंबा अंग्रेज़ी शब्द एक साथ (STT ग्लिच) — साफ़ न करवाएँ तब तक नहीं।
-  - आख़िरी लाइन में "site" या "visit" आता है / "shouldn't visit" जैसा लगता है —
-    अक्सर साइट विज़िट की रुचि होती है, मना नहीं; हिंदी में फिर पूछें।
-  - हाँ / जी / हेलो / hmm / ok / yes जैसे ack के तुरंत बाद, जब बातचीत जारी हो।
-  - कॉलर सवाल पूछ रहा हो, ब्रोशर माँग रहा हो, या बीच बातचीत में हो।
-  - आपके पिछले टर्न में सिर्फ़ **और सवाल / कुछ specific** पूछा था और उन्होंने
-    छोटा नकारात्मक जवाब दिया — यह "और सवाल नहीं" है, प्रॉपर्टी इनकार नहीं;
-    साइट विज़िट पर पिवट करें; Not_Interested वाला अलविदा न बोलें।
-  - ऑडियो / कनेक्शन की वजह से — वह रिकवरी है, अंत नहीं।
-  - "just in case" या जल्दबाज़ी में — जल्दी में अंत न करें।
+**खत्म न करें** जब: आख़िरी टर्न अस्पष्ट/STT गड़बड़; "site"/"visit" विज़िट रुचि
+लगे; कॉलर सवाल/ब्रोशर पर है; आपने सिर्फ़ "और सवाल?" पूछा और छोटा नकारात्मक
+मिला (साइट विज़िट पर पिवट करें); ऑडियो रिकवरी; या संदेह हो — पहले **एक** साफ़
+हिंदी सवाल से पक्का करें।
 
-**संदेह हो:** हिंदी में एक साफ़ सवाल से इरादा पक्का करें। थोड़ी लंबी बातचीत
-गलत अंत से हमेशा बेहतर है। ट्रांसक्रिप्ट सब रिकॉर्ड करता है — कॉलर लटकाने के
-बाद वापस नहीं आते।
-
-जब टर्मिनल अलविदा बोलें तो ऊपर "SPECIAL SITUATIONS" की लाइन का उपयोग करें —
-एक बार, साफ़, गर्मजोशी से।
+संदेह पर बात जारी रखें; गलत कट से बेहतर है थोड़ी लंबी बात। टर्मिनल अलविदा पर:
+ऊपर वाली लाइन एक बार साफ़ बोलें, फिर ``end_call`` एक बार।
 """
 
 
@@ -290,11 +292,13 @@ async def run_bot(
     body = getattr(runner_args, "body", {}) or {}
     lead_name = body.get("lead_name", "Sir / Madam")
 
+    end_tools = ToolsSchema(standard_tools=[end_call_function_schema()])
+
     # ── Gemini Live (STT + LLM + TTS in one) ──────────────────────────────────
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
         system_instruction=build_system_instruction(lead_name),
-        tools=None,
+        tools=end_tools,
 
         settings=GeminiLiveLLMService.Settings(
 
@@ -348,7 +352,7 @@ async def run_bot(
             ),
         }
     ]
-    context = LLMContext(bootstrap_messages)
+    context = LLMContext(bootstrap_messages, tools=end_tools)
     # Mute the user audio path until the bot's first utterance completes.
     # Drops InputAudioRawFrame / Interruption / VAD signals at the aggregator,
     # so Gemini never sees user audio during the greeting → greeting is
@@ -383,9 +387,24 @@ async def run_bot(
     )
     _lap(t0, "PipelineTask created — registering event handlers")
 
+    max_minutes = parse_max_call_minutes()
+    call_limits = schedule_max_call_duration(
+        task, max_minutes, "max_call_duration"
+    )
+    coordinator = call_limits.coordinator
+    llm.register_function("end_call", make_end_call_handler(coordinator))
+
     started_at_iso = datetime.now(timezone.utc).isoformat()
     perf_pipeline = time.perf_counter()
     transcript_buffer.register(user_aggregator, assistant_aggregator)
+    cancel_goodbye_pending = register_goodbye_hangup_fallback(
+        user_aggregator,
+        assistant_aggregator,
+        coordinator,
+        markers=_GOODBYE_HANGUP_MARKERS_HI,
+        enabled=parse_goodbye_hangup_enabled(),
+        delay_s=parse_goodbye_hangup_delay_s(),
+    )
     session_call_id = body.get("_session_call_id")
     attach_pipeline_finalize(
         task,
@@ -409,6 +428,14 @@ async def run_bot(
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         _lap(t0, "on_client_disconnected fired — cancelling task")
+        cancel_goodbye_pending()
+        wt = call_limits.watchdog_task
+        if wt is not None and not wt.done():
+            wt.cancel()
+            try:
+                await wt
+            except asyncio.CancelledError:
+                pass
         await task.cancel()
 
     _lap(t0, "Starting PipelineRunner — handing control to pipecat")

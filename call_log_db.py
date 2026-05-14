@@ -35,6 +35,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         alters.append("ALTER TABLE call_logs ADD COLUMN extraction_error TEXT")
     if "extraction_model" not in existing:
         alters.append("ALTER TABLE call_logs ADD COLUMN extraction_model TEXT")
+    if "cost_inr" not in existing:
+        alters.append("ALTER TABLE call_logs ADD COLUMN cost_inr REAL")
     for sql in alters:
         conn.execute(sql)
 
@@ -83,6 +85,7 @@ def insert_call_log(
     usage_total_tokens: int = 0,
     usage_tts_characters: int = 0,
     usage_metrics_json: str | None = None,
+    cost_inr: float | None = None,
 ) -> int:
     """Insert one row; returns ``lastrowid`` for follow-up extraction updates."""
     path = _db_path()
@@ -95,8 +98,8 @@ def insert_call_log(
                 session_call_id, plivo_call_id, route,
                 started_at, ended_at, duration_ms, transcript_json,
                 usage_prompt_tokens, usage_completion_tokens, usage_total_tokens,
-                usage_tts_characters, usage_metrics_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                usage_tts_characters, usage_metrics_json, cost_inr
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_call_id,
@@ -111,6 +114,7 @@ def insert_call_log(
                 usage_total_tokens,
                 usage_tts_characters,
                 usage_metrics_json,
+                cost_inr,
             ),
         )
         conn.commit()
