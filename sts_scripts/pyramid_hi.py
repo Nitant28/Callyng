@@ -1,60 +1,12 @@
-#
-# bot_sts_hi.py — Aakashvani | Diya — Pyramid Constructions (Hindi outbound, Gemini Live)
-# Gemini 3.1 Flash Live | Hindi real-estate voice agent
-#
-# Lead qualification is post-call only (Groq on transcript in call_transcript.py).
-# Single live tool: ``end_call`` — hang up after the closing line (evaluate latency in testing).
-#
+"""STS script: Diya — Pyramid Parkland Nxt (Hindi)."""
 
-import asyncio
-import os
-import time
-from datetime import datetime, timezone
+from __future__ import annotations
 
-from dotenv import load_dotenv
-from loguru import logger
-
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.frames.frames import LLMRunFrame
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-)
-from pipecat.runner.types import RunnerArguments
-from pipecat.runner.utils import parse_telephony_websocket
-from pipecat.serializers.plivo import PlivoFrameSerializer
-from pipecat.services.google.gemini_live.llm import (
-    GeminiLiveLLMService,
-    GeminiVADParams,
-)
+from lead_context import LeadContext
+from pipecat.services.google.gemini_live.llm import GeminiVADParams
 from pipecat.transcriptions.language import Language
-from pipecat.transports.base_transport import BaseTransport
-from pipecat.transports.websocket.fastapi import (
-    FastAPIWebsocketParams,
-    FastAPIWebsocketTransport,
-)
-from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 
-from call_limits import (
-    end_call_function_schema,
-    make_end_call_handler,
-    parse_goodbye_hangup_delay_s,
-    parse_goodbye_hangup_enabled,
-    parse_max_call_minutes,
-    register_goodbye_hangup_fallback,
-    schedule_max_call_duration,
-)
-from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
-from call_transcript import TranscriptBuffer, attach_pipeline_finalize
-
-load_dotenv(override=True)
-
-# Scripted terminal lines (SPECIAL SITUATIONS) — substrings for STS goodbye hangup fallback.
-_GOODBYE_HANGUP_MARKERS_HI = (
+GOODBYE_HANGUP_MARKERS = (
     "आपका दिन शुभ हो",
     "सटीक समय बता दीजिए",
     "मैं अभी भेज देती हूँ",
@@ -65,25 +17,35 @@ _GOODBYE_HANGUP_MARKERS_HI = (
     "abhi bhej deti hun",
 )
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PREVIOUS HINDI SCRIPT (Tesseract Nilaya / Baner–Balewadi) — kept for reference only, May 2026
-# -----------------------------------------------------------------------------
-# Company: Tesseract | Project: Tesseract Nilaya — Baner–Balewadi, Pune
-# Opening:  "नमस्ते, क्या {lead} जी से बात हो रही है?"
-# Intro:    "मैं दीया बोल रही हूँ टेसरैक्ट की तरफ़ से। आपने हमारे
-#            बानेर–बालेवाड़ी वाले 2 BHK, टेसरैक्ट निलया के लिए इन्क्वायरी
-#            की थी — क्या अभी दो मिनट का समय है?"
-# Interest: "बहुत अच्छा... बानेर–बालेवाड़ी लिंक रोड के पास हमारा एक खूबसूरत
-#            प्रोजेक्ट है — टेसरैक्ट निलया। क्या आप अभी घर की तलाश में हैं?"
-# Facts:    Size 720–780 sqft carpet | 14 floors | RERA Dec 2029 | commit mid-2027
-#           Hinjewadi ~25 min | Expressway ~20 min | Katraj ~15 min
-#           Amenities: club house, pool, co-working lounge, sky deck, kids zone
-# Persona line: "RESPOND IN HINDI. YOU MUST RESPOND UNMISTAKABLY IN HINDI."
-# ═══════════════════════════════════════════════════════════════════════════════
+GEMINI_LANGUAGE = Language.HI_IN
+GEMINI_VAD = GeminiVADParams(
+    silence_duration_ms=600,
+    prefix_padding_ms=500,
+)
+SCRIPT_ID = "pyramid_hi"
+GEMINI_MODEL = "models/gemini-3.1-flash-live-preview"
+GEMINI_VOICE = "Sulafat"
+GEMINI_TEMPERATURE = 0.5
 
 
-def build_system_instruction(lead_name: str) -> str:
-    """Live API system instruction: persona → language → rules → facts → end-call."""
+def build_bootstrap_messages(ctx: LeadContext) -> list[dict]:
+    lead_name = ctx.lead_name
+    return [
+        {
+            "role": "user",
+            "content": (
+                f"The call has just connected. {lead_name} has answered. "
+                f"Execute Rule 1 from your conversational rules: say ONLY "
+                f"the Rule 1 opening sentence (Hindi, addressing {lead_name}) "
+                f"in a warm voice — then stop and wait for their response. "
+                f"Do not say anything else."
+            ),
+        }
+    ]
+
+def build_system_instruction(ctx: LeadContext) -> str:
+    """Live API system instruction."""
+    lead_name = ctx.lead_name
     return f"""
 # AUDIO PROFILE: Diya (दिया)
 ## "Pyramid Parkland Nxt — Bhukum, Pune"
@@ -275,206 +237,8 @@ MINDSET: दीया आत्मविश्वासी, गर्मजो�
 
 संदेह पर बात जारी रखें; गलत कट से बेहतर है थोड़ी लंबी बात। टर्मिनल अलविदा पर:
 ऊपर वाली लाइन एक बार साफ़ बोलें, फिर ``end_call`` एक बार।
+
+## CALL METADATA (internal — do not read aloud unless relevant)
+- Callee E.164: {ctx.lead_phone!r}
+- City: {ctx.lead_city!r}
 """
-
-
-# ── Main bot runner ────────────────────────────────────────────────────────────
-
-async def run_bot(
-    transport: BaseTransport,
-    runner_args: RunnerArguments,
-    t0: float,
-    *,
-    plivo_call_id: str,
-):
-    _lap(t0, "run_bot() entered — building pipeline")
-
-    body = getattr(runner_args, "body", {}) or {}
-    lead_name = body.get("lead_name", "Sir / Madam")
-
-    end_tools = ToolsSchema(standard_tools=[end_call_function_schema()])
-
-    # ── Gemini Live (STT + LLM + TTS in one) ──────────────────────────────────
-    llm = GeminiLiveLLMService(
-        api_key=os.getenv("GOOGLE_API_KEY"),
-        system_instruction=build_system_instruction(lead_name),
-        tools=end_tools,
-
-        settings=GeminiLiveLLMService.Settings(
-
-            # ── Model ──────────────────────────────────────────────────────────
-            # gemini-3.1-flash-live-preview = latest, lowest latency.
-            # Always include "models/" prefix.
-            model="models/gemini-3.1-flash-live-preview",
-
-            # ── Voice ──────────────────────────────────────────────────────────
-            # Aoede = warmest female voice; good naturalness for Indian languages.
-            voice="Sulafat",
-
-            # ── Language (Live API: match spoken language — Hindi) ─────────────
-            language=Language.HI_IN,
-
-            # ── VAD (server-side) ──────────────────────────────────────────────
-            # 800 ms — slightly longer tail after speech ends; reduces spurious
-            # micro-turns from PSTN noise before Gemini commits a user turn.
-            vad=GeminiVADParams(
-                silence_duration_ms=600,
-                prefix_padding_ms=500,  # catch the soft first syllable
-            ),
-
-            # ── Sampling ──────────────────────────────────────────────────────
-            # 0.5 = deterministic-enough to stay on-script while sounding natural.
-            # Default is None (~0.8). Lowering reduces drifting off persona.
-            temperature=0.5,
-
-            # ── Notes ─────────────────────────────────────────────────────────
-            # affective_dialog / proactivity → 2.5-native-audio only, NOT 3.1.
-            # thinking_budget / context_window_compression → enable if needed.
-        ),
-    )
-    _lap(t0, "GeminiLiveLLMService object created (not yet connected)")
-
-    # ── Transcript buffer (for post-call Groq extraction + call_logs) ───────────
-    transcript_buffer = TranscriptBuffer()
-    usage_accumulator = UsageMetricsAccumulator()
-    usage_tap = UsageMetricsTap(usage_accumulator)
-
-    # ── Bootstrap context (Live API: seed user turn so the model speaks first)
-    bootstrap_messages = [
-        {
-            "role": "user",
-            "content": (
-                f"The call has just connected. {lead_name} has answered. "
-                f"Execute Rule 1 from your conversational rules: say ONLY "
-                f"the Rule 1 opening sentence (Hindi, addressing {lead_name}) "
-                f"in a warm voice — then stop and wait for their response. "
-                f"Do not say anything else."
-            ),
-        }
-    ]
-    context = LLMContext(bootstrap_messages, tools=end_tools)
-    # Mute the user audio path until the bot's first utterance completes.
-    # Drops InputAudioRawFrame / Interruption / VAD signals at the aggregator,
-    # so Gemini never sees user audio during the greeting → greeting is
-    # truly uninterruptible. Normal interruptions resume after first turn.
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
-        ),
-    )
-
-    # ── Pipeline ───────────────────────────────────────────────────────────────
-    pipeline = Pipeline([
-        transport.input(),
-        user_aggregator,
-        llm,
-        transport.output(),
-        usage_tap,
-        assistant_aggregator,
-    ])
-    _lap(t0, "Pipeline built")
-
-    task = PipelineTask(
-        pipeline,
-        params=PipelineParams(
-            audio_in_sample_rate=8000,
-            audio_out_sample_rate=8000,
-            allow_interruptions=True,
-            enable_metrics=True,
-            enable_usage_metrics=True,
-        ),
-    )
-    _lap(t0, "PipelineTask created — registering event handlers")
-
-    max_minutes = parse_max_call_minutes()
-    call_limits = schedule_max_call_duration(
-        task, max_minutes, "max_call_duration"
-    )
-    coordinator = call_limits.coordinator
-    llm.register_function("end_call", make_end_call_handler(coordinator))
-
-    started_at_iso = datetime.now(timezone.utc).isoformat()
-    perf_pipeline = time.perf_counter()
-    transcript_buffer.register(user_aggregator, assistant_aggregator)
-    cancel_goodbye_pending = register_goodbye_hangup_fallback(
-        user_aggregator,
-        assistant_aggregator,
-        coordinator,
-        markers=_GOODBYE_HANGUP_MARKERS_HI,
-        enabled=parse_goodbye_hangup_enabled(),
-        delay_s=parse_goodbye_hangup_delay_s(),
-    )
-    session_call_id = body.get("_session_call_id")
-    attach_pipeline_finalize(
-        task,
-        transcript_buffer,
-        context,
-        route=os.getenv("BOT_ROUTE", "sts"),
-        session_call_id=session_call_id,
-        plivo_call_id=plivo_call_id,
-        started_at_iso=started_at_iso,
-        perf_start=perf_pipeline,
-        strip_bootstrap=True,
-        usage_accumulator=usage_accumulator,
-    )
-
-    @transport.event_handler("on_client_connected")
-    async def on_client_connected(transport, client):
-        _lap(t0, f"on_client_connected fired — queueing LLMRunFrame for {lead_name}")
-        await task.queue_frames([LLMRunFrame()])
-        _lap(t0, "LLMRunFrame queued — Gemini will greet as soon as WS is ready")
-
-    @transport.event_handler("on_client_disconnected")
-    async def on_client_disconnected(transport, client):
-        _lap(t0, "on_client_disconnected fired — cancelling task")
-        cancel_goodbye_pending()
-        wt = call_limits.watchdog_task
-        if wt is not None and not wt.done():
-            wt.cancel()
-            try:
-                await wt
-            except asyncio.CancelledError:
-                pass
-        await task.cancel()
-
-    _lap(t0, "Starting PipelineRunner — handing control to pipecat")
-    runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
-    await runner.run(task)
-    _lap(t0, "PipelineRunner finished")
-
-
-async def bot(runner_args: RunnerArguments):
-    """Entry point — matches the interface expected by server.py"""
-    t0 = time.perf_counter()
-    _lap(t0, "bot() called — WebSocket accepted by server.py")
-
-    transport_type, call_data = await parse_telephony_websocket(runner_args.websocket)
-    _lap(t0, f"parse_telephony_websocket done — transport={transport_type}  call_id={call_data.get('call_id', 'unknown')}")
-
-    serializer = PlivoFrameSerializer(
-        stream_id=call_data["stream_id"],
-        call_id=call_data["call_id"],
-        auth_id=os.getenv("PLIVO_AUTH_ID", ""),
-        auth_token=os.getenv("PLIVO_AUTH_TOKEN", ""),
-    )
-    _lap(t0, "PlivoFrameSerializer created")
-
-    transport = FastAPIWebsocketTransport(
-        websocket=runner_args.websocket,
-        params=FastAPIWebsocketParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            add_wav_header=False,
-            serializer=serializer,
-        ),
-    )
-    _lap(t0, "FastAPIWebsocketTransport created — calling run_bot()")
-
-    await run_bot(transport, runner_args, t0, plivo_call_id=call_data["call_id"])
-
-
-def _lap(t0: float, label: str) -> None:
-    """Log a labelled timestamp relative to t0."""
-    elapsed = time.perf_counter() - t0
-    logger.info(f"[⏱ {elapsed:6.3f}s] {label}")

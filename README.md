@@ -1,6 +1,6 @@
 # Aakashvani
 
-> **AI-powered outbound voice agent platform for the Indian SMB market.**
+> **Managed AI outbound voice** for the Indian SMB market — outcomes and ops, not a self-serve bot builder.
 > Pipecat 1.1.0 + Plivo + Gemini Live + FastAPI.
 
 ---
@@ -19,10 +19,12 @@
 
 ## What this is
 
+**Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage credits (see [ROADMAP.md](ROADMAP.md) §1 Vision and §9 phased plan). Today’s repo is **Phase 0** — single-tenant dev server + SQLite + `POST /start`.
+
 Two voice pipelines that can call any Indian phone number via Plivo and hold a conversation:
 
-- **Route A — Cascaded** ([bot_cascade.py](bot_cascade.py)): Sarvam STT (Hindi/Marathi/auto) → Groq Llama 3.3 70B → Cartesia TTS. Tight script control, function-calling (`push_lead_data`, `end_call`), easy to audit. ~1.5–2.5 s round-trip.
-- **Route B — STS** ([bot_sts.py](bot_sts.py), [bot_sts_hi.py](bot_sts_hi.py)): Gemini Live (speech-to-speech) — single model handles STT + LLM + TTS. ~0.5–1 s round-trip. **Diya** outbound scripts (Marathi: Pyramid Parkland Nxt; Hindi: Tesseract Nilaya). Lead JSON is **not** captured via live tools; after hang-up, `call_transcript.py` runs **Groq** extraction into `call_logs.extraction_json`. Optional **`end_call`** tool ends the PSTN leg after the closing script; **`MAX_CALL_MINUTES`** caps duration.
+- **Route A — Cascaded** ([bot_cascade.py](bot_cascade.py)): Sarvam STT → Groq → Cartesia. Prompt in [`cascade_scripts/`](cascade_scripts/) (`CASCADE_SCRIPT`, default `prowave`). ~1.5–2.5 s round-trip. Function-calling (`push_lead_data`, `end_call`), easy to audit.
+- **Route B — STS** ([bot_sts.py](bot_sts.py)): Gemini Live (speech-to-speech). Script modules under [`sts_scripts/`](sts_scripts/) (default `STS_SCRIPT=pyramid_mr` Marathi; set `STS_SCRIPT=pyramid_hi` for Hindi). ~0.5–1 s round-trip. **Diya** / Pyramid Parkland Nxt. Lead JSON is **not** captured via live tools; after hang-up, `call_transcript.py` runs **Groq** extraction into `call_logs.extraction_json`. Optional **`end_call`** tool + goodbye hangup fallback (`call_limits.py`); **`MAX_CALL_MINUTES`** caps duration.
 
 Calls are placed by hitting `POST /start` on the FastAPI server in [server.py](server.py). Pipecat handles the audio pipeline; Plivo handles the PSTN leg.
 
@@ -47,7 +49,7 @@ uv sync
 
 # 2. Copy and fill in secrets
 cp env.example .env
-# edit .env: set PLIVO_*, GOOGLE_API_KEY, NGROK_URL, BOT_ROUTE
+# edit .env: set PLIVO_*, GOOGLE_API_KEY, NGROK_URL, BOT_ROUTE (and STS_SCRIPT / CASCADE_SCRIPT to pick a script module)
 
 # 3. Start the server (uses BOT_ROUTE from .env, defaults to sts)
 just dev
@@ -92,10 +94,12 @@ aakashvani/
 ├── pricing_sts.py           Optional STS `cost_inr` from token counts + env USD rates
 ├── n8n_webhook.py           Outbound POST of call payload to `N8N_WEBHOOK_URL`
 ├── post_call_extract.py     Groq post-call JSON extraction + normalize_post_call_extraction
+├── lead_context.py          Shared LeadContext (name, phone, city) for script modules
+├── sts_scripts/             STS persona modules (GEMINI_* + prompts); STS_SCRIPT env
+├── cascade_scripts/       Cascade persona modules; CASCADE_SCRIPT env
 ├── bot.py                   Stock pipecat outbound example (kept as reference)
-├── bot_sts.py               Route B (MR): Gemini Live — Diya, Pyramid Parkland Nxt
-├── bot_sts_hi.py            Route B (HI): Gemini Live — Diya, Tesseract Nilaya
-├── bot_cascade.py           Route A: Sarvam STT + Groq LLM + Cartesia TTS
+├── bot_sts.py               Route B: Gemini Live pipeline (loads sts_scripts.*)
+├── bot_cascade.py           Route A: Sarvam + Groq + Cartesia (loads cascade_scripts.*)
 ├── data/                    Default location for `call_logs.db` (gitignored; see CALL_LOG_DB_PATH)
 ├── justfile                 Dev commands (dev, dev-sts, dev-cascade, tunnel, call, health, route, sync)
 ├── scripts/
@@ -151,6 +155,7 @@ sequenceDiagram
 | `just dev`                 | Run uvicorn with whatever `BOT_ROUTE` is in `.env` (default `sts`)          |
 | `just dev-sts`             | Force `BOT_ROUTE=sts` for this run                                          |
 | `just dev-cascade`         | Force `BOT_ROUTE=cascade` for this run                                      |
+| `just dev-sts-hi`        | Same as STS with `STS_SCRIPT=pyramid_hi` (Hindi script)                     |
 | `just tunnel`              | Start ngrok on your reserved domain (`NGROK_URL` in `.env`), port 7860      |
 | `just call +91… name city` | POST `/start` for an outbound call. `name` and `city` are optional          |
 | `just health`              | GET `/health` on the public URL                                             |
@@ -171,7 +176,7 @@ sequenceDiagram
 
 ## Next development steps
 
-This README mirrors what I'm working on right now. For the longer vision (pricing, multi-tenant architecture, compliance, all future phases), see **[ROADMAP.md](ROADMAP.md)**.
+This README mirrors what I'm working on right now. For the longer vision (managed service model, **one backend / Postgres / `client_id` isolation**, Docker + nginx subdomains, API split `/api/*` vs `/internal/*`, pricing, compliance, React phases), see **[ROADMAP.md](ROADMAP.md)**.
 
 Immediate next deliverables (Phase 0 continuation):
 

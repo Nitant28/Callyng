@@ -20,6 +20,10 @@ dev-sts:
 dev-cascade:
     BOT_ROUTE=cascade uv run uvicorn server:app --host 0.0.0.0 --port 7860 --reload
 
+# STS with Hindi script (pyramid_hi under sts_scripts/)
+dev-sts-hi:
+    STS_SCRIPT=pyramid_hi BOT_ROUTE=sts uv run uvicorn server:app --host 0.0.0.0 --port 7860 --reload
+
 # Open the ngrok tunnel using your reserved domain from .env (NGROK_URL)
 tunnel:
     ngrok http --domain=$(echo "$NGROK_URL" | sed 's|https://||') 7860

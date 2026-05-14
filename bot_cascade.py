@@ -1,8 +1,19 @@
-import os
+#
+# bot_cascade.py — Aakashvani | Sarvam STT + Groq + Cartesia pipeline
+#
+# System prompt lives under cascade_scripts/ (see CASCADE_SCRIPT env).
+#
+
+from __future__ import annotations
+
 import asyncio
+import importlib
 import json
+import os
+import re
 import time
 from datetime import datetime, timezone
+from types import ModuleType
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -26,7 +37,6 @@ from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.groq.llm import GroqLLMService
 from pipecat.services.llm_service import FunctionCallParams
-from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
@@ -41,144 +51,83 @@ from call_limits import (
 )
 from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
+from lead_context import LeadContext
 
 load_dotenv(override=True)
 
-SYSTEM_PROMPT = """
-You are Diya, a highly professional and warm real estate concierge at Prowave Real Estate. You are calling {lead_name} from a general database.
-START EVERY CALL WITH EXACTLY THIS (Hindi Default - NEVER CHANGE):
 
-"Hello {lead_name}, मैं दिया बात कर रही हूँ Prowave Consultants से. बस जानना था, क्या आप अभी Pune में कोई घर या flat देख रहे हैं?"
-ALTERNATE MARATHI OPENING (Only use if language_mode is Marathi):
-"Hello {lead_name}, मी दिया बोलते आहे Prowave Consultants कडून. फक्त विचारायचं होतं, तुम्ही सध्या पुण्यात घर किंवा फ्लॅट बघत आहात का?"
+def _load_cascade_script() -> ModuleType:
+    raw = (os.getenv("CASCADE_SCRIPT") or "prowave").strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", raw):
+        raise ValueError(
+            f"Invalid CASCADE_SCRIPT={raw!r}; use a snake_case module under cascade_scripts/"
+        )
+    mod_name = f"cascade_scripts.{raw}"
+    mod = importlib.import_module(mod_name)
+    if not hasattr(mod, "build_system_prompt"):
+        raise ValueError(f"Cascade script {mod_name} missing build_system_prompt")
+    return mod
 
-LANGUAGE RULES (VERY STRICT - NO EXCEPTIONS):
-- Default language_mode = "Hindi"
-- You MUST start in Hindi unless the user has explicitly requested Marathi.
-- If user says anything like "Marathi", "Marathi madhe", "Marathi me", "Marathi madhe bola", "fakt marathi", or "Marathi language" → Immediately switch to Marathi mode and reply only in Marathi using the exact Marathi scripts.
-- Switch language ONLY if user clearly says: "English me baat karo", "Speak in English", or explicitly asks for Marathi.
-Once switched, stay in that language.
-- Strictly do not switch language on your own. Never auto-detect or mix languages.
-
-MEMORY (Track Silently):
-intent_status (Yes/No)
-bhk_preference
-location_preference
-
-STRICT RESPONSE RULES:
-Maximum 2 sentences per response.
-Only one question at a time.
-Listen extremely carefully before storing BHK or location.
-If you think there is an Range issue (you are hearing gibberish or no audio) tell user to come in range in CURRENT LANGUAGE
-
-SPECIAL HANDLING RULES:
-Busy Rule: If user says "abhi busy hu", "thodi der mein call karna", "baad mein call karo" etc. →
-"ठीक है sir, कब call करूँ? Exact time बता दीजिए।"
-Other Property Rule: If user mentions any property other than buying flat/house (plot, shop, office, rent, villa, commercial etc.) →
-Immediately say: "ठीक है sir, humne aapki requirement note kar li hai, thank you!" and end the call politely.
-AUDIO / RANGE ISSUE RULE:
-If you hear gibberish, unclear speech, cutting voice, low volume, or no audio → Immediately tell user to switch to a location with better range
-
-CONVERSATION FLOW (Hindi - Default):
-After greeting → "क्या आप अभी पुणे में फ्लैट खरीदने का सोच रहे हैं?"
-If "Nahi/No" → "Ok, Thank you for your time sir." then call push_lead_data and end.
-If "Haan/Yes" → "अच्छा sir… आप kya property dekh rahe ho? two या three BHK"
-Next → "ठीक है sir… पुणे में कोई specific location के लिए आप देख रहे हैं?"
-Once BHK + Location collected →
-"okay sir… मैंने आपकी {bhk_preference} की आवश्यकता {location_preference} में नोट कर ली है। हमारे sales executives आपको जल्द कॉल करेंगे।" then call push_lead_data and end.
-
-MARATHI MODE (Only if user explicitly switches):
-Use Marathi Opening (ONLY IF HINDI OPENING IS NOT DONE ALREADY)
-"तुम्ही सध्या पुण्यात फ्लॅट घेण्याचा विचार करत आहात का?"
-"ठीक आहे… तुम्हाला कोणता BHK पाहिजे?"
-"ओके… पुण्यात कोणती Location बघत आहात??"
-Final: "छान… तुमची {bhk_preference} साठी {location_preference} मध्ये गरज नोंदवली आहे। आमचे sales executive तुम्हाला लवकरच कॉल करतील।" then call push_lead_data and end.
-
-TRUST QUESTIONS (Exact):
-Hindi: "Aapka number hume property inquiry database se mila hai. Me actually Prowave Consultants se Diya baat kar rahi hu"
-Marathi: "तुमचा number आम्हाला property inquiry database मधून मिळाला आहे. मी prowave consultants कडून Diya बोलत आहे."
-
-ANTI-HALLUCINATION & ANTI-LOOP:
-Only store what user actually says.
-Never assume information.
-Never cut call abruptly. Always end politely.
-Use natural soft fillers when needed.
-
-MANDATORY:
-Before every call end, ALWAYS call push_lead_data.
-Applies to ALL cases: Interested, Not interested, Busy, Callback later, Unclear audio, Call disconnected.
-If data missing, pass "NULL".
-Order for a normal hangup: (1) call push_lead_data, (2) speak your final goodbye in the current language,
-(3) call end_call exactly once to disconnect. Never skip push_lead_data. The platform may also disconnect
-after a maximum call duration regardless of tools.
-"""
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_call_id: str):
-    logger.info("Starting Hindi bot — Diya (Prowave)")
+    body = getattr(runner_args, "body", {}) or {}
+    ctx = LeadContext.from_body(body, default_lead_name="Sir")
+    casc = _load_cascade_script()
+    sid = getattr(casc, "SCRIPT_ID", os.getenv("CASCADE_SCRIPT", "prowave"))
+    logger.info("Cascade script active: {} ({})", sid, casc.__name__)
 
-    body = getattr(runner_args, "body", {})
-    lead_name = body.get("lead_name", "Sir")
-    lead_phone = body.get("phone_number", "")
+    logger.info("Starting cascaded bot — Diya (script %s)", sid)
 
-    # Inject lead name into prompt
-    dynamic_prompt = SYSTEM_PROMPT.format(
-        lead_name=lead_name,
-        bhk_preference="{bhk_preference}",    # keep as template for LLM to fill
-        location_preference="{location_preference}",
-    )
+    dynamic_prompt = casc.build_system_prompt(ctx)
 
-    # --- push_lead_data function definition ---
     push_lead_data_fn = FunctionSchema(
         name="push_lead_data",
         description="Call this before ending every call to save lead qualification data. Always call this regardless of outcome.",
         properties={
             "intent_status": {
                 "type": "string",
-                "description": "Whether lead is interested: Yes, No, Busy, Callback, Unclear"
+                "description": "Whether lead is interested: Yes, No, Busy, Callback, Unclear",
             },
             "bhk_preference": {
                 "type": "string",
-                "description": "BHK preference: 2BHK, 3BHK, NULL if not collected"
+                "description": "BHK preference: 2BHK, 3BHK, NULL if not collected",
             },
             "location_preference": {
                 "type": "string",
-                "description": "Preferred location in Pune, or NULL if not collected"
+                "description": "Preferred location in Pune, or NULL if not collected",
             },
             "callback_time": {
                 "type": "string",
-                "description": "Requested callback time if busy, else NULL"
+                "description": "Requested callback time if busy, else NULL",
             },
             "language_used": {
                 "type": "string",
-                "description": "Language used in call: Hindi, Marathi, English"
-            }
+                "description": "Language used in call: Hindi, Marathi, English",
+            },
         },
-        required=["intent_status", "bhk_preference", "location_preference"]
+        required=["intent_status", "bhk_preference", "location_preference"],
     )
 
     end_call_fn = end_call_function_schema()
     tools = ToolsSchema(standard_tools=[push_lead_data_fn, end_call_fn])
 
-    # --- STT ---
     stt = SarvamSTTService(
         api_key=os.getenv("SARVAM_API_KEY"),
         settings=SarvamSTTService.Settings(
             model="saarika:v2.5",
-            language="unknown",   # auto-detect Hindi/Marathi
-        )
+            language="unknown",
+        ),
     )
 
-    # --- LLM ---
     llm = GroqLLMService(
         api_key=os.getenv("GROQ_API_KEY"),
         settings=GroqLLMService.Settings(
             model="llama-3.3-70b-versatile",
             system_instruction=dynamic_prompt,
             temperature=0.2,
-        )
+        ),
     )
 
-    # --- TTS ---
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
         settings=CartesiaTTSService.Settings(
@@ -233,11 +182,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     async def handle_push_lead_data(params: FunctionCallParams):
         data = params.arguments
         logger.info(f"LEAD DATA CAPTURED: {json.dumps(data, ensure_ascii=False, indent=2)}")
-        logger.info(f"Phone: {lead_phone} | Name: {lead_name}")
-
-        # TODO: send to n8n webhook or CRM here
-        # await send_to_n8n(lead_phone, lead_name, data)
-
+        logger.info(
+            "Phone: {} | Name: {} | City: {}",
+            ctx.lead_phone,
+            ctx.lead_name,
+            ctx.lead_city,
+        )
         await params.result_callback({"status": "saved"})
 
     llm.register_function("push_lead_data", handle_push_lead_data)
@@ -245,7 +195,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
 
     started_at_iso = datetime.now(timezone.utc).isoformat()
     perf_pipeline = time.perf_counter()
-    body = getattr(runner_args, "body", {}) or {}
     attach_pipeline_finalize(
         task,
         transcript_buffer,
@@ -283,7 +232,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
 
 async def bot(runner_args: RunnerArguments):
     transport_type, call_data = await parse_telephony_websocket(runner_args.websocket)
-    logger.info(f"Transport: {transport_type} | Call: {call_data.get('call_id', 'unknown')}")
+    logger.info(
+        "Transport: %s | Call: %s",
+        transport_type,
+        call_data.get("call_id", "unknown"),
+    )
 
     serializer = PlivoFrameSerializer(
         stream_id=call_data["stream_id"],

@@ -155,7 +155,11 @@ async def start_call(request: Request) -> JSONResponse:
         raise HTTPException(400, "Missing phone_number")
 
     phone_number = str(data["phone_number"])
-    body_data = data.get("body", {})
+    body_data = data.get("body", {}) or {}
+    if not isinstance(body_data, dict):
+        body_data = {}
+    # So Pipecat /ws receives callee phone inside runner_args.body (scripts use LeadContext).
+    body_data = {**body_data, "phone_number": phone_number}
     call_id = str(uuid.uuid4())
 
     # Register the warmup event BEFORE starting the background task.
