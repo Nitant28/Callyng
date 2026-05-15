@@ -107,7 +107,7 @@ flowchart LR
 | ----------------- | ----------------------------------- | --------------------------------------- | ------------- |
 | Voice framework   | Pipecat 1.1.0 (BSD)                 | Pipeline orchestration                  | done          |
 | Telephony         | Plivo                               | Outbound + India PSTN                   | done          |
-| Local dev transport | `SmallWebRTCTransport`            | Browser-based testing                   | planned       |
+| Local dev transport | `SmallWebRTCTransport`            | Browser-based testing (no Plivo minutes) | planned (Phase 4) |
 
 ### AI services
 
@@ -130,7 +130,7 @@ Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`d
 | Component       | Tech                              | Status                                       |
 | --------------- | --------------------------------- | -------------------------------------------- |
 | Backend         | FastAPI + Python 3.12 + uv        | done                                         |
-| Persistence     | SQLite (Phase 0) → PostgreSQL 16  | planned (SQLite next sprint)                 |
+| Persistence     | SQLite (Phase 0) → PostgreSQL 16  | SQLite done (Phase 0); Postgres planned (Phase 2) |
 | Cache / queue   | Redis 7                           | planned (Phase 2)                            |
 | Vector DB       | ChromaDB                          | maybe — only if a client actually needs RAG  |
 | Frontend        | None (CLI + curl) → React SPA (one build, all subdomains) | planned (Phase 1+)           |
@@ -157,7 +157,7 @@ Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`d
 
 > **Multi-tenancy:** enforced by `client_id`. Every DB query must include `WHERE client_id = ?`. There are no per-client deployments. One codebase, one server, complete data isolation in the application layer.
 
-Today (Phase 0):
+Foundation (Phase 0 — complete):
 
 ```mermaid
 flowchart TD
@@ -446,7 +446,7 @@ Prepaid minute packs (like a SIM recharge). Minutes are for **connected call tim
 | Server (amortized)     | —                 | ₹0.05      |
 | **Total**              |                   | **~₹1.49** |
 
-Route B (Gemini Live) per-minute cost is **TBD** — the README/business plan quotes ₹0.084/min which doesn't match Gemini Live's audio-token pricing model. Real number needs to come from running a few calls with `enable_usage_metrics=True` and reading the actual token counts off pipecat's `MetricsFrame`. This is a Phase 0 deliverable.
+Route B (Gemini Live) per-minute cost uses env USD/M token rates + `USD_INR` when set (`pricing_sts.py`); refine per-model from `usage_metrics_json` as needed.
 
 ### Why this pricing works
 
@@ -486,7 +486,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 ## 9. Phased roadmap
 
 ### Phase 0 — Foundation
-**Status:** in progress (current focus)
+**Status:** done (May 2026)
 **Timeline:** 2-3 weeks, started May 2026
 
 **Goal:** Two working bots placing real Plivo calls, with persistent call logs, real cost capture, and a single webhook fire.
@@ -506,13 +506,12 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | Max call duration watchdog + `end_call` tool (cascade + STS, `call_limits.py`)   | done          |
 | STS Gemini Live context window compression (`GEMINI_CWC_TRIGGER_TOKENS`, Pipecat `ContextWindowCompressionParams`) | done          |
 | Gemini Live prewarm: `LiveConnectConfig` + `send_client_content`, `STS_SCRIPT`-aligned model/voice/lang | done          |
-| Browser test path via `SmallWebRTCTransport` (no Plivo minutes during dev)      | next          |
 
-**Deliverable:** Make a real call → see structured extraction + cost in SQLite + n8n receives a webhook.
+**Deliverable:** Make a real call → see structured extraction + cost in SQLite + n8n receives a webhook. **Met.**
 
 ### Phase 1 — Lead upload + campaigns + client frontend
-**Status:** planned  
-**Timeline:** ~2–3 weeks after Phase 0
+**Status:** complete (May 2026) — foundation shipped as Phase 0; client SPA/campaign UI milestones below postponed until after Phase 2  
+**Timeline:** React + CSV flows resume after multi-tenant backend
 
 **Goal:** A real client can log in, upload leads, start a campaign, watch it run, and see transcripts and audio for every call. Credits balance is visible and manually rechargeable.
 
@@ -546,8 +545,8 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 **Explicitly out of scope for Phase 1:** React analytics charts, bot config UI, Razorpay, Redis, multi-tenant Postgres, concurrent dialer, white-label domains.
 
 ### Phase 2 — Multi-tenant + billing
-**Status:** planned  
-**Timeline:** ~3–4 weeks
+**Status:** in progress (current focus)  
+**Timeline:** ~3–4 weeks, starting May 2026
 
 **Goal:** Onboard client #2 without code changes.
 
@@ -586,7 +585,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 
 **Bot configuration UI (Phase 3):** clients fill a **structured form**; the backend compiles the real system prompt. **Client-editable:** agent name; opening greeting (supports `{lead_name}`); language preference (Marathi / Hindi / English); talking points (ordered list); objection responses (key → response); call-end message. **Never exposed:** route (`sts` / `cascade`), model, extraction schema, Plivo number, TTS voice ID, temperature / inference settings.
 
-### Phase 4 — WhatsApp + recordings
+### Phase 4 — WhatsApp + recordings + local dev transport
 **Status:** planned
 
 | Milestone | Status |
@@ -595,6 +594,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | Signed URL generation for audio player (1 hr expiry) | planned |
 | Meta WhatsApp Business API for post-call follow-up messages | planned |
 | n8n WhatsApp workflow templates | planned |
+| Browser test path via `SmallWebRTCTransport` (`POST /api/offer`, Pipecat prebuilt UI; no Plivo minutes during dev) | planned |
 
 The `call_logs.recording_url` column exists from Phase 1+ in the target schema as a placeholder; **this phase** wires fetch → R2 → key storage and signed URL issuance. The Phase 1 call-detail page consumes those URLs once available.
 
@@ -627,6 +627,7 @@ These items are sometimes asked about but are not on the near-term plan:
 - **iOS / Android client apps.** Web is enough.
 - **Bring-your-own LLM.** Power users can fork; not a product feature.
 - **Embedded analytics SaaS.** Use Metabase or Superset over Postgres if needed.
+- **`SmallWebRTCTransport` browser dev path.** Optional local testing without Plivo/ngrok; deferred from Phase 0 to Phase 4 (May 2026). Until then, use `just call` + ngrok for pipeline dev.
 
 ---
 
@@ -691,16 +692,11 @@ Deprecated, do not use: `OpenAILLMContext`, `pipecat.transports.services.daily`,
 - `--reload` re-imports pipecat heavy modules on every save; don't use it when measuring latency.
 - After folder rename, `.venv` may have stale shebangs. Run `uv sync` to fix.
 
-### Next deliverables (Phase 0 continuation)
+### Next deliverables (Phase 2 — current)
 
-In order:
-1. SQLite call-log persistence (`call_logs` table, one row per call).
-2. `MetricsFrame` listener → persist usage token columns + `usage_metrics_json` (per-modality audio tokens deferred).
-3. Transcript capture from `on_user_turn_stopped` + `on_assistant_turn_stopped` aggregator events.
-4. Post-call **Groq** JSON extraction (`post_call_extract.py`) into `call_logs.extraction_json`, with `normalize_post_call_extraction` for deterministic fixes before persist.
-5. Outbound JSON `POST` to n8n workflow URL from `N8N_WEBHOOK_URL` (optional `N8N_WEBHOOK_SECRET`); optional STS `cost_inr` via env Gemini rates (`pricing_sts.py`).
-6. Max call duration (`MAX_CALL_MINUTES`) + `end_call` LLM tool for margin guard (`call_limits.py`).
-7. `SmallWebRTCTransport` browser-test route.
+See [§9 Phase 2](#phase-2--multi-tenant--billing): Postgres migration, `clients` / `bot_configs` / campaigns schema, `client_id` on every query, CostGuard, Razorpay recharge, Redis concurrent dialer, admin portal, retire `BOT_ROUTE` env in favour of `bot_config_id` at call time.
+
+**Phase 0** (foundation) is complete. **`SmallWebRTCTransport`** is deferred to Phase 4 — do not implement unless explicitly requested.
 
 ### Product model cheat sheet
 

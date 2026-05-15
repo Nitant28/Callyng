@@ -9,17 +9,17 @@
 
 | Field             | Value                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
-| Phase             | **Phase 0 — Foundation** (week 1 of 2)                                                            |
-| Last milestone    | **STS context compression** (`GEMINI_CONTEXT_COMPRESSION`, `GEMINI_CWC_TRIGGER_TOKENS`) + **Gemini prewarm** fix (`server.py` uses `LiveConnectConfig` + `send_client_content`, aligned with `STS_SCRIPT`). |
-| Current focus     | Browser `SmallWebRTCTransport` dev path (no Plivo minutes during dev). |
-| Next milestone    | See [ROADMAP.md](ROADMAP.md) — SmallWebRTCTransport. |
+| Phase             | **Phase 0 — Foundation** — **complete** (May 2026). Roadmap Phase 1 closed; **Phase 2** in progress. |
+| Last milestone    | Call logs, metrics, Groq extraction, n8n webhook, `end_call` / max duration, STS context compression + Gemini prewarm. |
+| Current focus     | **Phase 2 — Multi-tenant + billing** (see [ROADMAP.md](ROADMAP.md) §9).                         |
+| Next milestone    | PostgreSQL migration, `client_id` isolation, CostGuard, concurrent dialer (Redis).                |
 | Full plan         | See [ROADMAP.md](ROADMAP.md).                                                                     |
 
 ---
 
 ## What this is
 
-**Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage credits (see [ROADMAP.md](ROADMAP.md) §1 Vision and §9 phased plan). Today’s repo is **Phase 0** — single-tenant dev server + SQLite + `POST /start`.
+**Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage credits (see [ROADMAP.md](ROADMAP.md) §1 Vision and §9 phased plan). **Phase 0 / Phase 1 (foundation) are done** — single-tenant dev server + SQLite + `POST /start`, two voice routes, post-call extraction. **Phase 2** (multi-tenant backend) is next; Phase 1 client SPA milestones resume after Phase 2 (see roadmap).
 
 Two voice pipelines that can call any Indian phone number via Plivo and hold a conversation:
 
@@ -179,10 +179,8 @@ sequenceDiagram
 
 This README mirrors what I'm working on right now. For the longer vision (managed service model, **one backend / Postgres / `client_id` isolation**, Docker + nginx subdomains, API split `/api/*` vs `/internal/*`, pricing, compliance, React phases), see **[ROADMAP.md](ROADMAP.md)**.
 
-Immediate next deliverables (Phase 0 continuation):
+**Phase 0 (foundation)** — complete. Dev testing stays on Plivo + ngrok (`just call`).
 
-1. ~~SQLite call-log persistence + transcript capture~~ — done (`call_logs` + turn events; see **Call logs and transcripts** above).
-2. ~~Cost capture via pipecat's `MetricsFrame`~~ — done (`call_metrics.UsageMetricsTap` → usage columns + `usage_metrics_json`).
-3. ~~Post-call extraction~~ — done via **Groq** (`post_call_extract.py`); uses `GROQ_API_KEY` and optional `POST_CALL_MODEL` in `.env`.
-4. ~~Outbound n8n webhook + optional STS `cost_inr`~~ — done (`n8n_webhook.py`, `pricing_sts.py`, `call_transcript.py`); configure `N8N_WEBHOOK_URL` and optional Gemini Live USD/M rates in `.env` (see `env.example`).
-5. Browser test path via `SmallWebRTCTransport` so we stop burning Plivo minutes during dev.
+**Phase 2 (current)** — see [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing): Postgres, `client_id`, CostGuard, Razorpay, concurrent dialer, admin portal.
+
+**Deferred:** browser `SmallWebRTCTransport` dev path → Phase 4 ([ROADMAP.md §9](ROADMAP.md#phase-4--whatsapp--recordings)). Phase 1 client SPA → after Phase 2 backend.
