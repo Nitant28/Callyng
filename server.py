@@ -1,7 +1,9 @@
 import asyncio
 import base64
+import importlib
 import json
 import os
+import re
 import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
@@ -39,7 +41,59 @@ else:
 # so by the time Plivo streams audio to /ws, Gemini is already connected.
 _warmup_ready: dict[str, asyncio.Event] = {}
 
-GEMINI_MODEL = "models/gemini-3.1-flash-live-preview"
+
+def _prewarm_live_connect_config():
+    """Minimal LiveConnectConfig aligned with Pipecat audio STS (not empty setup)."""
+    from google.genai.types import (
+        AudioTranscriptionConfig,
+        Content,
+        LiveConnectConfig,
+        Modality,
+        Part,
+        SpeechConfig,
+        VoiceConfig,
+    )
+    from pipecat.services.google.gemini_live.llm import language_to_gemini_language
+
+    model = os.getenv(
+        "GEMINI_MODEL", "models/gemini-3.1-flash-live-preview"
+    )
+    voice = "Aoede"
+    language = "mr-IN"
+
+    if BOT_ROUTE == "sts":
+        raw_script = (os.getenv("STS_SCRIPT") or "pyramid_mr").strip()
+        if re.fullmatch(r"[a-z][a-z0-9_]*", raw_script):
+            try:
+                sts = importlib.import_module(f"sts_scripts.{raw_script}")
+                model = getattr(
+                    sts, "GEMINI_MODEL", model
+                )
+                voice = getattr(sts, "GEMINI_VOICE", voice)
+                lang = getattr(sts, "GEMINI_LANGUAGE", None)
+                if lang is not None:
+                    mapped = language_to_gemini_language(lang)
+                    if mapped:
+                        language = mapped
+            except ImportError as exc:
+                logger.warning(
+                    "[prewarm] STS script sts_scripts.{} not loaded ({}); using defaults",
+                    raw_script,
+                    exc,
+                )
+
+    config = LiveConnectConfig(
+        response_modalities=[Modality.AUDIO],
+        speech_config=SpeechConfig(
+            voice_config=VoiceConfig(
+                prebuilt_voice_config={"voice_name": voice}
+            ),
+            language_code=language,
+        ),
+        input_audio_transcription=AudioTranscriptionConfig(),
+        output_audio_transcription=AudioTranscriptionConfig(),
+    )
+    return model, config, Content, Part
 
 
 async def _prewarm_gemini(call_id: str) -> None:
@@ -52,26 +106,44 @@ async def _prewarm_gemini(call_id: str) -> None:
     (which also takes ~1-2 s). By the time the callee picks up, Gemini is
     already warm.
     """
+    if BOT_ROUTE != "sts":
+        logger.debug(f"[prewarm:{call_id}] skipped (BOT_ROUTE={BOT_ROUTE!r})")
+        event = _warmup_ready.get(call_id)
+        if event:
+            event.set()
+        return
+
     from google import genai  # pip install google-genai  (NOT google-generativeai)
 
     api_key = os.getenv("GOOGLE_API_KEY", "")
+    if not api_key:
+        logger.warning(f"[prewarm:{call_id}] GOOGLE_API_KEY missing; skipping prewarm")
+        event = _warmup_ready.get(call_id)
+        if event:
+            event.set()
+        return
 
     try:
-        logger.info(f"[prewarm:{call_id}] Connecting to Gemini Live …")
+        model, config, Content, Part = _prewarm_live_connect_config()
+        logger.info(
+            f"[prewarm:{call_id}] Connecting to Gemini Live model={model} …"
+        )
         client = genai.Client(api_key=api_key)  # type: ignore[attr-defined]
 
-        async with client.aio.live.connect(model=GEMINI_MODEL) as session:  # type: ignore[attr-defined]
-            # Send a minimal no-op turn to force the cold-start compile.
-            await session.send(input=".", end_of_turn=True)
+        async with client.aio.live.connect(  # type: ignore[attr-defined]
+            model=model, config=config
+        ) as session:
+            await session.send_client_content(
+                turns=Content(role="user", parts=[Part(text="prewarm")]),
+                turn_complete=True,
+            )
             async for _ in session.receive():
-                break  # drain exactly one response chunk, then we're done
+                break
 
         logger.info(f"[prewarm:{call_id}] Gemini warmed up ✓")
     except Exception as exc:
-        # Non-fatal — the real bot will still start, just without the speedup.
         logger.warning(f"[prewarm:{call_id}] Pre-warm failed ({exc}); continuing anyway")
     finally:
-        # Always signal so /answer doesn't hang forever.
         event = _warmup_ready.get(call_id)
         if event:
             event.set()

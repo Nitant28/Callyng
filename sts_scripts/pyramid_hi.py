@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from lead_context import LeadContext
 from pipecat.services.google.gemini_live.llm import GeminiVADParams
+from google.genai.types import EndSensitivity, StartSensitivity
 from pipecat.transcriptions.language import Language
 
 GOODBYE_HANGUP_MARKERS = (
@@ -19,8 +20,10 @@ GOODBYE_HANGUP_MARKERS = (
 
 GEMINI_LANGUAGE = Language.HI_IN
 GEMINI_VAD = GeminiVADParams(
-    silence_duration_ms=600,
-    prefix_padding_ms=500,
+    start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
+    end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
+    prefix_padding_ms=200,   # was 500
+    silence_duration_ms=400,
 )
 SCRIPT_ID = "pyramid_hi"
 GEMINI_MODEL = "models/gemini-3.1-flash-live-preview"

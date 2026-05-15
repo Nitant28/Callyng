@@ -504,6 +504,8 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | Post-call Groq extraction → `extraction_json` (`Interested` + normalizer)       | done          |
 | Outbound JSON POST to n8n workflow URL (`N8N_WEBHOOK_URL` in `.env`)            | done          |
 | Max call duration watchdog + `end_call` tool (cascade + STS, `call_limits.py`)   | done          |
+| STS Gemini Live context window compression (`GEMINI_CWC_TRIGGER_TOKENS`, Pipecat `ContextWindowCompressionParams`) | done          |
+| Gemini Live prewarm: `LiveConnectConfig` + `send_client_content`, `STS_SCRIPT`-aligned model/voice/lang | done          |
 | Browser test path via `SmallWebRTCTransport` (no Plivo minutes during dev)      | next          |
 
 **Deliverable:** Make a real call → see structured extraction + cost in SQLite + n8n receives a webhook.
@@ -636,10 +638,10 @@ If you (an LLM agent) are reading this to help build Aakashvani, here is the che
 
 1. WSL2 + Python 3.12 + uv environment, all imports working.
 2. `server.py` — FastAPI app exposing `/start`, `/answer`, `/ws`, `/health`. Picks `bot_sts` or `bot_cascade` from `BOT_ROUTE` env at module load. `/start` merges top-level `phone_number` into the JSON `body` passed to `/ws` so bots see callee E.164 in `runner_args.body`.
-3. `bot_sts.py` — Gemini Live STS pipeline; persona text in `sts_scripts/` (`STS_SCRIPT` env: `pyramid_mr` / `pyramid_hi`, …). `GeminiLiveLLMService` with optional **`end_call`** tool + `MAX_CALL_MINUTES` watchdog (`call_limits.py`); lead fields come from post-call Groq on the transcript (`call_transcript.py`). Pre-seeded `LLMContext`, `on_client_connected` → `queue_frames([LLMRunFrame()])`. First-utterance latency ~1-2 s.
+3. `bot_sts.py` — Gemini Live STS pipeline; persona text in `sts_scripts/` (`STS_SCRIPT` env: `pyramid_mr` / `pyramid_hi`, …). `GeminiLiveLLMService` with optional **`end_call`** tool + `MAX_CALL_MINUTES` watchdog (`call_limits.py`); **context window compression** via `ContextWindowCompressionParams` (`GEMINI_CONTEXT_COMPRESSION`, `GEMINI_CWC_TRIGGER_TOKENS`); lead fields come from post-call Groq on the transcript (`call_transcript.py`). Pre-seeded `LLMContext`, `on_client_connected` → `queue_frames([LLMRunFrame()])`. First-utterance latency ~1-2 s.
 4. `bot_cascade.py` — Sarvam STT + Groq Llama 3.3 + Cartesia TTS; system prompt in `cascade_scripts/` (`CASCADE_SCRIPT`). Still has a live **`push_lead_data`** function-call for end-of-call capture. Uses Silero VAD for turn-taking.
 5. `bot.py` — vanilla pipecat outbound example, kept as reference.
-6. `_prewarm_gemini` in `server.py` opens a throwaway Gemini Live session during `/start` to warm DNS/TLS/Google backend caches. `/answer` waits up to 3 s for it.
+6. `_prewarm_gemini` in `server.py` (STS only) opens a Gemini Live session during `/start` with the same audio-oriented `LiveConnectConfig` shape as Pipecat (model/voice/language from active `sts_scripts.*` module), sends `send_client_content("prewarm")`, drains one receive — avoids empty-setup 1011 errors. `/answer` waits up to 3 s for the warmup event.
 7. `justfile` + `scripts/call.sh` for dev ergonomics.
 
 ### Pipecat 1.1.0 import paths (current, not the old ones)

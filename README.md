@@ -10,7 +10,7 @@
 | Field             | Value                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
 | Phase             | **Phase 0 — Foundation** (week 1 of 2)                                                            |
-| Last milestone    | **Call limits** — `MAX_CALL_MINUTES` watchdog + `end_call` LLM tool on cascade and STS (`call_limits.py`); Plivo hangup via `EndFrame`. |
+| Last milestone    | **STS context compression** (`GEMINI_CONTEXT_COMPRESSION`, `GEMINI_CWC_TRIGGER_TOKENS`) + **Gemini prewarm** fix (`server.py` uses `LiveConnectConfig` + `send_client_content`, aligned with `STS_SCRIPT`). |
 | Current focus     | Browser `SmallWebRTCTransport` dev path (no Plivo minutes during dev). |
 | Next milestone    | See [ROADMAP.md](ROADMAP.md) — SmallWebRTCTransport. |
 | Full plan         | See [ROADMAP.md](ROADMAP.md).                                                                     |
@@ -170,7 +170,8 @@ sequenceDiagram
 - **`uv run` complains about a missing `.venv` after this rename** — run `just sync` (or `uv sync`) once to rebuild venv shebangs against the new path.
 - **`server.py` keeps picking the wrong route** — `BOT_ROUTE` is read at module load. After editing `.env`, fully restart `just dev` (a uvicorn `--reload` re-import is fine).
 - **Plivo says the WebSocket URL is unreachable** — confirm `just tunnel` is up and the reserved domain in `.env` (`NGROK_URL`) matches `https://<sub>.ngrok-free.dev` exactly.
-- **First bot utterance is still slow** — watch the `[⏱ Ns]` log lines from `bot_sts.py`. If `parse_telephony_websocket done` takes >1 s, it's Plivo's `start` frame; if `LLMRunFrame queued → first audio` takes >2 s, it's Gemini's WS handshake. Prewarm handles the latter — make sure `_prewarm_gemini` in `server.py` is actually running.
+- **First bot utterance is still slow** — watch the `[⏱ Ns]` log lines from `bot_sts.py`. If `parse_telephony_websocket done` takes >1 s, it's Plivo's `start` frame; if `LLMRunFrame queued → first audio` takes >2 s, it's Gemini's WS handshake. Prewarm (STS only) should log `[prewarm:…] Gemini warmed up ✓` — if you see `Pre-warm failed (1011…)`, check `GOOGLE_API_KEY`, `STS_SCRIPT`, and that `BOT_ROUTE=sts`.
+- **Long STS calls and token growth** — enable context window compression (default on): `GEMINI_CONTEXT_COMPRESSION=1`, tune `GEMINI_CWC_TRIGGER_TOKENS` (default `20000`; API retains roughly half as the sliding target). `system_instruction` (project facts) stays on the Live connect payload.
 
 ---
 

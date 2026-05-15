@@ -84,6 +84,25 @@ def _load_sts_script() -> ModuleType:
     return mod
 
 
+def _context_window_compression_settings() -> dict[str, int | bool] | None:
+    """Gemini Live sliding-window compression (Pipecat → Google API).
+
+    Pipecat's ``_connect`` reads this as a dict (``.get("enabled")``), not a Pydantic model.
+    Retained token target defaults to trigger_tokens / 2 on the API side.
+    Default trigger 20000 → ~10k retained.
+    """
+    raw = (os.getenv("GEMINI_CONTEXT_COMPRESSION") or "1").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return None
+    try:
+        trigger = int(os.getenv("GEMINI_CWC_TRIGGER_TOKENS", "20000"))
+    except ValueError:
+        trigger = 20000
+    if trigger < 1:
+        trigger = 20000
+    return {"enabled": True, "trigger_tokens": trigger}
+
+
 async def run_bot(
     transport: BaseTransport,
     runner_args: RunnerArguments,
@@ -100,18 +119,22 @@ async def run_bot(
     logger.info("STS script active: {} ({})", sid, sts.__name__)
 
     end_tools = ToolsSchema(standard_tools=[end_call_function_schema()])
+    cwc = _context_window_compression_settings()
+    llm_settings_kw: dict = {
+        "model": sts.GEMINI_MODEL,
+        "voice": sts.GEMINI_VOICE,
+        "language": sts.GEMINI_LANGUAGE,
+        "vad": sts.GEMINI_VAD,
+        "temperature": sts.GEMINI_TEMPERATURE,
+    }
+    if cwc is not None:
+        llm_settings_kw["context_window_compression"] = cwc
 
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
         system_instruction=sts.build_system_instruction(ctx),
         tools=end_tools,
-        settings=GeminiLiveLLMService.Settings(
-            model=sts.GEMINI_MODEL,
-            voice=sts.GEMINI_VOICE,
-            language=sts.GEMINI_LANGUAGE,
-            vad=sts.GEMINI_VAD,
-            temperature=sts.GEMINI_TEMPERATURE,
-        ),
+        settings=GeminiLiveLLMService.Settings(**llm_settings_kw),
     )
     _lap(t0, "GeminiLiveLLMService object created (not yet connected)")
 
