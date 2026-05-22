@@ -18,6 +18,7 @@ QUICK START CHECKLIST:
   [ ] 4. Fill in build_bootstrap_messages() (what fires on call connect)
   [ ] 5. Tune GEMINI_VAD for your language (short words need HIGH start sensitivity)
   [ ] 6. Adjust GEMINI_TEMPERATURE (0.4–0.6 for scripted agents, higher for open-ended)
+  [ ] 7. Fill in EXTRACTION_SCHEMA (post-call Groq fields — see pyramid_extraction.py)
 """
 
 from __future__ import annotations
@@ -82,6 +83,39 @@ GEMINI_TEMPERATURE = 0.5
 # ── Script ID (used in call logs) ──────────────────────────────────────────────
 # Set this to something descriptive. Appears in call_logs.db under the route column.
 SCRIPT_ID = "my_bot"
+
+
+# ── Post-call extraction schema (Groq reads transcript → JSON) ─────────────────
+# See sts_scripts/pyramid_extraction.py for a full real-estate example.
+EXTRACTION_SCHEMA = {
+    "mode": "fields",
+    "fields": [
+        {
+            "key": "intent_status",
+            "type": "enum",
+            "values": [
+                "Interested",
+                "Not_Interested",
+                "Busy",
+                "Callback_Requested",
+                "Wrong_Requirement",
+                "Unknown",
+            ],
+            "required": True,
+            "description": "Call outcome intent.",
+        },
+        {
+            "key": "caller_notes",
+            "type": "string",
+            "required": False,
+            "description": "Other useful facts, or the literal NULL.",
+        },
+    ],
+    "extraction_rules": (
+        "Infer only what the transcript supports. "
+        "Reply with ONE JSON object matching the field keys."
+    ),
+}
 
 
 # ==============================================================================

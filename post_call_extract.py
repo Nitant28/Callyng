@@ -14,33 +14,90 @@ GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 _DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
-_EXTRACTION_SYSTEM = """You analyze outbound voice-call transcripts. Reply with ONE JSON object only. No markdown fences, no other text.
+_VALID_MODES = frozenset({"fields", "summary", "both"})
 
-Keys and rules:
-- intent_status (string, required): one of Not_Interested, Busy, Callback_Requested, Wrong_Requirement, Interested, Unknown.
-  - Interested: caller is engaged — e.g. agreed to or strongly leaning toward a site visit, asked for details/timing, or clearly wants to explore the 2 BHK without a hard refusal.
-  - Callback_Requested: caller gave a concrete time/date to be called back (not vague "later").
-  - Busy: wants to end now / call back later but gave NO specific time.
-  - Not_Interested: explicit refusal of the home/project/inquiry — not a short "no" that only answers "anything else to ask?".
-  - Wrong_Requirement: wants plot/shop/office/rent/commercial/wrong BHK type.
-  - Unknown: genuinely ambiguous ending or dropped call with no usable signal.
 
-Consistency (critical):
-- If the caller agreed to a site visit, said yes to visiting / a weekend slot / "चालेल" / "haan chalel" for the visit, or confirmed a visit time, site_visit_agreed should be true and intent_status must reflect engagement — use Interested, or Callback_Requested if the main outcome was a scheduled callback with a concrete time. Do NOT leave intent_status as Unknown when a site visit was clearly agreed.
-- If assistant only asked whether the caller had *more questions* / *anything specific to ask* / *काही specific विचारायचं आहे* / similar, and the caller replied with a short negative like "nahi nahi" / "नाही नाही" meaning "nothing else to ask", that is NOT property refusal — not Not_Interested unless they also clearly refuse the project/home.
+def validate_extraction_schema(schema: dict[str, Any]) -> None:
+    """Raise ValueError if schema is missing required structure."""
+    if not isinstance(schema, dict):
+        raise ValueError("extraction_schema must be a dict")
+    mode = schema.get("mode")
+    if mode not in _VALID_MODES:
+        raise ValueError(
+            f"extraction_schema.mode must be one of {sorted(_VALID_MODES)!r}, got {mode!r}"
+        )
+    if mode in ("fields", "both"):
+        fields = schema.get("fields")
+        if not isinstance(fields, list) or not fields:
+            raise ValueError("extraction_schema.fields must be a non-empty list")
 
-- bhk_preference (string): e.g. 2BHK, 3BHK, or the literal NULL if not stated.
-- location_preference (string): area/city mentioned, or the literal NULL.
-- site_visit_agreed (boolean): true only if caller clearly agreed to a site visit.
-- callback_time (string): specific time/date if given, else the literal NULL.
-- language_used (string): one of Marathi, Hindi, English, Mixed.
-- caller_notes (string): other useful facts, or the literal NULL.
 
-Transcript is JSON: array of {role, content, ...}. Infer only what the conversation supports."""
+def _field_type_hint(field: dict[str, Any]) -> str:
+    ftype = field.get("type", "string")
+    if ftype == "enum":
+        values = field.get("values") or []
+        return "one of " + ", ".join(str(v) for v in values)
+    if ftype == "boolean":
+        return "boolean (true/false)"
+    if ftype == "datetime":
+        return "ISO 8601 datetime string or the literal NULL"
+    return "string"
+
+
+def _format_field_lines(fields: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for field in fields:
+        key = field.get("key")
+        if not key:
+            continue
+        required = field.get("required", False)
+        req_label = "required" if required else "optional"
+        hint = _field_type_hint(field)
+        desc = (field.get("description") or "").strip()
+        line = f"- {key} ({req_label}): {hint}"
+        if desc:
+            line += f". {desc}"
+        lines.append(line)
+    return lines
+
+
+def build_extraction_system_prompt(schema: dict[str, Any]) -> str:
+    """Compile Groq system prompt from script EXTRACTION_SCHEMA."""
+    validate_extraction_schema(schema)
+    mode = schema["mode"]
+    parts = [
+        "You analyze outbound voice-call transcripts.",
+        "Reply with ONE JSON object only. No markdown fences, no other text.",
+        "",
+    ]
+
+    if mode in ("fields", "both"):
+        parts.append("Keys and rules:")
+        parts.extend(_format_field_lines(schema.get("fields") or []))
+        parts.append("")
+
+    rules = (schema.get("extraction_rules") or "").strip()
+    if rules:
+        parts.append(rules)
+        parts.append("")
+
+    if mode == "summary":
+        summary_prompt = (schema.get("summary_prompt") or "").strip()
+        if not summary_prompt:
+            raise ValueError("extraction_schema.summary_prompt required when mode='summary'")
+        parts.append("Write a summary paragraph with key:")
+        parts.append('- summary (string, required): ' + summary_prompt)
+    elif mode == "both":
+        summary_prompt = (schema.get("summary_prompt") or "").strip()
+        if summary_prompt:
+            parts.append("Also include:")
+            parts.append('- summary (string, required): ' + summary_prompt)
+
+    return "\n".join(parts).strip()
 
 
 def normalize_post_call_extraction(parsed: dict[str, Any]) -> dict[str, Any]:
-    """Deterministic patch after Groq parse — e.g. site visit agreed cannot pair with Unknown."""
+    """Deterministic patch after Groq parse — known inconsistency patterns."""
     out = dict(parsed)
     raw_intent = out.get("intent_status")
     intent = (
@@ -61,6 +118,24 @@ def normalize_post_call_extraction(parsed: dict[str, Any]) -> dict[str, Any]:
             raw_intent,
         )
         out["intent_status"] = "Interested"
+
+    callback_time = out.get("callback_time")
+    has_callback = (
+        callback_time is not None
+        and str(callback_time).strip().lower() not in ("", "null", "none")
+    )
+    if has_callback and out.get("intent_status") not in (
+        "Callback_Requested",
+        "Interested",
+    ):
+        logger.info(
+            "normalize_post_call_extraction: callback_time set with intent_status={!r} -> Callback_Requested",
+            out.get("intent_status"),
+        )
+        out["intent_status"] = "Callback_Requested"
+
+    if "intent_status" not in out or not str(out.get("intent_status", "")).strip():
+        out["intent_status"] = "Unknown"
 
     return out
 
@@ -132,11 +207,13 @@ def _parse_model_json_object(content: str) -> tuple[dict[str, Any] | None, str |
 async def extract_post_call(
     transcript: list[dict[str, Any]],
     *,
+    extraction_schema: dict[str, Any],
     api_key: str | None = None,
     model: str | None = None,
     timeout_sec: float = 60.0,
 ) -> tuple[dict[str, Any] | None, str | None, str]:
     """Call Groq; return ``(parsed_dict_or_none, error_or_none, model_used)``."""
+    system_prompt = build_extraction_system_prompt(extraction_schema)
     key = api_key or os.getenv("GROQ_API_KEY", "")
     mdl = model or os.getenv("POST_CALL_MODEL", _DEFAULT_MODEL)
     if not key:
@@ -147,7 +224,7 @@ async def extract_post_call(
         "model": mdl,
         "temperature": 0.1,
         "messages": [
-            {"role": "system", "content": _EXTRACTION_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": (

@@ -2,6 +2,8 @@
 
 > The long-form plan. For day-to-day usage see [README.md](README.md).
 >
+> **Architecture reference:** [aakash_arch.md](aakash_arch.md) is the source of truth for database schema, credits/billing, script-file configuration, dialer design, and API contracts. This roadmap describes vision, phases, and status. If anything here conflicts with the arch doc, **arch wins**.
+>
 > Status legend used throughout this document:
 > - `done` — built, tested, in main
 > - `in progress` — currently being worked on (only one phase at a time)
@@ -17,7 +19,7 @@
 3. [Tech stack](#3-tech-stack)
 4. [High-level architecture](#4-high-level-architecture)
 5. [API surface](#5-api-surface)
-6. [Database schema (Phase 1+, draft)](#6-database-schema-phase-1-draft)
+6. [Database schema](#6-database-schema)
 7. [Pricing strategy](#7-pricing-strategy)
 8. [Compliance and legal](#8-compliance-and-legal)
 9. [Phased roadmap](#9-phased-roadmap)
@@ -35,12 +37,12 @@ We provide:
 - AI bots that make real phone calls on behalf of clients.
 - Two calling architectures: cascaded (STT → LLM → TTS) and speech-to-speech (Gemini Live).
 - Concurrent dialing: one server placing dozens of calls in parallel.
-- Post-call data extraction: structured lead qualification data from every transcript.
+- Post-call data extraction: structured lead qualification data from every transcript (schema-driven per script).
 - Dynamic script personalization: each lead called by name with CRM context.
-- Prepaid minute-pack billing, like a SIM recharge.
+- Prepaid **credits** (1 credit = ₹1 at launch; volume packs improve buy rate later).
 - Post-call webhooks → n8n → client's CRM / Sheets / Slack / WhatsApp.
 
-**Unit economics.** A 5-minute AI call costs us ~₹7. A human agent doing the same call costs the client ₹25-40. The AI is consistent, available 24/7, native in Indian languages, and produces structured data after every call. Selling at ₹6-12/min (prepaid pack) gives us a 75-85% margin while still being half the price of a human call centre.
+**Unit economics.** A 5-minute AI call costs us ~₹7. A human agent doing the same call costs the client ₹25-40. The AI is consistent, available 24/7, native in Indian languages, and produces structured data after every call. Clients are billed in **credits** using ceiling minutes × `bot_config.credits_per_minute`; effective ₹/min depends on pack pricing (typically ₹6-12/min equivalent) with 75-85% margin while still undercutting human call centres.
 
 **Target verticals.** Real estate, lending/credit cards, insurance, edtech, healthcare, and any Indian SMB running outbound lead qualification.
 
@@ -89,13 +91,14 @@ flowchart LR
 | Aspect                  | Route A (Cascaded)                              | Route B (STS — Gemini Live)              |
 | ----------------------- | ----------------------------------------------- | ---------------------------------------- |
 | Latency (round-trip)    | ~1.5-2.5 s                                      | ~0.5-1 s                                 |
-| Script adherence        | High — full prompt control, function-calling    | Medium — prompt-led; **no live lead tool**; Groq fills `extraction_json` after hang-up |
+| Script adherence        | High — full prompt control, function-calling    | Medium — prompt-led; **no live lead tool** |
+| Post-call extraction    | Groq from script `EXTRACTION_SCHEMA` (canonical for CRM/n8n); live `push_lead_data` optional today | Groq from script `EXTRACTION_SCHEMA` after hang-up |
 | Auditability            | Easy — STT/LLM/TTS each emit separate frames    | Harder — single black-box model          |
 | Indian language quality | Excellent (Sarvam saarika)                      | Good (Marathi, Hindi, English)           |
-| Cost / min              | ₹1.48 (verified)                                | TBD — re-derive per audio-token rates    |
+| Cost / min              | ₹1.48 (verified) → `credits_per_minute` on bot  | TBD — re-derive per audio-token rates    |
 | Best for                | Tight outbound sales, qualification flows       | Inbound, complex conversational scenarios |
 
-**Decision is per bot_config, not platform-wide.** Today it's a single env var (`BOT_ROUTE` — Phase 0 fallback only); from Phase 2 onwards, route comes from `BotConfig.route` at call time.
+**Decision is per bot_config, not platform-wide.** Today it's env vars (`BOT_ROUTE`, `STS_SCRIPT`, `CASCADE_SCRIPT` — Phase 0 fallback only); from Phase 2 onwards, `bot_config.route` + `bot_config.script_id` resolve the script module at call time.
 
 ---
 
@@ -121,21 +124,21 @@ flowchart LR
 | TTS English       | Deepgram          | `aura-2`                             | maybe       |
 | TTS premium       | ElevenLabs        | `eleven_turbo_v2_5`                  | maybe       |
 | VAD               | Gemini server VAD (STS) / Silero (cascaded) | Turn detection             | done        |
-| Post-call extraction | Groq              | `llama-3.3-70b-versatile` (HTTP)     | done        |
+| Post-call extraction | Groq              | `llama-3.3-70b-versatile` (HTTP); prompt from script `EXTRACTION_SCHEMA` | done |
 
 ### Infrastructure
 
-Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`docker-compose.yml`** with **`fastapi`** (backend, port **7860**), **`postgres`** (5432), **`redis`** (6379 — Phase 2 onward for concurrent dialer queue), and **`n8n`** (5678 — **same server, internal only**, not exposed to clients). **nginx** terminates TLS (wildcard cert via **certbot**), routes **`*.aakashvani.in`** subdomains to FastAPI and the React SPA, and resolves tenant from the authenticated session (not separate server processes per client). **Cloudflare R2** stores call recordings (Phase 4). Local dev stays WSL2 + ngrok + uvicorn as today.
+Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`docker-compose.yml`** with **`fastapi`** (backend, port **7860**), **`postgres`** (5432), **`redis`** (6379 — optional Phase 3 for SSE only), and **`n8n`** (5678 — **same server, internal only**, not exposed to clients). **nginx** terminates TLS (wildcard cert via **certbot**), routes **`*.aakashvani.in`** subdomains to FastAPI and the React SPA, and resolves tenant from the authenticated session (not separate server processes per client). **Cloudflare R2** stores call recordings (Phase 4). Local dev stays WSL2 + ngrok + uvicorn as today.
 
 | Component       | Tech                              | Status                                       |
 | --------------- | --------------------------------- | -------------------------------------------- |
 | Backend         | FastAPI + Python 3.12 + uv        | done                                         |
 | Persistence     | SQLite (Phase 0) → PostgreSQL 16  | SQLite done (Phase 0); Postgres planned (Phase 2) |
-| Cache / queue   | Redis 7                           | planned (Phase 2)                            |
+| Cache / pub-sub | Redis 7                           | maybe (Phase 3 SSE live monitor)             |
 | Vector DB       | ChromaDB                          | maybe — only if a client actually needs RAG  |
 | Frontend        | None (CLI + curl) → React SPA (one build, all subdomains) | planned (Phase 1+)           |
 | Reverse proxy   | nginx + wildcard TLS (`*.aakashvani.in`) | planned (deploy time)                 |
-| Containerization| Docker Compose (fastapi, postgres, redis, n8n) | planned (deploy time)               |
+| Containerization| Docker Compose (fastapi, postgres, n8n) | planned (deploy time)               |
 | Server          | Hetzner CX32 (Germany)            | planned — consider AWS Mumbai if latency hurts |
 | Workflow        | n8n on localhost:5678, shared instance; **per-client workflows** built by us | planned |
 | Call recordings | Cloudflare R2 (signed URLs)       | planned (Phase 4)                            |
@@ -174,7 +177,7 @@ flowchart TD
     Plivo --> Callee
 ```
 
-Target architecture (after Phase 2):
+Target architecture (after Phase 2) — see also [aakash_arch.md §1](aakash_arch.md) and §7:
 
 ```mermaid
 flowchart TD
@@ -187,14 +190,13 @@ flowchart TD
     subgraph dcStack [Docker Compose on CX32]
         API[FastAPI :7860]
         PG[(PostgreSQL :5432)]
-        Redis[(Redis :6379)]
         n8n[n8n :5678 internal]
         R2[Cloudflare R2 recordings Phase 4]
     end
     subgraph backendLayer [Backend logic]
         Telephony[Plivo answer ws status]
-        Dialer[ConcurrentDialer]
-        CostGuard[CostGuard]
+        Dialer[ConcurrentDialer Postgres SKIP LOCKED]
+        CostGuard[CostGuard campaign budget]
         PostCall[PostCallProcessor]
     end
     subgraph pipelineLayer [Pipecat pool]
@@ -209,205 +211,137 @@ flowchart TD
     nginx --> FE
     nginx --> API
     API --> PG
-    API --> Redis
-    Dialer --> Redis
+    Dialer --> PG
     Dialer --> Telephony
     Telephony --> Plivo
     Plivo --> Telephony
     Telephony --> pipelineLayer
     pipelineLayer -->|transcript metrics| PostCall
     PostCall --> PG
-    PostCall -->|localhost| n8n
+    PostCall -->|localhost HMAC| n8n
     n8n --> CRM
     PostCall -->|Phase 4 upload| R2
     RouteA -.optional RAG.-> Chroma
 ```
 
+**Script-file config:** `bot_configs` is a registry (`route`, `script_id`, `credits_per_minute`, Plivo number). Prompts, VAD, `LEAD_SCHEMA`, and `EXTRACTION_SCHEMA` live in `sts_scripts/` / `cascade_scripts/` — see [aakash_arch.md §5](aakash_arch.md).
+
 ---
 
 ## 5. API surface
 
-Routes are split by **authentication**: client-facing APIs use a **per-client API token**; internal APIs use an **admin API key** only (localhost from n8n and admin tooling — never exposed to clients).
+### Phase 0 (today)
 
-**Client-facing** (per-client token):
+- `POST /start` — outbound call trigger (dev / single-tenant)
+- Plivo webhooks: `/answer`, `/ws`
+- `GET /health`
+- Post-call POST to `N8N_WEBHOOK_URL` from `.env` after Groq extraction
+
+### Phase 2 target
+
+Routes split by **authentication**: client-facing APIs use a **per-client API token** (hashed in DB); internal APIs use an **admin API key** (localhost + nginx deny for `/internal/`).
+
+**Client-facing** (`/api/*`, Bearer client token) — Phase 2B:
 
 ```
-POST   /api/leads/upload
 GET    /api/campaigns
-POST   /api/campaigns
+POST   /api/campaigns/{id}/leads/upload
 PATCH  /api/campaigns/{id}/start
 PATCH  /api/campaigns/{id}/stop
 GET    /api/campaigns/{id}/stats
 GET    /api/calls
-GET    /api/calls/{id}
+GET    /api/calls/{session_call_id}
 GET    /api/credits
-POST   /api/credits/recharge
 ```
 
-**Internal** (admin key, n8n + ops only):
+**Internal** (`/internal/*`, admin key) — Phase 2A first:
 
 ```
-POST   /internal/webhook/call-completed
-GET    /internal/clients
 POST   /internal/clients
+GET    /internal/clients
+PATCH  /internal/clients/{id}/credits
 POST   /internal/bot-configs
+GET    /internal/bot-configs
+POST   /internal/campaigns
+PATCH  /internal/campaigns/{id}
 POST   /internal/webhook-configs
+GET    /internal/calls
 ```
 
-Today’s Phase 0 code posts call payloads to `N8N_WEBHOOK_URL` from `.env` after extraction. Multi-tenant target: backend invokes **`POST /internal/webhook/call-completed`** (or equivalent internal fan-out) so **n8n on localhost** can trigger per-client workflows without exposing internal keys on the public internet. `webhook_configs` stores each client’s workflow URL and optional secret; clients who already run their own n8n can supply that URL — we store it the same way.
+**Webhooks (Phase 2):** per-client, per-event URLs in `webhook_configs`. Events: `lead_qualified`, `lead_not_interested`, `lead_callback`, `lead_failed`, `campaign_completed`. Outbound POSTs signed with HMAC header `X-Aakashvani-Signature: sha256=<hex>` — see [aakash_arch.md §9–10](aakash_arch.md).
 
 ---
 
-## 6. Database schema (Phase 1+, draft)
+## 6. Database schema
 
-This schema is the **target** for Postgres (Phase 2+). Phase 0 uses SQLite with a single `call_logs` table. Phase 1 adds a **`leads`** table in SQLite plus client-facing campaign flows (see [§9 Phased roadmap](#9-phased-roadmap)); multi-tenant Postgres and `client_id` on every row land in Phase 2.
+### Phase 0 — SQLite (today)
 
-The draft `call_logs.recording_url` column exists from Phase 1 onward as a **placeholder**; **Phase 4** wires Plivo recording fetch → Cloudflare R2 → stored object key and signed URLs for the audio player (see Phase 4 milestones).
+Single `call_logs` table at `CALL_LOG_DB_PATH` (default `./data/call_logs.db`). Columns include:
 
-```sql
--- Multi-tenant: every table has client_id once we get there
-CREATE TABLE clients (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(255) NOT NULL,
-    api_key VARCHAR(255) UNIQUE,
-    balance_minutes FLOAT DEFAULT 0,
-    max_concurrent_calls INTEGER DEFAULT 5,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+- `session_call_id`, `plivo_call_id`, `route` (`sts` or `cascade` in env/logs today)
+- `started_at`, `ended_at`, `duration_ms`
+- `transcript_json` — JSON array of `{role, content, timestamp, …}`
+- Usage: `usage_prompt_tokens`, `usage_completion_tokens`, `usage_total_tokens`, `usage_tts_characters`, `usage_metrics_json`
+- `cost_inr` (STS when USD rates set)
+- Post-call: `extraction_json`, `extraction_error`, `extraction_model`
 
-CREATE TABLE bot_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    client_id UUID REFERENCES clients(id),
-    name VARCHAR(255) NOT NULL,
-    agent_name VARCHAR(100),
-    company_name VARCHAR(255),
-    route VARCHAR(20) NOT NULL,            -- 'cascaded' or 'sts'
-    telephony_provider VARCHAR(20) DEFAULT 'plivo',
-    telephony_number VARCHAR(20),
-    llm_model VARCHAR(100),
-    stt_provider VARCHAR(50),
-    tts_provider VARCHAR(50),
-    tts_voice VARCHAR(100),
-    language VARCHAR(20) DEFAULT 'en-IN',
-    system_prompt TEXT,                    -- supports {lead_name}, {city}, etc.
-    temperature FLOAT DEFAULT 0.2,
-    extraction_schema JSONB DEFAULT '{}',
-    kb_collection VARCHAR(255),
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+Row inserted at **call end** today. Phase 2 moves to insert-at-start + `in_progress` for live polling.
 
-CREATE TABLE campaigns (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    client_id UUID REFERENCES clients(id),
-    bot_config_id UUID REFERENCES bot_configs(id),
-    name VARCHAR(255) NOT NULL,
-    status VARCHAR(50) DEFAULT 'draft',   -- draft/running/paused/completed
-    max_concurrent_calls INTEGER DEFAULT 5,
-    calls_per_minute INTEGER DEFAULT 10,
-    scheduled_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    total_leads INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+### Phase 2+ — PostgreSQL 16
 
-CREATE TABLE leads (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    campaign_id UUID REFERENCES campaigns(id),
-    client_id UUID REFERENCES clients(id),
-    phone VARCHAR(20) NOT NULL,            -- E.164
-    name VARCHAR(255),
-    metadata JSONB DEFAULT '{}',
-    status VARCHAR(50) DEFAULT 'pending',  -- pending/calling/completed/failed/dnc
-    attempts INTEGER DEFAULT 0,
-    last_attempt_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+**Full schema:** [aakash_arch.md §2](aakash_arch.md).
 
-CREATE TABLE call_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    campaign_id UUID REFERENCES campaigns(id),
-    lead_id UUID REFERENCES leads(id),
-    client_id UUID REFERENCES clients(id),
-    call_sid VARCHAR(255),                 -- Plivo call ID
-    started_at TIMESTAMPTZ,
-    ended_at TIMESTAMPTZ,
-    duration_seconds INTEGER,
-    route VARCHAR(20),
-    outcome VARCHAR(50),
-    qualified BOOLEAN DEFAULT FALSE,
-    transcript TEXT,
-    call_data JSONB DEFAULT '{}',
-    audio_in_tokens INTEGER,
-    audio_out_tokens INTEGER,
-    cost_usd NUMERIC(10,6),
-    cost_inr NUMERIC(10,4),
-    quality_score INTEGER,
-    flagged_for_review BOOLEAN DEFAULT FALSE,
-    recording_url TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+Summary tables:
 
-CREATE TABLE webhook_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    client_id UUID REFERENCES clients(id),
-    event VARCHAR(50),
-    url TEXT NOT NULL,
-    secret VARCHAR(255),
-    active BOOLEAN DEFAULT TRUE
-);
+| Table | Role |
+| ----- | ---- |
+| `clients` | Paying client; `balance_credits`, `api_key_hash`, `max_concurrent_calls` |
+| `bot_configs` | **Registry only:** `route`, `script_id`, `credits_per_minute`, `telephony_number` |
+| `campaigns` | Bot + CSV batch; budget pre-allocation; denorm counters; dialer throttle |
+| `leads` | Per-person dial queue; JSONB `metadata`; state machine |
+| `call_logs` | One row per **attempt**; audit trail; live transcript when `in_progress` |
+| `webhook_configs` | Per-client, per-event n8n URL + HMAC secret |
 
-CREATE TABLE minute_packs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    client_id UUID REFERENCES clients(id),
-    pack_name VARCHAR(100),
-    minutes_purchased FLOAT,
-    minutes_remaining FLOAT,
-    price_inr NUMERIC(10,2),
-    expires_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+**Key design points** (from arch §3):
 
-CREATE INDEX idx_leads_campaign_status ON leads(campaign_id, status);
-CREATE INDEX idx_call_logs_campaign ON call_logs(campaign_id);
-CREATE INDEX idx_call_logs_client_date ON call_logs(client_id, started_at);
-```
+- JSONB `leads.metadata` validated against script `LEAD_SCHEMA` on upload
+- Denormalized campaign counters (never `COUNT(*)` on dashboard refresh)
+- One `call_logs` row per call attempt; `leads.extraction` holds latest promoted result
+- `call_logs` inserted at call **start** for live transcript polling (Phase 2)
+- `api_key_hash` (SHA-256) — never store raw API keys
+- No `minute_packs` / `credit_packs` table at launch — manual admin top-up in Phase 2
 
-### Phase 0 minimal schema (SQLite)
+**Route naming:** Postgres uses `sts` | `cascaded`. Phase 0 env/logs may still say `cascade` until `BOT_ROUTE` is retired.
 
-```sql
-CREATE TABLE call_logs (
-    id TEXT PRIMARY KEY,                   -- uuid
-    plivo_call_id TEXT,
-    lead_name TEXT,
-    lead_phone TEXT,
-    lead_city TEXT,
-    route TEXT,                            -- 'sts' or 'cascade'
-    started_at TEXT,                       -- ISO 8601
-    ended_at TEXT,
-    duration_seconds REAL,
-    transcript TEXT,                       -- JSON array of {role, text, ts}
-    audio_in_tokens INTEGER,
-    audio_out_tokens INTEGER,
-    cost_inr REAL,
-    outcome TEXT
-);
-```
-
-That's it for Phase 0 minimal SQLite. Phase 1 adds `leads` (and related campaign tables in SQLite); Phase 2 migrates to the Postgres layout below with `client_id` on every query.
+`call_logs.recording_url` is a Phase 4 placeholder (R2 object key, signed URLs on demand).
 
 ---
 
 ## 7. Pricing strategy
 
-Prepaid minute packs (like a SIM recharge). Minutes are for **connected call time only**: no charge for failed dials, no-answers, or busy signals. Packs expire in 90 days.
+Clients buy **credits**. At launch, **1 credit = ₹1**. Volume packs can improve the buy rate later (e.g. 2000 credits for ₹1800) without changing how billing works internally.
 
-| Pack         | Minutes | Rate/min | Price (INR) | Our cost | Margin  |
-| ------------ | ------- | -------- | ----------- | -------- | ------- |
-| Starter      | 500     | ₹12      | ₹6,000      | ~₹740    | 87%     |
-| Growth       | 2,000   | ₹10      | ₹20,000     | ~₹2,960  | 85%     |
-| Scale        | 5,000   | ₹8       | ₹40,000     | ~₹7,400  | 81%     |
-| Pro          | 12,000  | ₹7       | ₹84,000     | ~₹17,760 | 78%     |
-| Enterprise   | Custom  | ₹6       | Custom      | —        | 75%+    |
+**Billing mechanics:** ceiling minutes × `bot_config.credits_per_minute`:
+
+```
+billed_minutes = ceil(duration_seconds / 60)
+credits_charged = billed_minutes × credits_per_minute
+```
+
+**Campaign budgets:** at campaign start, `clients.balance_credits -= budget_credits` (one atomic deduction). Per call end, `campaigns.budget_used_credits += credits_charged`. On campaign complete, unused budget returns to master balance. See [aakash_arch.md §4](aakash_arch.md).
+
+**CostGuard (Phase 2):** before each dial, require `budget_credits - budget_used_credits >= 2` (covers at least one billed minute).
+
+### Example credit packs (launch pricing — illustrative)
+
+| Pack       | Credits | Price (INR) | Effective ₹/credit |
+| ---------- | ------- | ----------- | ------------------ |
+| Starter    | 1,000   | ₹1,000      | ₹1.00              |
+| Growth     | 2,000   | ₹1,800      | ₹0.90              |
+| Scale      | 5,000   | ₹4,000      | ₹0.80              |
+| Pro        | 12,000  | ₹8,400      | ₹0.70              |
+
+Packs expire in 90 days. Connected call time only — no charge for failed dials or no-answers.
 
 ### One-time fees
 
@@ -419,13 +353,11 @@ Prepaid minute packs (like a SIM recharge). Minutes are for **connected call tim
 | Knowledge base initial setup     | ₹3,000       |
 | Knowledge base update            | ₹2,000 / update |
 
-### Billing and credits
+### Billing and credits UI
 
-**Credit balance display:** progress bar + remaining minutes on every page (top right). Full detail on `/credits`: balance, pack expiry, usage this month (calls made, minutes used, avg duration, cost).
+**Credit balance display:** progress bar + remaining credits on every page (top right). Full detail on `/credits`: balance, pack expiry, usage this month (calls made, credits used, avg duration).
 
-**Recharge flow:** Phase 1 — **manual only**: client selects pack, pays via bank transfer, we insert `minute_packs` via admin script. Phase 2 — **Razorpay** (payment link generated server-side, webhook confirms payment, `minute_packs` row inserted automatically), per Phase 2 milestones. Phase 3 may include Razorpay upgrades if checkout or product catalog changes.
-
-**CostGuard (Phase 2):** middleware checks `minute_packs` balance before every `/start`; blocks new calls at zero balance; deducts minutes after each call completes using `duration_seconds`.
+**Recharge flow:** Phase 2 — **manual only**: client pays via bank transfer; admin runs credit top-up via `/internal/clients/{id}/credits`. Phase 3 — **Razorpay** automates `credit_packs` insert via webhook.
 
 ### Add-ons
 
@@ -435,7 +367,7 @@ Prepaid minute packs (like a SIM recharge). Minutes are for **connected call tim
 | Premium voice (ElevenLabs)   | +₹2 / min    | +₹0.70 / min | 65%    |
 | Indian language (Sarvam)     | +₹1 / min    | +₹0.30 / min | 70%    |
 
-### Per-minute cost (Route A, verified)
+### Per-minute provider cost (Route A, verified)
 
 | Component              | Rate              | Per minute |
 | ---------------------- | ----------------- | ---------- |
@@ -446,11 +378,11 @@ Prepaid minute packs (like a SIM recharge). Minutes are for **connected call tim
 | Server (amortized)     | —                 | ₹0.05      |
 | **Total**              |                   | **~₹1.49** |
 
-Route B (Gemini Live) per-minute cost uses env USD/M token rates + `USD_INR` when set (`pricing_sts.py`); refine per-model from `usage_metrics_json` as needed.
+Map to `bot_configs.credits_per_minute` (e.g. ~1.49 for cascaded Sarvam+Groq+Cartesia). Route B (Gemini Live) uses env USD/M token rates + `USD_INR` (`pricing_sts.py`).
 
 ### Why this pricing works
 
-Global competitors charge $0.05-0.15/min = ₹4-12/min. Indian human call-centre agents cost ₹25-40 per connected call (~₹5-8/min at 5-min avg). At ₹6-12/min Aakashvani is cheaper than humans, competitive with global SaaS, with local support and Indian-language quality nobody else has.
+Global competitors charge $0.05-0.15/min = ₹4-12/min. Indian human call-centre agents cost ₹25-40 per connected call (~₹5-8/min at 5-min avg). Aakashvani undercuts humans with local support and Indian-language quality.
 
 ---
 
@@ -462,6 +394,8 @@ Global competitors charge $0.05-0.15/min = ₹4-12/min. Indian human call-centre
 - **Calling hours**: 9:00 AM to 9:00 PM IST only. Enforce in `compliance.py`.
 - **Caller ID**: must show a registered Plivo number.
 - **DPDP Act 2023**: store only necessary lead data, support deletion-on-request, log where each lead's consent originated.
+
+Lead state machine and DNC-on-upload: [aakash_arch.md §6](aakash_arch.md).
 
 ```python
 # compliance.py — runs before every dial
@@ -517,19 +451,19 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 
 | Milestone | Status |
 | --------- | ------ |
-| Collapse `bot_sts.py` script selection into `BotConfig` dataclass (scripts already externalized under `sts_scripts/`) | planned |
-| `BotConfig` dataclass (`agent_name`, `system_prompt`, `language`, `route`, `tts_voice`, `llm_model`, `extraction_schema`, `webhook_url`, `webhook_secret`) | planned |
-| `leads` table in SQLite + CSV upload endpoint (strict schema, no AI normalisation) | planned |
-| Sequential dialer: asyncio loop, `calls_per_minute` throttle, per-attempt retry | planned |
+| Script modules under `sts_scripts/` / `cascade_scripts/` (prompts, VAD, models) | done |
+| `EXTRACTION_SCHEMA` per script + schema-driven `post_call_extract.py` | done |
+| `leads` table + CSV upload endpoint (strict schema via `LEAD_SCHEMA`) | planned |
+| Sequential / concurrent dialer with retry | planned (Phase 2) |
 | Basic compliance check: 9am–9pm IST, internal DND list | planned |
-| `/api/campaigns` and `/api/leads` client-facing endpoints | planned |
-| `/internal/bot-configs` and `/internal/clients` admin endpoints | planned |
+| `/api/campaigns` and lead upload client-facing endpoints | planned |
+| `/internal/*` admin endpoints | planned (Phase 2A) |
 | React SPA: `/dashboard`, `/campaigns`, `/campaigns/new`, `/calls`, `/calls/{id}`, `/credits` | planned |
 | Call detail page: audio player + transcript + extraction fields | planned |
-| Credit balance display (manual recharge via bank transfer + admin script) | planned |
+| Credit balance display (manual recharge via bank transfer + admin) | planned |
 | n8n workflow for client #1 (built by us, tested end-to-end) | planned |
 
-**Frontend pages (Phase 1 — build these first):**
+**Frontend pages (Phase 1 — build after Phase 2 backend):**
 
 | Route | Purpose |
 | ----- | ------- |
@@ -540,9 +474,9 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | `/calls/{id}` | Call detail (see below) |
 | `/credits` | Balance bar, pack history, Recharge button |
 
-**Call detail `/calls/{id}` (required in Phase 1):** audio player (Plivo recording → Cloudflare R2 signed URL, 1 hr expiry — storage wiring is Phase 4, but the **page** ships in Phase 1); full transcript with role labels (bot vs lead) and timestamps; extraction JSON as structured fields (intent, budget, preferences, etc.); metadata: duration, route, outcome, language, timestamp. Clients need to hear what the bot said in week one to trust the system.
+**Call detail `/calls/{id}`:** full transcript; extraction JSON as structured fields; metadata (duration, route, outcome). Audio player consumes Phase 4 signed R2 URLs once available.
 
-**Explicitly out of scope for Phase 1:** React analytics charts, bot config UI, Razorpay, Redis, multi-tenant Postgres, concurrent dialer, white-label domains.
+**Explicitly out of scope for Phase 1:** React analytics charts, bot config UI, Razorpay, multi-tenant Postgres, white-label domains.
 
 ### Phase 2 — Multi-tenant + billing
 **Status:** in progress (current focus)  
@@ -550,40 +484,44 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 
 **Goal:** Onboard client #2 without code changes.
 
+**Phase 2 prep (done):**
+
+- `EXTRACTION_SCHEMA` in all active script modules
+- Schema-driven `post_call_extract.py`
+- README + ROADMAP aligned with [aakash_arch.md](aakash_arch.md)
+
 | Milestone | Status |
 | --------- | ------ |
-| Migrate SQLite → PostgreSQL 16 | planned |
-| Add `clients`, `bot_configs`, `campaigns`, `leads`, `minute_packs`, `webhook_configs` tables | planned |
+| Postgres migration + schema from [aakash_arch.md §2](aakash_arch.md) | planned |
+| `clients`, `bot_configs`, `campaigns`, `leads`, `webhook_configs` tables | planned |
 | `client_id` on every query | planned |
-| CostGuard middleware: check balance before `/start`, deduct after call | planned |
-| Razorpay recharge flow (payment link → webhook → `minute_packs` insert) | planned |
-| Concurrent dialer with Redis queue + asyncio tasks | planned |
-| Admin portal (our view): client list, bot config editor, credit management | planned |
+| Credits + campaign budget pre-allocation + CostGuard | planned |
+| `post_call_processor` (lead state machine, counters, webhooks) | planned |
+| Concurrent dialer — Postgres `FOR UPDATE SKIP LOCKED` | planned |
+| Admin `/internal/*` endpoints first (Phase 2A) | planned |
+| Client `/api/*` endpoints (Phase 2B) | planned |
+| Live transcript polling (`in_progress`, per-turn writes) | planned |
+| Retire `BOT_ROUTE`; `bot_config_id` + `script_id` at call time | planned |
+| Manual credit top-up (admin) | planned |
 | Subdomain routing: `client-a.aakashvani.in` via nginx | planned |
-| `bot_config_id` selects route at call time (`BOT_ROUTE` env var retired) | planned |
 
-### Phase 3 — Bot config UI + analytics + scheduling
+Build order: [aakash_arch.md §13](aakash_arch.md) (admin-first).
+
+### Phase 3 — Bot config UI + analytics + billing automation
 **Status:** planned  
 **Timeline:** ~4–6 weeks
 
-**Goal:** Clients can configure their own bot personality within guardrails. Campaign scheduling. Rich analytics.
+**Goal:** Clients configure bot personality within guardrails. Razorpay recharge. Rich analytics.
 
 | Milestone | Status |
 | --------- | ------ |
-| Bot configuration UI: structured form → backend compiles to `system_prompt` (no raw prompt editor) | planned |
+| Razorpay recharge → `credit_packs` automation | planned |
+| Bot configuration UI: structured form → backend compiles prompt (no raw editor) | planned |
 | `/analytics` page: intent breakdown, duration distribution, cost/day, trends | planned |
 | Campaign scheduling (run at specific time / recurring) | planned |
-| Live call monitor (SSE stream of active calls) | planned |
-| Razorpay upgrades if needed | planned |
+| Live call monitor (SSE stream; optional Redis pub/sub) | planned |
 
-**Phase 3 pages (added later):**
-
-| Route | Purpose |
-| ----- | ------- |
-| `/analytics` | Charts: intent breakdown, call duration distribution, cost per day, qualified leads over time |
-| `/bots` | Bot configuration UI (structured form only — see below) |
-
-**Bot configuration UI (Phase 3):** clients fill a **structured form**; the backend compiles the real system prompt. **Client-editable:** agent name; opening greeting (supports `{lead_name}`); language preference (Marathi / Hindi / English); talking points (ordered list); objection responses (key → response); call-end message. **Never exposed:** route (`sts` / `cascade`), model, extraction schema, Plivo number, TTS voice ID, temperature / inference settings.
+**Bot configuration UI:** clients fill a **structured form**; backend compiles the real system prompt. **Never exposed:** route, model, extraction schema, Plivo number, TTS voice ID, temperature.
 
 ### Phase 4 — WhatsApp + recordings + local dev transport
 **Status:** planned
@@ -594,9 +532,9 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | Signed URL generation for audio player (1 hr expiry) | planned |
 | Meta WhatsApp Business API for post-call follow-up messages | planned |
 | n8n WhatsApp workflow templates | planned |
-| Browser test path via `SmallWebRTCTransport` (`POST /api/offer`, Pipecat prebuilt UI; no Plivo minutes during dev) | planned |
+| Browser test path via `SmallWebRTCTransport` | planned |
 
-The `call_logs.recording_url` column exists from Phase 1+ in the target schema as a placeholder; **this phase** wires fetch → R2 → key storage and signed URL issuance. The Phase 1 call-detail page consumes those URLs once available.
+Recording flow: [aakash_arch.md](aakash_arch.md) and §11 below.
 
 ### Phase 5 — RAG (only if a client requests it)
 **Status:** maybe
@@ -621,13 +559,14 @@ The `call_logs.recording_url` column exists from Phase 1+ in the target schema a
 
 These items are sometimes asked about but are not on the near-term plan:
 
+- **Redis dialer queue.** Postgres `FOR UPDATE SKIP LOCKED` is sufficient for concurrent dialing; Redis only reconsidered for Phase 3 SSE.
 - **SOC2 / ISO27001.** Required only for enterprise BFSI; revisit when we have a customer asking for it on contract.
-- **Per-client dedicated server instances.** Sales objection-handler, not a real differentiator yet. One Hetzner CX32 handles 5-10 clients easily.
-- **Native CRM integrations.** Always go through n8n. Avoid writing HubSpot / Salesforce / Zoho code ourselves.
+- **Per-client dedicated server instances.** One Hetzner CX32 handles 5-10 clients easily.
+- **Native CRM integrations.** Always go through n8n.
 - **iOS / Android client apps.** Web is enough.
 - **Bring-your-own LLM.** Power users can fork; not a product feature.
 - **Embedded analytics SaaS.** Use Metabase or Superset over Postgres if needed.
-- **`SmallWebRTCTransport` browser dev path.** Optional local testing without Plivo/ngrok; deferred from Phase 0 to Phase 4 (May 2026). Until then, use `just call` + ngrok for pipeline dev.
+- **`SmallWebRTCTransport` browser dev path.** Deferred to Phase 4. Until then, use `just call` + ngrok.
 
 ---
 
@@ -638,12 +577,37 @@ If you (an LLM agent) are reading this to help build Aakashvani, here is the che
 ### What is built today (May 2026)
 
 1. WSL2 + Python 3.12 + uv environment, all imports working.
-2. `server.py` — FastAPI app exposing `/start`, `/answer`, `/ws`, `/health`. Picks `bot_sts` or `bot_cascade` from `BOT_ROUTE` env at module load. `/start` merges top-level `phone_number` into the JSON `body` passed to `/ws` so bots see callee E.164 in `runner_args.body`.
-3. `bot_sts.py` — Gemini Live STS pipeline; persona text in `sts_scripts/` (`STS_SCRIPT` env: `pyramid_mr` / `pyramid_hi`, …). `GeminiLiveLLMService` with optional **`end_call`** tool + `MAX_CALL_MINUTES` watchdog (`call_limits.py`); **context window compression** via `ContextWindowCompressionParams` (`GEMINI_CONTEXT_COMPRESSION`, `GEMINI_CWC_TRIGGER_TOKENS`); lead fields come from post-call Groq on the transcript (`call_transcript.py`). Pre-seeded `LLMContext`, `on_client_connected` → `queue_frames([LLMRunFrame()])`. First-utterance latency ~1-2 s.
-4. `bot_cascade.py` — Sarvam STT + Groq Llama 3.3 + Cartesia TTS; system prompt in `cascade_scripts/` (`CASCADE_SCRIPT`). Still has a live **`push_lead_data`** function-call for end-of-call capture. Uses Silero VAD for turn-taking.
-5. `bot.py` — vanilla pipecat outbound example, kept as reference.
-6. `_prewarm_gemini` in `server.py` (STS only) opens a Gemini Live session during `/start` with the same audio-oriented `LiveConnectConfig` shape as Pipecat (model/voice/language from active `sts_scripts.*` module), sends `send_client_content("prewarm")`, drains one receive — avoids empty-setup 1011 errors. `/answer` waits up to 3 s for the warmup event.
+2. `server.py` — FastAPI: `/start`, `/answer`, `/ws`, `/health`. `BOT_ROUTE` env selects `bot_sts` or `bot_cascade` at module load.
+3. `bot_sts.py` — Gemini Live STS; loads `sts_scripts/<STS_SCRIPT>`. `end_call` tool, context window compression, prewarm, goodbye hangup fallback.
+4. `bot_cascade.py` — Sarvam STT + Groq + Cartesia; loads `cascade_scripts/<CASCADE_SCRIPT>`. Live `push_lead_data` + `end_call`.
+5. Script modules export prompts, VAD, models, and **`EXTRACTION_SCHEMA`**. Post-call Groq prompt is built at runtime from that schema (`post_call_extract.py`).
+6. SQLite `call_logs` per completed call; n8n webhook via `N8N_WEBHOOK_URL`.
 7. `justfile` + `scripts/call.sh` for dev ergonomics.
+
+**Not built yet:** Postgres, `clients`/`campaigns`/`leads` tables, `post_call_processor`, concurrent dialer, `/api/*` and `/internal/*` routes, live transcript polling.
+
+### Script module contract (Phase 2+)
+
+Loaded via `bot_configs.script_id` + `route`:
+
+- `sts` → `sts_scripts.<script_id>`
+- `cascaded` → `cascade_scripts.<script_id>`
+
+STS required attributes (see [aakash_arch.md §5](aakash_arch.md)):
+
+```python
+_STS_SCRIPT_ATTRS = (
+    "build_system_instruction",
+    "build_bootstrap_messages",
+    "GOODBYE_HANGUP_MARKERS",
+    "GEMINI_MODEL", "GEMINI_VOICE", "GEMINI_LANGUAGE",
+    "GEMINI_VAD", "GEMINI_TEMPERATURE",
+    "EXTRACTION_SCHEMA",
+    # LEAD_SCHEMA — Phase 2 upload validation
+)
+```
+
+`STS_SCRIPT` / `CASCADE_SCRIPT` env vars are **Phase 0 dev fallback only**.
 
 ### Pipecat 1.1.0 import paths (current, not the old ones)
 
@@ -678,62 +642,41 @@ Deprecated, do not use: `OpenAILLMContext`, `pipecat.transports.services.daily`,
 
 - `uv run …` for all Python invocations, never `python3`.
 - Secrets in `.env`, loaded with `python-dotenv` via `load_dotenv(override=True)` at module load.
-- `BOT_ROUTE` env selects the active bot module (`bot_sts` vs `bot_cascade`). `STS_SCRIPT` / `CASCADE_SCRIPT` select which file under `sts_scripts/` / `cascade_scripts/` is loaded (no second STS entry module).
-- Pipecat services that have a `.Settings` nested class take their config there, not via direct kwargs (`Settings(model="...", voice="...")`).
-- `LLMContextAggregatorPair(context)` returns a tuple — unpack as `user_agg, asst_agg = …`.
-- Avoid setting `inference_on_context_initialization=False` on Gemini Live (Gemini 3.x silently skips the realtime-input nudge — bot never speaks).
 - Plivo uses 8 kHz µ-law. Set `audio_in_sample_rate=8000` and `audio_out_sample_rate=8000` in `PipelineParams`.
 - Use `_lap(t0, label)` style timing logs to debug first-utterance latency.
 
 ### Known issues / gotchas
 
 - `pipecat-ai[flows]` extra does not exist — flows are in the base install.
-- The free-tier Gemini quota (15 RPM, ~1500/day) runs out during testing; switch accounts or add billing.
+- Free-tier Gemini quota runs out during testing; switch accounts or add billing.
 - `--reload` re-imports pipecat heavy modules on every save; don't use it when measuring latency.
 - After folder rename, `.venv` may have stale shebangs. Run `uv sync` to fix.
 
 ### Next deliverables (Phase 2 — current)
 
-See [§9 Phase 2](#phase-2--multi-tenant--billing): Postgres migration, `clients` / `bot_configs` / campaigns schema, `client_id` on every query, CostGuard, Razorpay recharge, Redis concurrent dialer, admin portal, retire `BOT_ROUTE` env in favour of `bot_config_id` at call time.
+Admin-first build order from [aakash_arch.md §13](aakash_arch.md):
 
-**Phase 0** (foundation) is complete. **`SmallWebRTCTransport`** is deferred to Phase 4 — do not implement unless explicitly requested.
+1. Postgres + full schema
+2. `/internal/clients`, `/internal/bot-configs`, `/internal/campaigns`, credit top-up, webhook configs
+3. `post_call_processor`, lead upload (`LEAD_SCHEMA`), concurrent dialer
+4. Client `/api/*` endpoints + React SPA (Phase 2B)
+
+**Phase 0** is complete. **`SmallWebRTCTransport`** is Phase 4.
 
 ### Product model cheat sheet
 
 - One backend, one DB, one server. `client_id` isolates all data.
 - Clients touch: upload CSV, start/stop campaign, view logs, view credits, recharge.
 - We touch: bot scripts, prompts, n8n workflows, CRM integrations, infra.
-- Bot config UI exists in Phase 3 as a structured form — never a raw prompt editor.
-- `/api/*` = client-facing. `/internal/*` = admin + n8n only, never exposed publicly.
-
-### BotConfig dataclass (Phase 1+)
-
-```python
-@dataclass
-class BotConfig:
-    bot_config_id: str
-    client_id: str
-    agent_name: str           # "Diya", "Priya", "Arjun"
-    system_prompt: str      # compiled server-side; supports {lead_name}, {city}
-    language: str             # "mr-IN", "hi-IN", "en-IN"
-    route: str                # "sts" or "cascade"
-    tts_voice: str            # Cartesia voice ID or Gemini voice name
-    llm_model: str            # "gemini-3.1-flash-live-preview" etc.
-    extraction_schema: dict   # fields Groq extracts post-call
-    webhook_url: str | None   # client's n8n workflow URL
-    webhook_secret: str | None
-```
-
-`bot_sts.py` loads `sts_scripts.<STS_SCRIPT>`; `bot_cascade.py` loads `cascade_scripts.<CASCADE_SCRIPT>`. Phase 2+ `BotConfig` will supply compiled `system_prompt` + route instead of env-only selection.
+- Bot config UI in Phase 3 — structured form only, never raw prompt editor.
+- `/api/*` = client-facing. `/internal/*` = admin + ops only.
 
 ### n8n cheat sheet
 
-- n8n runs on same server as FastAPI (`localhost:5678`).
-- Not exposed to clients. Built and managed by us.
-- One workflow per client, built during onboarding (₹15,000 setup covers first build; **₹2,000/update** for workflow changes).
-- Backend fires POST to the workflow’s webhook URL after each call (after Groq extraction when `GROQ_API_KEY` is set).
-- Internal calls go over localhost — no public-internet exposure for internal auth.
-- `webhook_configs` table: `(client_id, event, url, secret, active)`.
+- n8n on same server as FastAPI (`localhost:5678`), not exposed to clients.
+- Per-client workflows built during onboarding (₹15,000 setup; ₹2,000/update).
+- Phase 2: per-event `webhook_configs` with HMAC signing.
+- Phase 0 fallback: single `N8N_WEBHOOK_URL` in `.env`.
 
 ### Recording flow (Phase 4)
 

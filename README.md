@@ -11,22 +11,23 @@
 | ----------------- | ------------------------------------------------------------------------------------------------- |
 | Phase             | **Phase 0 — Foundation** — **complete** (May 2026). Roadmap Phase 1 closed; **Phase 2** in progress. |
 | Last milestone    | Call logs, metrics, Groq extraction, n8n webhook, `end_call` / max duration, STS context compression + Gemini prewarm. |
-| Current focus     | **Phase 2 — Multi-tenant + billing** (see [ROADMAP.md](ROADMAP.md) §9).                         |
-| Next milestone    | PostgreSQL migration, `client_id` isolation, CostGuard, concurrent dialer (Redis).                |
-| Full plan         | See [ROADMAP.md](ROADMAP.md).                                                                     |
+| Current focus     | **Phase 2 prep** — docs aligned with [aakash_arch.md](aakash_arch.md); **schema-driven extraction** in script files. |
+| Next milestone    | PostgreSQL 16, `client_id` isolation, credits + campaign budgets, CostGuard, Postgres concurrent dialer — see [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing). |
+| Full plan         | [ROADMAP.md](ROADMAP.md) (phases) · [aakash_arch.md](aakash_arch.md) (schema & contracts)         |
 
 ---
 
 ## What this is
 
-**Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage credits (see [ROADMAP.md](ROADMAP.md) §1 Vision and §9 phased plan). **Phase 0 / Phase 1 (foundation) are done** — single-tenant dev server + SQLite + `POST /start`, two voice routes, post-call extraction. **Phase 2** (multi-tenant backend) is next; Phase 1 client SPA milestones resume after Phase 2 (see roadmap).
+**Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage **credits** (see [ROADMAP.md](ROADMAP.md) §1 and [aakash_arch.md](aakash_arch.md) §4).
 
-Two voice pipelines that can call any Indian phone number via Plivo and hold a conversation:
+**Phase 0 / Phase 1 (foundation) are done** — single-tenant dev server + SQLite + `POST /start`, two voice routes, post-call extraction. **Phase 2** (multi-tenant Postgres backend) is next; Phase 1 client SPA milestones resume after Phase 2.
 
-- **Route A — Cascaded** ([bot_cascade.py](bot_cascade.py)): Sarvam STT → Groq → Cartesia. Prompt in [`cascade_scripts/`](cascade_scripts/) (`CASCADE_SCRIPT`, default `prowave`). ~1.5–2.5 s round-trip. Function-calling (`push_lead_data`, `end_call`), easy to audit.
-- **Route B — STS** ([bot_sts.py](bot_sts.py)): Gemini Live (speech-to-speech). Script modules under [`sts_scripts/`](sts_scripts/) (default `STS_SCRIPT=pyramid_mr` Marathi; set `STS_SCRIPT=pyramid_hi` for Hindi). ~0.5–1 s round-trip. **Diya** / Pyramid Parkland Nxt. Lead JSON is **not** captured via live tools; after hang-up, `call_transcript.py` runs **Groq** extraction into `call_logs.extraction_json`. Optional **`end_call`** tool + goodbye hangup fallback (`call_limits.py`); **`MAX_CALL_MINUTES`** caps duration.
+**Config model (forward path).** The DB `bot_configs` row is a **registry** (`route`, `script_id`, `credits_per_minute`, Plivo number). Prompts, VAD, models, `LEAD_SCHEMA`, and **`EXTRACTION_SCHEMA`** live in [`sts_scripts/`](sts_scripts/) and [`cascade_scripts/`](cascade_scripts/). Post-call Groq reads `EXTRACTION_SCHEMA` from the active script at runtime.
 
-Calls are placed by hitting `POST /start` on the FastAPI server in [server.py](server.py). Pipecat handles the audio pipeline; Plivo handles the PSTN leg.
+**Billing (forward path).** Clients hold **credits** (1 credit = ₹1 at launch). Campaigns pre-allocate budget from the master balance; calls bill in ceiling minutes × `credits_per_minute`. See [aakash_arch.md §4](aakash_arch.md).
+
+Two voice pipelines can call any Indian phone number via Plivo — details under [Tech stack](#tech-stack) below.
 
 ---
 
@@ -49,7 +50,8 @@ uv sync
 
 # 2. Copy and fill in secrets
 cp env.example .env
-# edit .env: set PLIVO_*, GOOGLE_API_KEY, NGROK_URL, BOT_ROUTE (and STS_SCRIPT / CASCADE_SCRIPT to pick a script module)
+# edit .env: set PLIVO_*, GOOGLE_API_KEY, NGROK_URL, BOT_ROUTE (and STS_SCRIPT / CASCADE_SCRIPT)
+# GROQ_API_KEY enables post-call extraction
 
 # 3. Start the server (uses BOT_ROUTE from .env, defaults to sts)
 just dev
@@ -65,7 +67,7 @@ That's it. The callee's phone rings; on pickup, Diya greets them in Marathi.
 
 ### Call logs and transcripts
 
-- Each completed pipeline run appends one row to the SQLite DB at `CALL_LOG_DB_PATH` (default `./data/call_logs.db`). Columns include `session_call_id` (UUID from `POST /start`), `plivo_call_id`, `route`, timestamps, `duration_ms`, `transcript_json` (array of `{role, content, timestamp, …}`), **token usage** (`usage_prompt_tokens`, `usage_completion_tokens`, `usage_total_tokens`, `usage_tts_characters`, `usage_metrics_json`), optional **`cost_inr`** (STS only, when `GEMINI_LIVE_INPUT_USD_PER_1M` and `GEMINI_LIVE_OUTPUT_USD_PER_1M` are set), and **post-call extraction** (`extraction_json`, `extraction_error`, `extraction_model`) when `GROQ_API_KEY` is set. `extraction_json` includes `intent_status` (values include **`Interested`**, `Not_Interested`, `Busy`, `Callback_Requested`, `Wrong_Requirement`, `Unknown`) plus preferences; a small **normalizer** upgrades inconsistent pairs (e.g. `site_visit_agreed: true` with `Unknown` intent → `Interested`) before the row is updated.
+- Each completed pipeline run appends one row to the SQLite DB at `CALL_LOG_DB_PATH` (default `./data/call_logs.db`). Columns include `session_call_id` (UUID from `POST /start`), `plivo_call_id`, `route`, timestamps, `duration_ms`, `transcript_json` (array of `{role, content, timestamp, …}`), **token usage** (`usage_prompt_tokens`, `usage_completion_tokens`, `usage_total_tokens`, `usage_tts_characters`, `usage_metrics_json`), optional **`cost_inr`** (STS only, when `GEMINI_LIVE_INPUT_USD_PER_1M` and `GEMINI_LIVE_OUTPUT_USD_PER_1M` are set), and **post-call extraction** (`extraction_json`, `extraction_error`, `extraction_model`) when `GROQ_API_KEY` is set. Extraction fields and Groq prompt rules come from the active script module's **`EXTRACTION_SCHEMA`** (built at runtime, not hardcoded in Python). `extraction_json` includes `intent_status` (values include **`Interested`**, `Not_Interested`, `Busy`, `Callback_Requested`, `Wrong_Requirement`, `Unknown`) plus preferences; a small **normalizer** upgrades inconsistent pairs (e.g. `site_visit_agreed: true` with `Unknown` intent → `Interested`) before the row is updated.
 - **Call duration:** `MAX_CALL_MINUTES` (default `10`, `0` = no timer) starts a background watchdog that queues an `EndFrame` (Plivo hangup). Cascade and STS also expose an **`end_call`** LLM tool via [`call_limits.py`](call_limits.py) so the model can hang up after the final goodbye; cascade order is `push_lead_data` then goodbye then `end_call`.
 - Transcripts are built from Pipecat universal aggregator **`on_user_turn_stopped`** / **`on_assistant_turn_stopped`** events. For STS, the synthetic bootstrap user line (“The call has just connected…”) is **stripped** before persistence.
 - Verify SQLite from Python: `uv run python -c "import sqlite3; print(sqlite3.sqlite_version)"` (no extra pip package; uses the standard library).
@@ -82,6 +84,19 @@ scripts/call.sh +919123866924 Satyam Pune
 
 ---
 
+## Tech stack
+
+Pipecat 1.1.0 + Plivo + Gemini Live + FastAPI. Phase 2 DB route values are `sts` | `cascaded`; env still uses `BOT_ROUTE=sts` or `BOT_ROUTE=cascade` until retired.
+
+Two voice pipelines that can call any Indian phone number via Plivo and hold a conversation:
+
+- **Route A — Cascaded** ([bot_cascade.py](bot_cascade.py)): Sarvam STT → Groq → Cartesia. Prompt in [`cascade_scripts/`](cascade_scripts/) (`CASCADE_SCRIPT`, default `prowave`). ~1.5–2.5 s round-trip. Function-calling (`push_lead_data`, `end_call`), easy to audit. Post-call Groq extraction uses the script's **`EXTRACTION_SCHEMA`** (canonical for CRM/n8n); `push_lead_data` remains for live capture today.
+- **Route B — STS** ([bot_sts.py](bot_sts.py)): Gemini Live (speech-to-speech). Script modules under [`sts_scripts/`](sts_scripts/) (default `STS_SCRIPT=pyramid_mr` Marathi; set `STS_SCRIPT=pyramid_hi` for Hindi). ~0.5–1 s round-trip. **Diya** / Pyramid Parkland Nxt. Lead JSON is **not** captured via live tools; after hang-up, `call_transcript.py` runs **Groq** extraction from the script's **`EXTRACTION_SCHEMA`** into `call_logs.extraction_json`. Optional **`end_call`** tool + goodbye hangup fallback (`call_limits.py`); **`MAX_CALL_MINUTES`** caps duration.
+
+Calls are placed by hitting `POST /start` on the FastAPI server in [server.py](server.py). Pipecat handles the audio pipeline; Plivo handles the PSTN leg.
+
+---
+
 ## Repo layout (current)
 
 ```
@@ -93,10 +108,11 @@ aakashvani/
 ├── call_limits.py           MAX_CALL_MINUTES watchdog + shared ``end_call`` coordinator
 ├── pricing_sts.py           Optional STS `cost_inr` from token counts + env USD rates
 ├── n8n_webhook.py           Outbound POST of call payload to `N8N_WEBHOOK_URL`
-├── post_call_extract.py     Groq post-call JSON extraction + normalize_post_call_extraction
+├── post_call_extract.py     Schema-driven Groq extraction + normalize_post_call_extraction
 ├── lead_context.py          Shared LeadContext (name, phone, city) for script modules
-├── sts_scripts/             STS persona modules (GEMINI_* + prompts); STS_SCRIPT env
-├── cascade_scripts/       Cascade persona modules; CASCADE_SCRIPT env
+├── sts_scripts/             STS modules: prompts, VAD, GEMINI_*, EXTRACTION_SCHEMA
+│   └── pyramid_extraction.py  Shared EXTRACTION_SCHEMA for Pyramid bots
+├── cascade_scripts/         Cascade modules; CASCADE_SCRIPT env; EXTRACTION_SCHEMA
 ├── bot.py                   Stock pipecat outbound example (kept as reference)
 ├── bot_sts.py               Route B: Gemini Live pipeline (loads sts_scripts.*)
 ├── bot_cascade.py           Route A: Sarvam + Groq + Cartesia (loads cascade_scripts.*)
@@ -110,7 +126,8 @@ aakashvani/
 ├── uv.lock                  Pinned dependency lockfile
 ├── Dockerfile               Pipecat Cloud deploy image
 ├── pcc-deploy.toml          Pipecat Cloud deploy config
-├── ROADMAP.md               Full vision, architecture, phased roadmap, pricing
+├── aakash_arch.md           Architecture reference: schema, billing, dialer, contracts
+├── ROADMAP.md               Vision, phases, pricing; defers schema detail to aakash_arch.md
 └── README.md                this file
 ```
 
@@ -143,7 +160,7 @@ sequenceDiagram
     Pipecat->>Gemini: open live session (tools=None) + send seed turn
     Gemini-->>Pipecat: first audio chunk (~0.5-1 s after handshake)
     Pipecat-->>Callee: Diya speaks the greeting
-    Note over Pipecat: On pipeline end: transcript + cost_inr → SQLite; Groq extract if set; POST to n8n URL if set
+    Note over Pipecat: On pipeline end: transcript + cost_inr → SQLite; Groq extract from script EXTRACTION_SCHEMA; POST to n8n URL if set
 ```
 
 ---
@@ -177,10 +194,27 @@ sequenceDiagram
 
 ## Next development steps
 
-This README mirrors what I'm working on right now. For the longer vision (managed service model, **one backend / Postgres / `client_id` isolation**, Docker + nginx subdomains, API split `/api/*` vs `/internal/*`, pricing, compliance, React phases), see **[ROADMAP.md](ROADMAP.md)**.
-
 **Phase 0 (foundation)** — complete. Dev testing stays on Plivo + ngrok (`just call`).
 
-**Phase 2 (current)** — see [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing): Postgres, `client_id`, CostGuard, Razorpay, concurrent dialer, admin portal.
+**Phase 2 (current)** — admin-first backend per [aakash_arch.md §13](aakash_arch.md):
 
-**Deferred:** browser `SmallWebRTCTransport` dev path → Phase 4 ([ROADMAP.md §9](ROADMAP.md#phase-4--whatsapp--recordings)). Phase 1 client SPA → after Phase 2 backend.
+1. Postgres 16 + full schema ([§2](aakash_arch.md))
+2. `/internal/*` admin endpoints (clients, bot-configs, campaigns, credits, webhooks)
+3. `post_call_processor`, lead upload, Postgres concurrent dialer
+4. Client `/api/*` + React SPA (Phase 2B)
+
+See [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing) for the full milestone table.
+
+**Deferred:** browser `SmallWebRTCTransport` dev path → Phase 4. Phase 1 client SPA → after Phase 2 backend. Razorpay → Phase 3.
+
+---
+
+## Documentation
+
+| Document | Use for |
+| -------- | ------- |
+| [README.md](README.md) | Dev setup, quick start, troubleshooting (this file) |
+| [ROADMAP.md](ROADMAP.md) | Vision, phases, pricing, compliance |
+| [aakash_arch.md](aakash_arch.md) | Postgres schema, credits, dialer, script contracts, security |
+
+If README or ROADMAP conflict with `aakash_arch.md`, **arch wins**.

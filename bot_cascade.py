@@ -55,6 +55,11 @@ from lead_context import LeadContext
 
 load_dotenv(override=True)
 
+_CASCADE_SCRIPT_ATTRS = (
+    "build_system_prompt",
+    "EXTRACTION_SCHEMA",
+)
+
 
 def _load_cascade_script() -> ModuleType:
     raw = (os.getenv("CASCADE_SCRIPT") or "prowave").strip()
@@ -64,8 +69,9 @@ def _load_cascade_script() -> ModuleType:
         )
     mod_name = f"cascade_scripts.{raw}"
     mod = importlib.import_module(mod_name)
-    if not hasattr(mod, "build_system_prompt"):
-        raise ValueError(f"Cascade script {mod_name} missing build_system_prompt")
+    missing = [a for a in _CASCADE_SCRIPT_ATTRS if not hasattr(mod, a)]
+    if missing:
+        raise ValueError(f"Cascade script {mod_name} missing: {', '.join(missing)}")
     return mod
 
 
@@ -206,6 +212,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         perf_start=perf_pipeline,
         strip_bootstrap=False,
         usage_accumulator=usage_accumulator,
+        extraction_schema=casc.EXTRACTION_SCHEMA,
     )
 
     @transport.event_handler("on_client_connected")

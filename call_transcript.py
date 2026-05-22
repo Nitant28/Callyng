@@ -196,6 +196,7 @@ def attach_pipeline_finalize(
     perf_start: float,
     strip_bootstrap: bool = False,
     usage_accumulator: UsageMetricsAccumulator | None = None,
+    extraction_schema: dict[str, Any],
 ) -> None:
     @task.event_handler("on_pipeline_finished")
     async def _on_pipeline_finished(task, frame):
@@ -279,7 +280,9 @@ def attach_pipeline_finalize(
                 extraction_error: str | None = None
                 extraction_model: str | None = None
                 try:
-                    parsed, err, model_used = await extract_post_call(transcript)
+                    parsed, err, model_used = await extract_post_call(
+                        transcript, extraction_schema=extraction_schema
+                    )
                     extraction_model = model_used
                     if parsed is not None and err is None:
                         extraction = normalize_post_call_extraction(parsed)

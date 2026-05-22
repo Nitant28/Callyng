@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from types import ModuleType
 
 from dotenv import load_dotenv
+from google.genai.types import HttpOptions
 from loguru import logger
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -63,6 +64,7 @@ _STS_SCRIPT_ATTRS = (
     "GEMINI_LANGUAGE",
     "GEMINI_VAD",
     "GEMINI_TEMPERATURE",
+    "EXTRACTION_SCHEMA",
 )
 
 
@@ -119,6 +121,18 @@ async def run_bot(
     logger.info("STS script active: {} ({})", sid, sts.__name__)
 
     end_tools = ToolsSchema(standard_tools=[end_call_function_schema()])
+    _affective = getattr(sts, "GEMINI_ENABLE_AFFECTIVE_DIALOG", False)
+    if _affective and "gemini-3" in (getattr(sts, "GEMINI_MODEL", "") or ""):
+        logger.warning(
+            "GEMINI_ENABLE_AFFECTIVE_DIALOG ignored: {} does not support affective dialog "
+            "(use a Gemini 2.5 Live model, e.g. "
+            "models/gemini-2.5-flash-native-audio-preview-12-2025)",
+            sts.GEMINI_MODEL,
+        )
+        _affective = False
+    elif _affective:
+        logger.info("Gemini affective dialog enabled (api_version=v1alpha)")
+
     cwc = _context_window_compression_settings()
     llm_settings_kw: dict = {
         "model": sts.GEMINI_MODEL,
@@ -129,9 +143,12 @@ async def run_bot(
     }
     if cwc is not None:
         llm_settings_kw["context_window_compression"] = cwc
+    if _affective:
+        llm_settings_kw["enable_affective_dialog"] = True
 
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
+        http_options=HttpOptions(api_version="v1alpha") if _affective else None,
         system_instruction=sts.build_system_instruction(ctx),
         tools=end_tools,
         settings=GeminiLiveLLMService.Settings(**llm_settings_kw),
@@ -203,6 +220,7 @@ async def run_bot(
         perf_start=perf_pipeline,
         strip_bootstrap=True,
         usage_accumulator=usage_accumulator,
+        extraction_schema=sts.EXTRACTION_SCHEMA,
     )
 
     @transport.event_handler("on_client_connected")
