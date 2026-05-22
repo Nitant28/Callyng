@@ -9,10 +9,10 @@
 
 | Field             | Value                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
-| Phase             | **Phase 0 — Foundation** — **complete** (May 2026). Roadmap Phase 1 closed; **Phase 2** in progress. |
-| Last milestone    | Call logs, metrics, Groq extraction, n8n webhook, `end_call` / max duration, STS context compression + Gemini prewarm. |
-| Current focus     | **Phase 2 prep** — docs aligned with [aakash_arch.md](aakash_arch.md); **schema-driven extraction** in script files. |
-| Next milestone    | PostgreSQL 16, `client_id` isolation, credits + campaign budgets, CostGuard, Postgres concurrent dialer — see [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing). |
+| Phase             | **Phase 0 — Foundation** — **complete** (May 2026). **Phase 2** in progress. |
+| Last milestone    | PostgreSQL 16 via Docker Compose: full schema, dev seed, `asyncpg` pool + budget helpers. |
+| Current focus     | Admin `/internal/*` endpoints, `post_call_processor`, concurrent dialer — see [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing). |
+| Next milestone    | CostGuard, lead upload (`LEAD_SCHEMA`), wire calls to Postgres — [aakash_arch.md §13](aakash_arch.md). |
 | Full plan         | [ROADMAP.md](ROADMAP.md) (phases) · [aakash_arch.md](aakash_arch.md) (schema & contracts)         |
 
 ---
@@ -21,7 +21,7 @@
 
 **Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage **credits** (see [ROADMAP.md](ROADMAP.md) §1 and [aakash_arch.md](aakash_arch.md) §4).
 
-**Phase 0 / Phase 1 (foundation) are done** — single-tenant dev server + SQLite + `POST /start`, two voice routes, post-call extraction. **Phase 2** (multi-tenant Postgres backend) is next; Phase 1 client SPA milestones resume after Phase 2.
+**Phase 0 / Phase 1 (foundation) are done** — single-tenant dev server + SQLite + `POST /start`, two voice routes, post-call extraction. **Phase 2** Postgres schema + pool are in place; `just call` still uses SQLite until dialer/API wiring. Phase 1 client SPA resumes after Phase 2 backend APIs.
 
 **Config model (forward path).** The DB `bot_configs` row is a **registry** (`route`, `script_id`, `credits_per_minute`, Plivo number). Prompts, VAD, models, `LEAD_SCHEMA`, and **`EXTRACTION_SCHEMA`** live in [`sts_scripts/`](sts_scripts/) and [`cascade_scripts/`](cascade_scripts/). Post-call Groq reads `EXTRACTION_SCHEMA` from the active script at runtime.
 
@@ -35,6 +35,7 @@ Two voice pipelines can call any Indian phone number via Plivo — details under
 
 - Python 3.12+
 - [uv](https://github.com/astral-sh/uv) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [Docker Desktop](https://docs.docker.com/desktop/) with **WSL 2 integration** enabled for your Ubuntu distro (Settings → Resources → WSL Integration), **or** [Docker Engine on Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
 - [ngrok](https://ngrok.com/) with a reserved free domain (or a paid plan)
 - [just](https://github.com/casey/just) (optional, recommended) — `sudo apt install just` on Ubuntu 24.04+, `cargo install just`, or grab a binary from the GitHub releases
 - A Plivo account with auth ID/token and an outbound-enabled India phone number
@@ -64,6 +65,40 @@ just call +919123866924 Satyam Pune
 ```
 
 That's it. The callee's phone rings; on pickup, Diya greets them in Marathi.
+
+### PostgreSQL (Phase 2 — Docker)
+
+Multi-tenant data lives in **PostgreSQL 16** via [docker-compose.yml](docker-compose.yml). Outbound test calls still write to **SQLite** until Phase 2 wires the pipeline to Postgres.
+
+```bash
+# 1. Install Docker Desktop (Windows) and enable WSL integration for Ubuntu, then:
+docker --version
+docker compose version
+
+# 2. Add DATABASE_URL to .env (see env.example)
+cp env.example .env   # if needed; set DATABASE_URL and other secrets
+
+# 3. Start DB, apply schema, seed dev tenant
+just db-up
+just db-migrate
+just db-seed
+just db-verify      # checks tables, seed balance, budget allocation
+
+# Optional: interactive SQL
+just db-psql
+```
+
+**Dev tenant** (from [db/seed/dev_tenant.sql](db/seed/dev_tenant.sql)):
+
+| Resource | UUID |
+| -------- | ---- |
+| Client | `00000000-0000-4000-8000-000000000001` |
+| Bot config (`pyramid_mr`, STS) | `00000000-0000-4000-8000-000000000002` |
+| Draft campaign | `00000000-0000-4000-8000-000000000003` |
+
+**Dev API key** (Bearer, for future `/api/*`): `aakashvani_dev_key_change_me` — change in production; only the SHA-256 hash is stored in `clients.api_key_hash`.
+
+Reset dev database (drops volume): `just db-reset`
 
 ### Call logs and transcripts
 
@@ -101,9 +136,14 @@ Calls are placed by hitting `POST /start` on the FastAPI server in [server.py](s
 
 ```
 aakashvani/
+├── docker-compose.yml       Postgres 16 for local dev (port 5432)
+├── db/
+│   ├── postgres.py          asyncpg pool + client_id-scoped helpers + budget transactions
+│   ├── schema/001_initial.sql   Full schema ([aakash_arch.md](aakash_arch.md) §2)
+│   └── seed/dev_tenant.sql  Dev client, bot_config, draft campaign
 ├── server.py                FastAPI app: /start, /answer (Plivo XML), /ws, /health
 ├── call_transcript.py       Turn buffer + pipeline end → call_logs + Groq + n8n POST
-├── call_log_db.py           SQLite schema/migrations + insert + extraction update
+├── call_log_db.py           SQLite schema/migrations + insert + extraction update (Phase 0)
 ├── call_metrics.py          UsageMetricsTap: sums LLM/TTS usage from Pipecat MetricsFrame
 ├── call_limits.py           MAX_CALL_MINUTES watchdog + shared ``end_call`` coordinator
 ├── pricing_sts.py           Optional STS `cost_inr` from token counts + env USD rates
@@ -198,7 +238,7 @@ sequenceDiagram
 
 **Phase 2 (current)** — admin-first backend per [aakash_arch.md §13](aakash_arch.md):
 
-1. Postgres 16 + full schema ([§2](aakash_arch.md))
+1. ~~Postgres 16 + full schema ([§2](aakash_arch.md))~~ — done (`just db-up` / `db-migrate` / `db-seed`)
 2. `/internal/*` admin endpoints (clients, bot-configs, campaigns, credits, webhooks)
 3. `post_call_processor`, lead upload, Postgres concurrent dialer
 4. Client `/api/*` + React SPA (Phase 2B)

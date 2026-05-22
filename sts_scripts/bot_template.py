@@ -428,3 +428,162 @@ When in doubt: keep talking. A slightly long call is better than a wrong hangup.
 - Callee: {ctx.lead_phone!r}
 - City: {ctx.lead_city!r}
 """
+# =============================================================================
+# GEMINI LIVE — COMPLETE SETTINGS REFERENCE
+# Pipecat 1.1.0 + google-genai
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# GeminiVADParams
+# Controls server-side Voice Activity Detection (runs on Google's servers, not local)
+# Usage: vad=GeminiVADParams(...) inside GeminiLiveLLMService.Settings
+# -----------------------------------------------------------------------------
+#
+# disabled: bool | None
+#   Set True to turn off Gemini's VAD entirely. You'd then need to drive
+#   turn-taking manually. Default: None (VAD on)
+#
+# start_sensitivity: StartSensitivity | None
+#   How aggressively Gemini detects the START of speech.
+#   START_SENSITIVITY_HIGH  → fires on soft/short sounds like "हा", "हो", "हाँ"  ← use this
+#   START_SENSITIVITY_LOW   → only fires on louder, longer speech onset
+#   START_SENSITIVITY_UNSPECIFIED → Google default (somewhere in between)
+#
+# end_sensitivity: EndSensitivity | None
+#   How aggressively Gemini detects the END of speech (turn boundary).
+#   END_SENSITIVITY_HIGH → cuts the turn quickly after speech stops
+#   END_SENSITIVITY_LOW  → waits longer before closing the turn (better for short words) ← use this
+#   END_SENSITIVITY_UNSPECIFIED → Google default
+#
+# prefix_padding_ms: int | None
+#   Milliseconds of audio BEFORE detected speech onset to include in the turn.
+#   Higher = captures lead-in sounds but eats short words if set too high.
+#   Default Google value is ~500ms. Recommended for short Hindi/Marathi words: 200ms
+#
+# silence_duration_ms: int | None
+#   Milliseconds of silence after speech before the turn is considered complete.
+#   Lower = snappier response but may cut off slow speakers.
+#   Default Google value is ~600ms. Recommended: 400ms
+#
+# RECOMMENDED CONFIG FOR SHORT HINDI/MARATHI AFFIRMATIVES (हा, हो, हाँ, जी):
+# from google.genai.types import StartSensitivity, EndSensitivity
+# GEMINI_VAD = GeminiVADParams(
+#     start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
+#     end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
+#     prefix_padding_ms=200,
+#     silence_duration_ms=400,
+# )
+
+# -----------------------------------------------------------------------------
+# GeminiLiveLLMService.Settings
+# Top-level Pipecat wrapper settings — passed at service init time
+# -----------------------------------------------------------------------------
+#
+# model: str
+#   Gemini model to use.
+#   "models/gemini-3.1-flash-live-preview"  ← current fast model
+#   "models/gemini-2.0-flash-live-001"      ← stable alias if available
+#
+# temperature: float
+#   Randomness of responses. 0.0 = deterministic, 1.0 = creative.
+#   Recommended for sales scripts: 0.4–0.6
+#
+# max_tokens: int
+#   Max output tokens per turn. Keep reasonable to avoid runaway responses.
+#
+# top_p: float
+#   Nucleus sampling. Controls diversity. 0.9 is a safe default.
+#
+# top_k: int
+#   Top-k sampling. Limits token selection pool per step.
+#
+# frequency_penalty: float
+#   Penalizes repeating the same tokens. Helps avoid repetitive filler phrases.
+#
+# presence_penalty: float
+#   Penalizes tokens already used anywhere in context. Encourages topic variety.
+#
+# seed: int
+#   Fixed seed for reproducible outputs. Useful for testing, not production.
+#
+# voice: str
+#   TTS voice name.
+#   Hindi voices:   "Sulafat", "Aoede", "Charon", "Fenrir", "Kore", "Puck"
+#   Test voices at: https://cloud.google.com/text-to-speech/docs/voices
+#
+# language: Language | str
+#   Language for STT transcription and TTS generation.
+#   Language.HI_IN  → Hindi
+#   Language.MR_IN  → Marathi
+#   Pass as pipecat Language enum or raw string "hi-IN", "mr-IN"
+#
+# modalities: GeminiModalities
+#   What output types Gemini returns. For STS: AUDIO only.
+#   GeminiModalities.AUDIO
+#   GeminiModalities.TEXT
+#   GeminiModalities.AUDIO_AND_TEXT  ← useful for debugging (logs what Gemini says)
+#
+# media_resolution: GeminiMediaResolution
+#   Only relevant if sending images/video. Ignore for audio-only STS.
+#
+# vad: GeminiVADParams | None
+#   See GeminiVADParams section above.
+#   Set to None to disable VAD entirely.
+#
+# context_window_compression: ContextWindowCompressionParams | dict
+#   Sliding window compression for long calls. When prompt tokens hit
+#   trigger_tokens, Google drops oldest turns and retains ~half.
+#   system_instruction is always preserved (it's on LiveConnectConfig).
+#   {"enabled": True, "trigger_tokens": 20000}  ← default in bot_sts.py
+#   Lower trigger_tokens = more aggressive compression = cheaper but less memory
+#
+# thinking: ThinkingConfig | dict
+#   Enables chain-of-thought reasoning before responding.
+#   Improves complex decisions (e.g. not-interested vs no-more-questions).
+#   COSTS LATENCY — not recommended for real-time STS unless response time > 2s is ok.
+#   {"thinking_budget": 1024}  ← token budget for thinking
+#
+# enable_affective_dialog: bool
+#   Gemini adapts its tone to the emotional content of user speech.
+#   Sounds frustrated → Diya softens. Sounds excited → Diya matches energy.
+#   Recommended: True for sales/support bots.
+#
+# proactivity: ProactivityConfig | dict
+#   Allows Gemini to speak unprompted — e.g. nudge after long silence.
+#   Complements the "don't go silent" guardrail in the system prompt.
+#   Check ProactivityConfig fields before enabling; behaviour can be surprising.
+#
+# filter_incomplete_user_turns: bool
+#   Filters turns where user started speaking but didn't complete a thought.
+#   Set False to let through very short turns like "हा", "जी", "यस".
+#   Recommended: False when using START_SENSITIVITY_HIGH
+#
+# user_turn_completion_config: UserTurnCompletionConfig
+#   Fine-grained control over when a user turn is considered "done".
+#   Interacts with VAD end_sensitivity. Check Pipecat source for fields.
+
+# -----------------------------------------------------------------------------
+# LiveConnectConfig — raw Google API fields
+# Not all are surfaced by Pipecat Settings; pass extras via settings.extra={}
+# -----------------------------------------------------------------------------
+#
+# session_resumption: SessionResumptionConfig
+#   Lets a session survive a WebSocket drop and resume mid-call.
+#   Useful for Indian mobile networks with frequent brief drops.
+#   Not yet in Pipecat Settings — would need custom _connect() override.
+#
+# safety_settings: list[SafetySetting]
+#   Adjust content safety thresholds per harm category.
+#   Useful if Gemini over-refuses on property/financial terms.
+#   Pass via settings.extra if not surfaced directly.
+#
+# explicit_vad_signal: bool
+#   If True, you drive VAD signals manually instead of letting Gemini do it.
+#   Only use if you're implementing your own turn detection.
+#
+# history_config: HistoryConfig
+#   Controls how conversation history is managed within the session.
+#
+# realtime_input_config: RealtimeInputConfig
+#   Low-level control over the realtime audio input stream.
+#   VAD params ultimately flow through here under the hood.

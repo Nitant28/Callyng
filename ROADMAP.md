@@ -133,12 +133,12 @@ Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`d
 | Component       | Tech                              | Status                                       |
 | --------------- | --------------------------------- | -------------------------------------------- |
 | Backend         | FastAPI + Python 3.12 + uv        | done                                         |
-| Persistence     | SQLite (Phase 0) → PostgreSQL 16  | SQLite done (Phase 0); Postgres planned (Phase 2) |
+| Persistence     | SQLite (Phase 0) → PostgreSQL 16  | SQLite done (Phase 0 calls); Postgres schema + pool done (Phase 2) |
 | Cache / pub-sub | Redis 7                           | maybe (Phase 3 SSE live monitor)             |
 | Vector DB       | ChromaDB                          | maybe — only if a client actually needs RAG  |
 | Frontend        | None (CLI + curl) → React SPA (one build, all subdomains) | planned (Phase 1+)           |
 | Reverse proxy   | nginx + wildcard TLS (`*.aakashvani.in`) | planned (deploy time)                 |
-| Containerization| Docker Compose (fastapi, postgres, n8n) | planned (deploy time)               |
+| Containerization| Docker Compose (fastapi, postgres, n8n) | postgres service done locally; full stack at deploy |
 | Server          | Hetzner CX32 (Germany)            | planned — consider AWS Mumbai if latency hurts |
 | Workflow        | n8n on localhost:5678, shared instance; **per-client workflows** built by us | planned |
 | Call recordings | Cloudflare R2 (signed URLs)       | planned (Phase 4)                            |
@@ -492,10 +492,12 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 
 | Milestone | Status |
 | --------- | ------ |
-| Postgres migration + schema from [aakash_arch.md §2](aakash_arch.md) | planned |
-| `clients`, `bot_configs`, `campaigns`, `leads`, `webhook_configs` tables | planned |
-| `client_id` on every query | planned |
-| Credits + campaign budget pre-allocation + CostGuard | planned |
+| Postgres migration + schema from [aakash_arch.md §2](aakash_arch.md) | done |
+| `clients`, `bot_configs`, `campaigns`, `leads`, `webhook_configs` tables | done |
+| Docker Compose `postgres:16` + `just db-*` recipes | done |
+| `asyncpg` pool + budget helpers in `db/postgres.py` | done |
+| `client_id` on every query | in progress (helpers enforce; APIs not wired) |
+| Credits + campaign budget pre-allocation + CostGuard | in progress (allocate/return in `db/postgres.py`; CostGuard dialer pending) |
 | `post_call_processor` (lead state machine, counters, webhooks) | planned |
 | Concurrent dialer — Postgres `FOR UPDATE SKIP LOCKED` | planned |
 | Admin `/internal/*` endpoints first (Phase 2A) | planned |
@@ -584,7 +586,7 @@ If you (an LLM agent) are reading this to help build Aakashvani, here is the che
 6. SQLite `call_logs` per completed call; n8n webhook via `N8N_WEBHOOK_URL`.
 7. `justfile` + `scripts/call.sh` for dev ergonomics.
 
-**Not built yet:** Postgres, `clients`/`campaigns`/`leads` tables, `post_call_processor`, concurrent dialer, `/api/*` and `/internal/*` routes, live transcript polling.
+**Not built yet:** `post_call_processor`, concurrent dialer, `/api/*` and `/internal/*` routes, live transcript polling, Postgres-backed call pipeline (schema + pool exist; `just call` still uses SQLite).
 
 ### Script module contract (Phase 2+)
 
@@ -656,7 +658,7 @@ Deprecated, do not use: `OpenAILLMContext`, `pipecat.transports.services.daily`,
 
 Admin-first build order from [aakash_arch.md §13](aakash_arch.md):
 
-1. Postgres + full schema
+1. ~~Postgres + full schema~~ (done — `docker-compose.yml`, `db/schema/001_initial.sql`, `just db-*`)
 2. `/internal/clients`, `/internal/bot-configs`, `/internal/campaigns`, credit top-up, webhook configs
 3. `post_call_processor`, lead upload (`LEAD_SCHEMA`), concurrent dialer
 4. Client `/api/*` endpoints + React SPA (Phase 2B)

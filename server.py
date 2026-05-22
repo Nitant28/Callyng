@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
 
 from call_log_db import init_db
+from db import postgres as pg_db
 
 load_dotenv(override=True)
 
@@ -194,9 +195,19 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"[startup] Call log DB init failed ({exc}); continuing without persistence")
 
+    try:
+        pool = await pg_db.init_pool()
+        if pool is not None:
+            logger.info("[startup] PostgreSQL pool ready")
+        else:
+            logger.info("[startup] DATABASE_URL not set; PostgreSQL disabled")
+    except Exception as exc:
+        logger.warning(f"[startup] PostgreSQL pool init failed ({exc}); continuing without Postgres")
+
     app.state.session = aiohttp.ClientSession()
     yield
     await app.state.session.close()
+    await pg_db.close_pool()
 
 
 app = FastAPI(lifespan=lifespan)

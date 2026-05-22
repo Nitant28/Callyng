@@ -46,3 +46,50 @@ route:
 # Resync the uv environment (useful after the folder rename)
 sync:
     uv sync
+
+# ── PostgreSQL (Docker Compose) ─────────────────────────────────────────────
+
+# Start Postgres 16 container (requires Docker Desktop WSL integration or Engine)
+db-up:
+    docker compose up -d postgres
+
+db-down:
+    docker compose down
+
+db-logs:
+    docker compose logs -f postgres
+
+# Wait until Postgres accepts connections
+db-wait:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Waiting for Postgres..."
+    for i in $(seq 1 60); do
+      if docker compose exec -T postgres pg_isready -U aakashvani -d aakashvani >/dev/null 2>&1; then
+        echo "Postgres ready."
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "Postgres did not become ready in time." >&2
+    exit 1
+
+db-migrate: db-wait
+    docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/schema/001_initial.sql
+
+db-seed: db-wait
+    docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/seed/dev_tenant.sql
+
+db-reset:
+    docker compose down -v
+    just db-up
+    just db-wait
+    just db-migrate
+    just db-seed
+
+db-psql:
+    docker compose exec postgres psql -U aakashvani -d aakashvani
+
+# Verify seed + budget allocation helpers (needs db-up + migrate + seed)
+db-verify:
+    uv run python scripts/verify_pg_budget.py
