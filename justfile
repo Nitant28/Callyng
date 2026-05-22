@@ -92,4 +92,4 @@ db-psql:
 
 # Verify seed + budget allocation helpers (needs db-up + migrate + seed)
 db-verify:
-    uv run python scripts/verify_pg_budget.py
+    PYTHONPATH=. uv run python scripts/verify_pg_budget.py
