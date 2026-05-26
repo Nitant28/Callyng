@@ -11,6 +11,7 @@ from lead_context import LeadContext
 from pipecat.services.google.gemini_live.llm import GeminiVADParams
 from google.genai.types import EndSensitivity, StartSensitivity
 from pipecat.transcriptions.language import Language
+from sts_scripts.lead_schema_pyramid import PYRAMID_LEAD_SCHEMA as LEAD_SCHEMA
 from sts_scripts.pyramid_extraction import PYRAMID_EXTRACTION_SCHEMA as EXTRACTION_SCHEMA
 
 # ── Goodbye markers (substring match — triggers auto-hangup fallback) ──────────
@@ -39,7 +40,7 @@ GEMINI_ENABLE_AFFECTIVE_DIALOG = False
 GEMINI_VAD = GeminiVADParams(
     start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
     end_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
-    prefix_padding_ms=200,
+    prefix_padding_ms=300,
     silence_duration_ms=600,
 )
 

@@ -75,7 +75,13 @@ db-wait:
     exit 1
 
 db-migrate: db-wait
+    uv run alembic upgrade head
+
+# Legacy: apply SQL directly via psql (same as pre-Alembic flow)
+db-migrate-psql: db-wait
     docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/schema/001_initial.sql
+    docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/schema/002_compat.sql
+    docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/schema/003_campaign_settlement.sql
 
 db-seed: db-wait
     docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/seed/dev_tenant.sql
@@ -93,3 +99,173 @@ db-psql:
 # Verify seed + budget allocation helpers (needs db-up + migrate + seed)
 db-verify:
     PYTHONPATH=. uv run python scripts/verify_pg_budget.py
+
+db-check: db-wait
+    PYTHONPATH=. uv run python scripts/db_check.py
+
+# ── ADMIN API ─────────────────────────────────────────────────────────────────
+
+create-client name email industry:
+    curl -s -X POST http://localhost:7860/internal/clients \
+      -H "X-Admin-Key: $(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)" \
+      -H "Content-Type: application/json" \
+      -d '{"name":"{{name}}","contact_email":"{{email}}","industry":"{{industry}}"}' | (command -v jq >/dev/null && jq . || cat)
+
+add-credits client_id amount:
+    curl -s -X PATCH http://localhost:7860/internal/clients/{{client_id}}/credits \
+      -H "X-Admin-Key: $(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)" \
+      -H "Content-Type: application/json" \
+      -d '{"amount":{{amount}},"note":"Manual top-up"}' | (command -v jq >/dev/null && jq . || cat)
+
+create-bot client_id name route script_id number credits_per_min:
+    curl -s -X POST http://localhost:7860/internal/bot-configs \
+      -H "X-Admin-Key: $(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)" \
+      -H "Content-Type: application/json" \
+      -d '{"client_id":"{{client_id}}","name":"{{name}}","route":"{{route}}","script_id":"{{script_id}}","telephony_number":"{{number}}","credits_per_minute":{{credits_per_min}}}' | (command -v jq >/dev/null && jq . || cat)
+
+create-campaign client_id bot_config_id name budget:
+    curl -s -X POST http://localhost:7860/internal/campaigns \
+      -H "X-Admin-Key: $(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)" \
+      -H "Content-Type: application/json" \
+      -d '{"client_id":"{{client_id}}","bot_config_id":"{{bot_config_id}}","name":"{{name}}","budget_credits":{{budget}}}' | (command -v jq >/dev/null && jq . || cat)
+
+list-clients:
+    curl -s http://localhost:7860/internal/clients \
+      -H "X-Admin-Key: $(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)" | (command -v jq >/dev/null && jq . || cat)
+
+list-calls:
+    curl -s http://localhost:7860/internal/calls \
+      -H "X-Admin-Key: $(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)" | (command -v jq >/dev/null && jq . || cat)
+
+# ── CLIENT API ────────────────────────────────────────────────────────────────
+
+client-campaigns api_key:
+    curl -s http://localhost:7860/api/campaigns \
+      -H "Authorization: Bearer {{api_key}}" | (command -v jq >/dev/null && jq . || cat)
+
+upload-leads api_key campaign_id file:
+    curl -s -X POST http://localhost:7860/api/campaigns/{{campaign_id}}/leads/upload \
+      -H "Authorization: Bearer {{api_key}}" \
+      -F "file=@{{file}}" | (command -v jq >/dev/null && jq . || cat)
+
+start-campaign api_key campaign_id:
+    curl -s -X PATCH http://localhost:7860/api/campaigns/{{campaign_id}}/start \
+      -H "Authorization: Bearer {{api_key}}" | (command -v jq >/dev/null && jq . || cat)
+
+stop-campaign api_key campaign_id:
+    curl -s -X PATCH http://localhost:7860/api/campaigns/{{campaign_id}}/stop \
+      -H "Authorization: Bearer {{api_key}}" | (command -v jq >/dev/null && jq . || cat)
+
+cancel-campaign api_key campaign_id:
+    curl -s -X PATCH http://localhost:7860/api/campaigns/{{campaign_id}}/cancel \
+      -H "Authorization: Bearer {{api_key}}" | (command -v jq >/dev/null && jq . || cat)
+
+credits api_key:
+    curl -s http://localhost:7860/api/credits \
+      -H "Authorization: Bearer {{api_key}}" | (command -v jq >/dev/null && jq . || cat)
+
+watch-call api_key session_call_id:
+    curl -s http://localhost:7860/api/calls/{{session_call_id}} \
+      -H "Authorization: Bearer {{api_key}}" | (command -v jq >/dev/null && jq . || cat)
+
+# Release leads stuck in ``calling`` (no active Plivo call). Usage: just release-stuck-leads <campaign-uuid>
+release-stuck-leads campaign_id:
+    PYTHONPATH=. uv run python scripts/release_stuck_leads.py {{campaign_id}}
+
+# Fix denorm campaign counters from actual lead rows (recovery)
+reconcile-campaign campaign_id:
+    PYTHONPATH=. uv run python scripts/reconcile_campaign.py {{campaign_id}}
+
+# Set Plivo-aligned concurrent dial limit for every client + campaign (default 2)
+set-max-concurrent limit="2":
+    PYTHONPATH=. uv run python scripts/set_max_concurrent.py {{limit}}
+
+# Show Plivo prepaid cash_credits (USD)
+plivo-balance:
+    PYTHONPATH=. uv run python scripts/plivo_balance.py
+
+# ── TESTING ───────────────────────────────────────────────────────────────────
+
+test-call phone name="Test Lead" city="Pune":
+    BOT_ROUTE={{env_var_or_default("BOT_ROUTE","sts")}} \
+    bash scripts/call.sh {{phone}} "{{name}}" "{{city}}"
+
+sqlite-calls n="5":
+    uv run python scripts/sqlite_calls.py {{n}}
+
+test-phase2:
+    uv run pytest tests/test_phase2.py -v
+
+# ── INSPECTION (direct DB — no server needed) ─────────────────────────────────
+
+# Show client details by name or UUID. Usage: just show-client "Pyramid"
+show-client name_or_id:
+    PYTHONPATH=. uv run python scripts/cli.py show-client "{{name_or_id}}"
+
+# List bot configs for a client. Usage: just client-bots "Pyramid"
+client-bots name_or_id:
+    PYTHONPATH=. uv run python scripts/cli.py client-bots "{{name_or_id}}"
+
+# List n8n webhooks for a client. Usage: just client-webhooks "Pyramid"
+client-webhooks name_or_id:
+    PYTHONPATH=. uv run python scripts/cli.py client-webhooks "{{name_or_id}}"
+
+# List all campaigns for a client with counters
+client-campaigns-all name_or_id:
+    PYTHONPATH=. uv run python scripts/cli.py client-campaigns "{{name_or_id}}"
+
+# Show full campaign detail (budget, counters, config)
+show-campaign name_or_id:
+    PYTHONPATH=. uv run python scripts/cli.py show-campaign "{{name_or_id}}"
+
+# List leads in a campaign. Usage: just campaign-leads "Pune Dec" --status pending --limit 10
+campaign-leads name_or_id *FLAGS:
+    PYTHONPATH=. uv run python scripts/cli.py campaign-leads "{{name_or_id}}" {{FLAGS}}
+
+# Recent call logs for a campaign
+campaign-calls name_or_id *FLAGS:
+    PYTHONPATH=. uv run python scripts/cli.py campaign-calls "{{name_or_id}}" {{FLAGS}}
+
+# Full call detail (transcript, extraction, billing). Usage: just show-call <session_call_id>
+show-call session_call_id *FLAGS:
+    PYTHONPATH=. uv run python scripts/cli.py show-call "{{session_call_id}}" {{FLAGS}}
+
+# Show lead detail by UUID or phone number
+show-lead id_or_phone:
+    PYTHONPATH=. uv run python scripts/cli.py show-lead "{{id_or_phone}}"
+
+# All call history for a phone number across all campaigns
+lead-history phone:
+    PYTHONPATH=. uv run python scripts/cli.py lead-history "{{phone}}"
+
+# ── POST-CALL DEBUGGING ──────────────────────────────────────────────────────
+
+# Show calls where extraction failed or outcome is null
+failed-extractions *FLAGS:
+    PYTHONPATH=. uv run python scripts/cli.py failed-extractions {{FLAGS}}
+
+# Show calls stuck in_progress beyond grace period
+stuck-calls *FLAGS:
+    PYTHONPATH=. uv run python scripts/cli.py stuck-calls {{FLAGS}}
+
+# Re-run Groq extraction on an existing call transcript
+rerun-extraction session_call_id:
+    PYTHONPATH=. uv run python scripts/cli.py rerun-extraction "{{session_call_id}}"
+
+# ── OPERATOR ACTIONS ──────────────────────────────────────────────────────────
+
+# Register an n8n webhook for a client. Usage: just register-webhook "Pyramid" "lead_qualified" "http://localhost:5678/webhook/xyz" "secret123"
+register-webhook name_or_id event url secret:
+    PYTHONPATH=. uv run python scripts/cli.py register-webhook "{{name_or_id}}" "{{event}}" "{{url}}" "{{secret}}"
+
+# Reset a lead to pending with 0 attempts (for retesting)
+reset-lead id_or_phone *FLAGS:
+    PYTHONPATH=. uv run python scripts/cli.py reset-lead "{{id_or_phone}}" {{FLAGS}}
+
+# Manually set outcome on a call_log + lead
+force-outcome session_call_id outcome:
+    PYTHONPATH=. uv run python scripts/cli.py force-outcome "{{session_call_id}}" "{{outcome}}"
+
+# Force-settle a campaign and return unused budget to client
+settle-campaign name_or_id:
+    PYTHONPATH=. uv run python scripts/cli.py settle-campaign "{{name_or_id}}"

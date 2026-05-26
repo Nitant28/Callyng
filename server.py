@@ -18,6 +18,8 @@ from loguru import logger
 
 from call_log_db import init_db
 from db import postgres as pg_db
+from plivo_hangup import handle_plivo_hangup
+from telephony import build_hangup_url, make_plivo_call
 
 load_dotenv(override=True)
 
@@ -150,29 +152,6 @@ async def _prewarm_gemini(call_id: str) -> None:
             event.set()
 
 
-async def make_plivo_call(
-    session: aiohttp.ClientSession,
-    to_number: str,
-    from_number: str,
-    answer_url: str,
-) -> dict:
-    auth_id = os.getenv("PLIVO_AUTH_ID")
-    auth_token = os.getenv("PLIVO_AUTH_TOKEN")
-    url = f"https://api.plivo.com/v1/Account/{auth_id}/Call/"
-    auth = aiohttp.BasicAuth(auth_id, auth_token)
-    data = {
-        "to": to_number,
-        "from": from_number,
-        "answer_url": answer_url,
-        "answer_method": "GET",
-    }
-    async with session.post(url, json=data, auth=auth) as resp:
-        if resp.status != 201:
-            error = await resp.text()
-            raise Exception(f"Plivo error ({resp.status}): {error}")
-        return await resp.json()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Pre-import heavy pipecat extras so the first /ws has zero import lag
@@ -195,8 +174,10 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"[startup] Call log DB init failed ({exc}); continuing without persistence")
 
+    app.state.pool = None
     try:
         pool = await pg_db.init_pool()
+        app.state.pool = pool
         if pool is not None:
             logger.info("[startup] PostgreSQL pool ready")
         else:
@@ -204,8 +185,39 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"[startup] PostgreSQL pool init failed ({exc}); continuing without Postgres")
 
+    app.state.dialer_tasks: dict[str, asyncio.Task] = {}
     app.state.session = aiohttp.ClientSession()
+    app.state.stale_call_log_task = None
+    if pool is not None:
+        from dialer.maintenance import (
+            run_stale_call_log_sweep,
+            stale_call_log_loop,
+            stale_call_log_sweep_enabled,
+            stale_call_log_sweep_seconds,
+        )
+
+        if stale_call_log_sweep_enabled():
+            try:
+                await run_stale_call_log_sweep(pool)
+            except Exception as exc:
+                logger.warning("[startup] Stale call_log sweep failed: {}", exc)
+            interval = stale_call_log_sweep_seconds()
+            app.state.stale_call_log_task = asyncio.create_task(
+                stale_call_log_loop(pool, interval)
+            )
+            logger.info(
+                "[startup] Stale call_log sweep every {}s (grace {} min)",
+                interval,
+                pg_db.live_call_grace_minutes(),
+            )
     yield
+    stale_task = getattr(app.state, "stale_call_log_task", None)
+    if stale_task is not None and not stale_task.done():
+        stale_task.cancel()
+        try:
+            await stale_task
+        except asyncio.CancelledError:
+            pass
     await app.state.session.close()
     await pg_db.close_pool()
 
@@ -258,6 +270,7 @@ async def start_call(request: Request) -> JSONResponse:
     if body_data:
         encoded = urllib.parse.quote(json.dumps(body_data))
         answer_url += f"&body_data={encoded}"
+    hangup_url = build_hangup_url(call_id, host=host)
 
     try:
         result = await make_plivo_call(
@@ -265,6 +278,7 @@ async def start_call(request: Request) -> JSONResponse:
             to_number=phone_number,
             from_number=os.getenv("PLIVO_PHONE_NUMBER", ""),
             answer_url=answer_url,
+            hangup_url=hangup_url,
         )
         call_uuid = result.get("request_uuid", "unknown")
     except Exception as e:
@@ -280,6 +294,11 @@ async def start_call(request: Request) -> JSONResponse:
         "phone_number": phone_number,
         "route": BOT_ROUTE,
     })
+
+
+@app.api_route("/plivo-hangup", methods=["GET", "POST"])
+async def plivo_hangup(request: Request):
+    return await handle_plivo_hangup(request)
 
 
 @app.api_route("/answer", methods=["GET", "POST"])
@@ -311,6 +330,13 @@ async def answer_xml(
             # Clean up; the session is single-use.
             _warmup_ready.pop(call_id, None)
 
+    if call_id and CallUUID:
+        pool = getattr(request.app.state, "pool", None)
+        if pool is not None:
+            asyncio.create_task(
+                pg_db.link_call_log_plivo_sid(pool, call_id, CallUUID)
+            )
+
     host = request.headers.get("host", "localhost")
     ws_url = f"wss://{host}/ws"
 
@@ -339,6 +365,21 @@ async def answer_xml(
     return HTMLResponse(content=xml, media_type="application/xml")
 
 
+def _resolve_bot(body_data: dict):
+    """Phase 2: per-call route from _pg; Phase 0: module-level _bot."""
+    pg = body_data.get("_pg") if isinstance(body_data.get("_pg"), dict) else None
+    if pg and pg.get("route"):
+        route = pg["route"]
+        if route == "cascaded":
+            from bot_cascade import bot as dynamic_bot
+
+            return dynamic_bot
+        from bot_sts import bot as dynamic_bot
+
+        return dynamic_bot
+    return _bot
+
+
 @app.websocket("/ws")
 async def ws_endpoint(
     websocket: WebSocket,
@@ -358,14 +399,20 @@ async def ws_endpoint(
     # Correlate with POST /start response `call_id` (UUID). Not set for ad-hoc WS tests.
     if call_id:
         body_data["_session_call_id"] = call_id
+        pg = body_data.get("_pg")
+        if isinstance(pg, dict):
+            from call_transcript import register_pg_context
+
+            register_pg_context(call_id, pg)
 
     runner_args = WebSocketRunnerArguments(
         websocket=websocket,
         body=body_data,
     )
 
+    bot_fn = _resolve_bot(body_data)
     try:
-        await _bot(runner_args)
+        await bot_fn(runner_args)
     except Exception as e:
         import traceback
         logger.error(f"Bot error: {e}\n{traceback.format_exc()}")
@@ -375,6 +422,18 @@ async def ws_endpoint(
 @app.get("/health")
 async def health():
     return {"status": "ok", "route": BOT_ROUTE}
+
+
+def _register_api_routes() -> None:
+    from api.routes import calls, campaigns, credits, internal
+
+    app.include_router(internal.router)
+    app.include_router(campaigns.router)
+    app.include_router(calls.router)
+    app.include_router(credits.router)
+
+
+_register_api_routes()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,106 @@
+{
+  "name": "Aakashvani Sample Webhook Receiver",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aakashvani-webhook",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "webhookId": "test-webhook-1234"
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "type": "SHA256",
+        "value": "={{JSON.stringify($json.body, null, 0)}}",
+        "dataPropertyName": "calculated_hmac",
+        "secret": "my-secret-key-123"
+      },
+      "name": "Calculate HMAC",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "=sha256={{$json.calculated_hmac}}",
+              "value2": "={{$node[\"Webhook\"].json[\"headers\"][\"x-aakashvani-signature\"]}}"
+            }
+          ]
+        }
+      },
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## HMAC Verification Failed\nThe payload signature did not match. This request might have been tampered with or the secret is wrong."
+      },
+      "name": "Unauthorized",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        850,
+        450
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Process Webhook\nPayload is verified. You can now use Google Sheets, WhatsApp, or CRM nodes here."
+      },
+      "name": "Authorized",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        850,
+        150
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Calculate HMAC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate HMAC": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1"
+}

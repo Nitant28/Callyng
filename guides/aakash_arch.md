@@ -3,7 +3,7 @@
 > This is the source of truth for database schema, system behaviour, and implementation contracts.
 > Last updated: May 2026
 >
-> **Related documents:** [README.md](README.md) (dev setup) · [ROADMAP.md](ROADMAP.md) (phases & vision).
+> **Related documents:** [README.md](../README.md) (dev setup) · [ROADMAP.md](../ROADMAP.md) (phases & vision).
 > ROADMAP §6 defers Postgres schema detail to this file. If README or ROADMAP conflict with this doc, **this doc wins**.
 
 ---

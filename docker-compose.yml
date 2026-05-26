@@ -17,5 +17,23 @@ services:
       timeout: 5s
       retries: 5
 
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: aakashvani-n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - N8N_ENFORCEMENT_SECURITY=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+
 volumes:
   pgdata:
+  n8n_data:

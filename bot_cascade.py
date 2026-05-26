@@ -252,6 +252,11 @@ async def bot(runner_args: RunnerArguments):
         auth_token=os.getenv("PLIVO_AUTH_TOKEN", ""),
     )
 
+    from_number = (
+        bot_config.get("telephony_number")
+        or os.getenv("PLIVO_PHONE_NUMBER", "")
+    )
+
     transport = FastAPIWebsocketTransport(
         websocket=runner_args.websocket,
         params=FastAPIWebsocketParams(

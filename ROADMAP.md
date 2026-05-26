@@ -2,7 +2,9 @@
 
 > The long-form plan. For day-to-day usage see [README.md](README.md).
 >
-> **Architecture reference:** [aakash_arch.md](aakash_arch.md) is the source of truth for database schema, credits/billing, script-file configuration, dialer design, and API contracts. This roadmap describes vision, phases, and status. If anything here conflicts with the arch doc, **arch wins**.
+> **Architecture reference:** [guides/aakash_arch.md](guides/aakash_arch.md) is the source of truth for database schema, credits/billing, script-file configuration, dialer design, and API contracts. This roadmap describes vision, phases, and status. If anything here conflicts with the arch doc, **arch wins**.
+>
+> **Other docs:** [guides/](guides/) — operator [CLI](guides/CLI_GUIDE.md), [E2E testing](guides/TESTING.md). [handoff/](handoff/) — agent session notes and debugging context.
 >
 > Status legend used throughout this document:
 > - `done` — built, tested, in main
@@ -23,8 +25,9 @@
 7. [Pricing strategy](#7-pricing-strategy)
 8. [Compliance and legal](#8-compliance-and-legal)
 9. [Phased roadmap](#9-phased-roadmap)
-10. [Explicitly deferred](#10-explicitly-deferred)
-11. [Context for AI assistants](#11-context-for-ai-assistants)
+10. [Pre-launch client workflow priorities](#10-pre-launch-client-workflow-priorities)
+11. [Explicitly deferred](#11-explicitly-deferred)
+12. [Context for AI assistants](#12-context-for-ai-assistants)
 
 ---
 
@@ -136,7 +139,7 @@ Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`d
 | Persistence     | SQLite (Phase 0) → PostgreSQL 16  | SQLite done (Phase 0 calls); Postgres schema + pool done (Phase 2) |
 | Cache / pub-sub | Redis 7                           | maybe (Phase 3 SSE live monitor)             |
 | Vector DB       | ChromaDB                          | maybe — only if a client actually needs RAG  |
-| Frontend        | None (CLI + curl) → React SPA (one build, all subdomains) | planned (Phase 1+)           |
+| Frontend        | Operator CLI (`scripts/cli.py` + `just show-*`) + curl → React SPA | CLI done; SPA planned (Phase 2B) |
 | Reverse proxy   | nginx + wildcard TLS (`*.aakashvani.in`) | planned (deploy time)                 |
 | Containerization| Docker Compose (fastapi, postgres, n8n) | postgres service done locally; full stack at deploy |
 | Server          | Hetzner CX32 (Germany)            | planned — consider AWS Mumbai if latency hurts |
@@ -177,7 +180,7 @@ flowchart TD
     Plivo --> Callee
 ```
 
-Target architecture (after Phase 2) — see also [aakash_arch.md §1](aakash_arch.md) and §7:
+Target architecture (after Phase 2) — see also [guides/aakash_arch.md §1](guides/aakash_arch.md) and §7:
 
 ```mermaid
 flowchart TD
@@ -224,7 +227,7 @@ flowchart TD
     RouteA -.optional RAG.-> Chroma
 ```
 
-**Script-file config:** `bot_configs` is a registry (`route`, `script_id`, `credits_per_minute`, Plivo number). Prompts, VAD, `LEAD_SCHEMA`, and `EXTRACTION_SCHEMA` live in `sts_scripts/` / `cascade_scripts/` — see [aakash_arch.md §5](aakash_arch.md).
+**Script-file config:** `bot_configs` is a registry (`route`, `script_id`, `credits_per_minute`, Plivo number). Prompts, VAD, `LEAD_SCHEMA`, and `EXTRACTION_SCHEMA` live in `sts_scripts/` / `cascade_scripts/` — see [guides/aakash_arch.md §5](guides/aakash_arch.md).
 
 ---
 
@@ -268,7 +271,7 @@ POST   /internal/webhook-configs
 GET    /internal/calls
 ```
 
-**Webhooks (Phase 2):** per-client, per-event URLs in `webhook_configs`. Events: `lead_qualified`, `lead_not_interested`, `lead_callback`, `lead_failed`, `campaign_completed`. Outbound POSTs signed with HMAC header `X-Aakashvani-Signature: sha256=<hex>` — see [aakash_arch.md §9–10](aakash_arch.md).
+**Webhooks (Phase 2):** per-client, per-event URLs in `webhook_configs`. Events: `lead_qualified`, `lead_not_interested`, `lead_callback`, `lead_failed`, `campaign_completed`. Outbound POSTs signed with HMAC header `X-Aakashvani-Signature: sha256=<hex>` — see [guides/aakash_arch.md §9–10](guides/aakash_arch.md).
 
 ---
 
@@ -289,7 +292,7 @@ Row inserted at **call end** today. Phase 2 moves to insert-at-start + `in_progr
 
 ### Phase 2+ — PostgreSQL 16
 
-**Full schema:** [aakash_arch.md §2](aakash_arch.md).
+**Full schema:** [guides/aakash_arch.md §2](guides/aakash_arch.md).
 
 Summary tables:
 
@@ -328,7 +331,7 @@ billed_minutes = ceil(duration_seconds / 60)
 credits_charged = billed_minutes × credits_per_minute
 ```
 
-**Campaign budgets:** at campaign start, `clients.balance_credits -= budget_credits` (one atomic deduction). Per call end, `campaigns.budget_used_credits += credits_charged`. On campaign complete, unused budget returns to master balance. See [aakash_arch.md §4](aakash_arch.md).
+**Campaign budgets:** at campaign start, `clients.balance_credits -= budget_credits` (one atomic deduction). Per call end, `campaigns.budget_used_credits += credits_charged`. On campaign complete, unused budget returns to master balance. See [guides/aakash_arch.md §4](guides/aakash_arch.md).
 
 **CostGuard (Phase 2):** before each dial, require `budget_credits - budget_used_credits >= 2` (covers at least one billed minute).
 
@@ -395,7 +398,7 @@ Global competitors charge $0.05-0.15/min = ₹4-12/min. Indian human call-centre
 - **Caller ID**: must show a registered Plivo number.
 - **DPDP Act 2023**: store only necessary lead data, support deletion-on-request, log where each lead's consent originated.
 
-Lead state machine and DNC-on-upload: [aakash_arch.md §6](aakash_arch.md).
+Lead state machine and DNC-on-upload: [guides/aakash_arch.md §6](guides/aakash_arch.md).
 
 ```python
 # compliance.py — runs before every dial
@@ -488,26 +491,61 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 
 - `EXTRACTION_SCHEMA` in all active script modules
 - Schema-driven `post_call_extract.py`
-- README + ROADMAP aligned with [aakash_arch.md](aakash_arch.md)
+- README + ROADMAP aligned with [guides/aakash_arch.md](guides/aakash_arch.md)
+- `env.example` rewritten with full Phase 2 variable documentation
+- justfile extended with admin, client API, DB, testing, and operator CLI recipes
+- Docs layout: `guides/` (CLI, testing, architecture), `handoff/` (session notes), `fixtures/` (sample CSVs)
+- Operator CLI: [guides/CLI_GUIDE.md](guides/CLI_GUIDE.md) + [scripts/cli.py](scripts/cli.py) (Postgres inspection, post-call debug, lead reset)
 
 | Milestone | Status |
 | --------- | ------ |
-| Postgres migration + schema from [aakash_arch.md §2](aakash_arch.md) | done |
+| Postgres migration + schema from [guides/aakash_arch.md §2](guides/aakash_arch.md) | done |
+| Alembic migrations (`just db-migrate`) | done |
 | `clients`, `bot_configs`, `campaigns`, `leads`, `webhook_configs` tables | done |
 | Docker Compose `postgres:16` + `just db-*` recipes | done |
-| `asyncpg` pool + budget helpers in `db/postgres.py` | done |
-| `client_id` on every query | in progress (helpers enforce; APIs not wired) |
-| Credits + campaign budget pre-allocation + CostGuard | in progress (allocate/return in `db/postgres.py`; CostGuard dialer pending) |
-| `post_call_processor` (lead state machine, counters, webhooks) | planned |
-| Concurrent dialer — Postgres `FOR UPDATE SKIP LOCKED` | planned |
-| Admin `/internal/*` endpoints first (Phase 2A) | planned |
-| Client `/api/*` endpoints (Phase 2B) | planned |
-| Live transcript polling (`in_progress`, per-turn writes) | planned |
-| Retire `BOT_ROUTE`; `bot_config_id` + `script_id` at call time | planned |
-| Manual credit top-up (admin) | planned |
+| `asyncpg` pool + full `db/postgres.py` query layer | done |
+| `client_id` on every query | done |
+| Credits + campaign budget pre-allocation + CostGuard | done |
+| `post_call_processor` (lead state machine, counters, webhooks) | done |
+| Concurrent dialer — Postgres `FOR UPDATE SKIP LOCKED` | done |
+| Admin `/internal/*` endpoints (Phase 2A) | done |
+| Client `/api/*` endpoints (Phase 2B) | done |
+| Live transcript polling (`in_progress`, per-turn writes) | done |
+| Parallel Postgres write path in `call_transcript.py` | done |
+| SQLite write path preserved for bot isolation testing (`just test-call`, `just sqlite-calls`) | done |
+| Dynamic `/ws` bot route from `bot_configs` (`_pg` context) | done |
+| Manual credit top-up (admin) | done |
+| Post-call active-lead guard + idempotent `call_logs` finalize | done |
+| `PATCH /api/campaigns/{id}/cancel` + idempotent budget settlement (`budget_returned_at`) | done |
+| Global stale `in_progress` call_log sweeper (startup + periodic) | done |
+| Operator CLI (`scripts/cli.py`, `just show-*`, `failed-extractions`, `rerun-extraction`, etc.) | done |
+| Repository docs: `guides/`, `handoff/`, `fixtures/` | done |
+| Client React SPA (Phase 2B) | planned |
+| Retire `BOT_ROUTE` entirely | planned |
 | Subdomain routing: `client-a.aakashvani.in` via nginx | planned |
 
-Build order: [aakash_arch.md §13](aakash_arch.md) (admin-first).
+**Pre-launch client workflow (priority order — build with Phase 2B SPA):**
+
+These four items are the highest-priority **client-facing** work after the Phase 2 backend. They form one coherent “configure → validate → test → launch” flow on a **draft** campaign. Full spec: [§10 Pre-launch client workflow priorities](#10-pre-launch-client-workflow-priorities).
+
+| Priority | Feature | Status |
+| -------- | ------- | ------ |
+| 1 | Data cleaning + pre-upload report | planned |
+| 2 | Draft-state lead management (edit, delete, manual add) | planned |
+| 3 | Single test call (from draft screen) | planned |
+| 4 | Lock on Start (`PATCH .../start` only from `draft`) | planned |
+
+**Phase 2 hardening — deferred (not in last implementation pass):**
+
+- Snapshot `credits_per_minute` on campaign create or on `call_logs` at dial start (today: live read from `bot_configs` at post-call).
+- Document CostGuard as a soft guard under concurrent dialers (possible ~one-call budget overshoot).
+- `call_logs.attempt_kind` (`initial` | `callback` | `cold_retry`) for debugging attempt mix.
+- Per-client Plivo credentials (multi-account); today one `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` per server.
+- nginx `allow 127.0.0.1` for `/internal/` (ops handoff item).
+- Admin `PATCH /internal/campaigns/{id}` without `client_id` in JSON body (handoff item).
+- Auto-fail `callback_scheduled` leads on **pause** (`stop`); only **cancel** terminalizes non-terminal leads by design.
+
+Build order: [guides/aakash_arch.md §13](guides/aakash_arch.md) (admin-first).
 
 ### Phase 3 — Bot config UI + analytics + billing automation
 **Status:** planned  
@@ -536,7 +574,7 @@ Build order: [aakash_arch.md §13](aakash_arch.md) (admin-first).
 | n8n WhatsApp workflow templates | planned |
 | Browser test path via `SmallWebRTCTransport` | planned |
 
-Recording flow: [aakash_arch.md](aakash_arch.md) and §11 below.
+Recording flow: [guides/aakash_arch.md](guides/aakash_arch.md) and [§12](#12-context-for-ai-assistants) below.
 
 ### Phase 5 — RAG (only if a client requests it)
 **Status:** maybe
@@ -557,7 +595,39 @@ Recording flow: [aakash_arch.md](aakash_arch.md) and §11 below.
 
 ---
 
-## 10. Explicitly deferred
+## 10. Pre-launch client workflow priorities
+
+Before clients run production campaigns, they need a safe path from CSV upload to “Start” without burning credits on bad data or irreversible mistakes. The backend supports draft campaigns and CSV upload today; the items below are the **mandatory next client-facing work** (API + React SPA), in strict priority order.
+
+| # | Feature | Why it matters | Scope (planned) |
+| - | ------- | -------------- | ----------------- |
+| **1** | **Data cleaning + pre-upload report** | Most critical — catches bad phones, missing fields, and schema violations **before** rows enter Postgres. Prevents polluted campaigns and wasted dialer credits. | On CSV upload (or dry-run endpoint): normalize phones to E.164, validate against script `LEAD_SCHEMA`, dedupe within file, flag DNC/opt-out, return a structured report (accepted / rejected / fixed rows with reasons). Client must acknowledge or fix before commit. |
+| **2** | **Draft-state lead management** | One coherent feature, not three tickets — while `campaigns.status = 'draft'`, clients can **edit** lead fields, **delete** leads, and **manually add** a single lead without re-uploading the whole CSV. | `GET/PATCH/DELETE /api/campaigns/{id}/leads/{lead_id}`, `POST /api/campaigns/{id}/leads` (manual). All mutations rejected once status leaves `draft` (409). SPA: draft campaign detail as the lead workspace. |
+| **3** | **Single test call** | Pre-launch confidence — one real Plivo call using the campaign’s `bot_config` and a chosen lead (or test number) before full dial. | From draft screen: “Test call” → dials one lead, writes `call_logs`, shows transcript + extraction in UI. Does not start the concurrent dialer or flip campaign to `running`. Reuses Phase 0 `/start` path with campaign/lead context where possible. |
+| **4** | **Lock on Start** | Prevents accidental or API-driven starts from `paused` / wrong state; enforces the draft → running lifecycle at the server. | `PATCH /api/campaigns/{id}/start` returns **409** unless `status = 'draft'` (and existing budget checks). After success, status → `running` and dialer starts. UI disables Start until report is clean and (optionally) test call succeeded. |
+
+**UX flow (target):**
+
+```mermaid
+flowchart LR
+    Upload[Upload CSV] --> Report[Pre-upload report]
+    Report --> Draft[Draft lead workspace]
+    Draft --> Test[Single test call]
+    Test --> Start[Start campaign]
+    Start --> Running[Dialer running]
+```
+
+**Implementation notes:**
+
+- Priority 1 can ship as API-only first (enhanced upload response or `POST .../leads/upload?dry_run=1`); SPA shows the report table.
+- Priority 2–4 belong on the same **draft campaign detail** route in the React SPA (`/campaigns/{id}` when draft).
+- Today `PATCH /api/campaigns/{id}/start` does **not** enforce `draft`-only transition — that is item 4.
+- `just test-call` remains the operator/dev path; priority 3 is the **client-authenticated**, campaign-scoped equivalent.
+- Campaign ops today: [guides/TESTING.md](guides/TESTING.md) (E2E), [guides/CLI_GUIDE.md](guides/CLI_GUIDE.md) (inspection/debug), sample leads in [fixtures/test_leads.csv](fixtures/test_leads.csv).
+
+---
+
+## 11. Explicitly deferred
 
 These items are sometimes asked about but are not on the near-term plan:
 
@@ -572,21 +642,26 @@ These items are sometimes asked about but are not on the near-term plan:
 
 ---
 
-## 11. Context for AI assistants
+## 12. Context for AI assistants
 
 If you (an LLM agent) are reading this to help build Aakashvani, here is the cheat sheet.
 
 ### What is built today (May 2026)
 
 1. WSL2 + Python 3.12 + uv environment, all imports working.
-2. `server.py` — FastAPI: `/start`, `/answer`, `/ws`, `/health`. `BOT_ROUTE` env selects `bot_sts` or `bot_cascade` at module load.
-3. `bot_sts.py` — Gemini Live STS; loads `sts_scripts/<STS_SCRIPT>`. `end_call` tool, context window compression, prewarm, goodbye hangup fallback.
-4. `bot_cascade.py` — Sarvam STT + Groq + Cartesia; loads `cascade_scripts/<CASCADE_SCRIPT>`. Live `push_lead_data` + `end_call`.
-5. Script modules export prompts, VAD, models, and **`EXTRACTION_SCHEMA`**. Post-call Groq prompt is built at runtime from that schema (`post_call_extract.py`).
-6. SQLite `call_logs` per completed call; n8n webhook via `N8N_WEBHOOK_URL`.
-7. `justfile` + `scripts/call.sh` for dev ergonomics.
+2. `server.py` — FastAPI: `/start`, `/answer`, `/ws`, `/health`, `/plivo-hangup`; Phase 2 mounts `/api/*` and `/internal/*` when `DATABASE_URL` is set.
+3. `bot_sts.py` / `bot_cascade.py` — campaign calls resolve bot from `bot_configs` via `_pg` on `/ws`.
+4. Postgres multi-tenant schema, `db/postgres.py`, Alembic (`just db-migrate`), credits + campaign budgets.
+5. `post_call_processor.py`, concurrent dialer (`dialer/concurrent_dialer.py`), lead upload, per-event webhooks.
+6. Campaign **pause** (`PATCH .../stop`) vs **cancel** (`PATCH .../cancel`) with deferred credit return while calls are in flight.
+7. Background stale `call_logs` sweep (`STALE_CALL_LOG_SWEEP_*` env).
+8. Phase 0 path preserved: SQLite `call_logs`, `just test-call`, `N8N_WEBHOOK_URL`.
+9. Operator CLI — [guides/CLI_GUIDE.md](guides/CLI_GUIDE.md): inspect clients/campaigns/calls, debug extractions, reset leads; no HTTP server required.
+10. Docs: [guides/](guides/) (how-to), [handoff/](handoff/) (agent handoffs), root keeps only `README.md` + `ROADMAP.md`.
 
-**Not built yet:** `post_call_processor`, concurrent dialer, `/api/*` and `/internal/*` routes, live transcript polling, Postgres-backed call pipeline (schema + pool exist; `just call` still uses SQLite).
+**Not built yet:** Client React SPA, pre-launch workflow ([§10](#10-pre-launch-client-workflow-priorities)), Razorpay, campaign scheduling UI, SSE live monitor, recordings (Phase 3–4). See **Phase 2 hardening — deferred** above.
+
+**Operator vs client API:** Clients use Bearer `/api/*` (`just upload-leads`, `watch-call`). Operators use `scripts/cli.py` or `just show-*` against Postgres directly.
 
 ### Script module contract (Phase 2+)
 
@@ -595,7 +670,7 @@ Loaded via `bot_configs.script_id` + `route`:
 - `sts` → `sts_scripts.<script_id>`
 - `cascaded` → `cascade_scripts.<script_id>`
 
-STS required attributes (see [aakash_arch.md §5](aakash_arch.md)):
+STS required attributes (see [guides/aakash_arch.md §5](guides/aakash_arch.md)):
 
 ```python
 _STS_SCRIPT_ATTRS = (
@@ -656,12 +731,12 @@ Deprecated, do not use: `OpenAILLMContext`, `pipecat.transports.services.daily`,
 
 ### Next deliverables (Phase 2 — current)
 
-Admin-first build order from [aakash_arch.md §13](aakash_arch.md):
+Admin-first build order from [guides/aakash_arch.md §13](guides/aakash_arch.md):
 
 1. ~~Postgres + full schema~~ (done — `docker-compose.yml`, `db/schema/001_initial.sql`, `just db-*`)
 2. `/internal/clients`, `/internal/bot-configs`, `/internal/campaigns`, credit top-up, webhook configs
 3. `post_call_processor`, lead upload (`LEAD_SCHEMA`), concurrent dialer
-4. Client `/api/*` endpoints + React SPA (Phase 2B)
+4. Client React SPA (Phase 2B) + [pre-launch workflow priorities](#10-pre-launch-client-workflow-priorities) (data report → draft leads → test call → draft-only start)
 
 **Phase 0** is complete. **`SmallWebRTCTransport`** is Phase 4.
 

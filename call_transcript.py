@@ -19,6 +19,38 @@ from n8n_webhook import send_call_completed_webhook
 from post_call_extract import extract_post_call, normalize_post_call_extraction
 from pricing_sts import compute_sts_cost_inr
 
+_PG_CONTEXT: dict[str, dict[str, Any]] = {}
+_DEV_CLIENT_ID = "00000000-0000-4000-8000-000000000001"
+_PG_WRITE_TIMEOUT_S = 5.0
+
+
+def register_pg_context(session_call_id: str, pg: dict[str, Any]) -> None:
+    if session_call_id and pg:
+        _PG_CONTEXT[session_call_id] = pg
+
+
+def pop_pg_context(session_call_id: str | None) -> dict[str, Any] | None:
+    if not session_call_id:
+        return None
+    return _PG_CONTEXT.pop(session_call_id, None)
+
+
+def _pg_pool():
+    try:
+        from db import postgres as pg_db
+
+        return pg_db.get_pool()
+    except Exception:
+        return None
+
+
+async def _pg_write(coro):
+    try:
+        return await asyncio.wait_for(coro, timeout=_PG_WRITE_TIMEOUT_S)
+    except Exception as exc:
+        logger.warning("postgres call_log write skipped: {}", exc)
+        return None
+
 # STS bootstrap user message prefix (see bot_sts.py) — omit from stored transcripts.
 _STS_BOOTSTRAP_PREFIX = "The call has just connected."
 
@@ -29,10 +61,31 @@ _MAX_WEBHOOK_TRANSCRIPT_JSON_CHARS = 120_000
 class TranscriptBuffer:
     """Collects user/assistant turns from aggregator ``on_*_turn_stopped`` events."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, session_call_id: str | None = None) -> None:
         self.turns: list[dict[str, Any]] = []
+        self._session_call_id = session_call_id
 
     def register(self, user_aggregator: Any, assistant_aggregator: Any) -> None:
+        sid = self._session_call_id
+
+        async def _maybe_pg_append(role: str, content: str, ts: str) -> None:
+            if not sid:
+                return
+            pool = _pg_pool()
+            if pool is None:
+                return
+            from db import postgres as pg_db
+
+            when = datetime.now(timezone.utc)
+            if ts:
+                try:
+                    when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+            await _pg_write(
+                pg_db.append_transcript_turn(pool, sid, role, content or "", when)
+            )
+
         @user_aggregator.event_handler("on_user_turn_stopped")
         async def on_user_turn_stopped(aggregator, strategy, message):
             self.turns.append(
@@ -42,6 +95,7 @@ class TranscriptBuffer:
                     "timestamp": message.timestamp,
                 }
             )
+            await _maybe_pg_append("user", message.content, message.timestamp)
 
         @assistant_aggregator.event_handler("on_assistant_turn_stopped")
         async def on_assistant_turn_stopped(aggregator, message):
@@ -52,6 +106,9 @@ class TranscriptBuffer:
                     "timestamp": message.timestamp,
                     "interrupted": message.interrupted,
                 }
+            )
+            await _maybe_pg_append(
+                "assistant", message.content, message.timestamp
             )
 
 
@@ -271,7 +328,38 @@ def attach_pipeline_finalize(
             )
         except Exception as exc:
             logger.error("call_log_db insert failed: {}", exc)
-            return
+            row_id = -1
+
+        pg_ctx = pop_pg_context(session_call_id)
+        if pg_ctx and session_call_id:
+            try:
+                pool = _pg_pool()
+                if pool is not None:
+                    from db import postgres as pg_db
+
+                    cleared = await _pg_write(
+                        pg_db.mark_call_log_not_in_progress(
+                            pool, session_call_id
+                        )
+                    )
+                    if cleared:
+                        logger.debug(
+                            "call_log in_progress cleared at hangup session={}",
+                            session_call_id,
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to clear in_progress for {}: {}",
+                    session_call_id,
+                    exc,
+                )
+        duration_seconds = int(round(duration_ms / 1000))
+        usage_dict = {
+            "llm_prompt_tokens": up,
+            "llm_completion_tokens": uc,
+            "llm_total_tokens": ut,
+            "tts_characters": tts_c,
+        }
 
         if os.getenv("GROQ_API_KEY"):
 
@@ -315,6 +403,82 @@ def attach_pipeline_finalize(
                     except Exception:
                         logger.exception("call_log extraction update failed")
 
+                if pg_ctx and session_call_id:
+                    try:
+                        from post_call_processor import process_post_call
+                        from uuid import UUID
+
+                        pool = _pg_pool()
+                        if pool is not None:
+                            await _pg_write(
+                                process_post_call(
+                                    pool,
+                                    session_call_id,
+                                    UUID(pg_ctx["lead_id"]),
+                                    UUID(pg_ctx["campaign_id"]),
+                                    UUID(pg_ctx["client_id"]),
+                                    UUID(pg_ctx["bot_config_id"]),
+                                    duration_seconds,
+                                    transcript,
+                                    extraction or {},
+                                    usage=usage_dict,
+                                    extraction_model=extraction_model,
+                                    extraction_error=extraction_error,
+                                )
+                            )
+                    except Exception as exc:
+                        logger.exception("post_call_processor failed: {}", exc)
+                elif session_call_id:
+                    await _write_pg_dev_finalize(
+                        session_call_id=session_call_id,
+                        route=route,
+                        started_at_iso=started_at_iso,
+                        duration_seconds=duration_seconds,
+                        transcript=transcript,
+                        usage_dict=usage_dict,
+                        extraction=extraction,
+                        cost_inr=cost_inr,
+                    )
+
+                if not pg_ctx:
+                    payload = _build_n8n_payload(
+                        row_id=row_id,
+                        session_call_id=session_call_id,
+                        plivo_call_id=plivo_call_id,
+                        route=route,
+                        started_at=started_at_iso,
+                        ended_at=ended_at,
+                        duration_ms=duration_ms,
+                        transcript=transcript,
+                        usage_prompt_tokens=up,
+                        usage_completion_tokens=uc,
+                        usage_total_tokens=ut,
+                        usage_tts_characters=tts_c,
+                        cost_inr=cost_inr,
+                        extraction=extraction,
+                        extraction_error=extraction_error,
+                        extraction_model=extraction_model,
+                        post_call_extraction_skipped=False,
+                    )
+                    await send_call_completed_webhook(payload)
+
+            asyncio.create_task(_extract_patch_and_webhook())
+        else:
+            logger.debug("post_call_extract skipped: GROQ_API_KEY not set")
+            if session_call_id:
+                asyncio.create_task(
+                    _write_pg_dev_finalize(
+                        session_call_id=session_call_id,
+                        route=route,
+                        started_at_iso=started_at_iso,
+                        duration_seconds=duration_seconds,
+                        transcript=transcript,
+                        usage_dict=usage_dict,
+                        extraction=None,
+                        cost_inr=cost_inr,
+                    )
+                )
+            if not pg_ctx:
                 payload = _build_n8n_payload(
                     row_id=row_id,
                     session_call_id=session_call_id,
@@ -329,33 +493,47 @@ def attach_pipeline_finalize(
                     usage_total_tokens=ut,
                     usage_tts_characters=tts_c,
                     cost_inr=cost_inr,
-                    extraction=extraction,
-                    extraction_error=extraction_error,
-                    extraction_model=extraction_model,
-                    post_call_extraction_skipped=False,
+                    extraction=None,
+                    extraction_error=None,
+                    extraction_model=None,
+                    post_call_extraction_skipped=True,
                 )
                 await send_call_completed_webhook(payload)
 
-            asyncio.create_task(_extract_patch_and_webhook())
-        else:
-            logger.debug("post_call_extract skipped: GROQ_API_KEY not set")
-            payload = _build_n8n_payload(
-                row_id=row_id,
-                session_call_id=session_call_id,
-                plivo_call_id=plivo_call_id,
-                route=route,
-                started_at=started_at_iso,
-                ended_at=ended_at,
-                duration_ms=duration_ms,
-                transcript=transcript,
-                usage_prompt_tokens=up,
-                usage_completion_tokens=uc,
-                usage_total_tokens=ut,
-                usage_tts_characters=tts_c,
-                cost_inr=cost_inr,
-                extraction=None,
-                extraction_error=None,
-                extraction_model=None,
-                post_call_extraction_skipped=True,
-            )
-            await send_call_completed_webhook(payload)
+
+async def _write_pg_dev_finalize(
+    *,
+    session_call_id: str,
+    route: str,
+    started_at_iso: str,
+    duration_seconds: int,
+    transcript: list[dict],
+    usage_dict: dict,
+    extraction: dict | None,
+    cost_inr: float | None,
+) -> None:
+    pool = _pg_pool()
+    if pool is None:
+        return
+    from uuid import UUID
+
+    from db import postgres as pg_db
+
+    try:
+        started = datetime.fromisoformat(started_at_iso.replace("Z", "+00:00"))
+    except ValueError:
+        started = datetime.now(timezone.utc)
+    await _pg_write(
+        pg_db.finalize_call_log_dev(
+            pool,
+            session_call_id,
+            UUID(_DEV_CLIENT_ID),
+            route,
+            started,
+            duration_seconds,
+            transcript,
+            usage_dict,
+            extraction,
+            cost_inr,
+        )
+    )

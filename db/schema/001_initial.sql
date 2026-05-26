@@ -170,6 +170,9 @@ CREATE TABLE campaigns (
     completed_at         TIMESTAMPTZ,
     -- Stamped when dialer marks all leads terminal and returns unused credits.
 
+    budget_returned_at   TIMESTAMPTZ,
+    -- Set when unused budget is returned to clients.balance_credits (idempotent settlement).
+
     -- ── DENORM COUNTERS ───────────────────────────────────────
     -- Updated in same transaction as lead status change. Never COUNT(*).
     total_leads          INTEGER DEFAULT 0,

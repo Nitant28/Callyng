@@ -9,23 +9,23 @@
 
 | Field             | Value                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------- |
-| Phase             | **Phase 0 — Foundation** — **complete** (May 2026). **Phase 2** in progress. |
-| Last milestone    | PostgreSQL 16 via Docker Compose: full schema, dev seed, `asyncpg` pool + budget helpers. |
-| Current focus     | Admin `/internal/*` endpoints, `post_call_processor`, concurrent dialer — see [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing). |
-| Next milestone    | CostGuard, lead upload (`LEAD_SCHEMA`), wire calls to Postgres — [aakash_arch.md §13](aakash_arch.md). |
-| Full plan         | [ROADMAP.md](ROADMAP.md) (phases) · [aakash_arch.md](aakash_arch.md) (schema & contracts)         |
+| Phase             | **Phase 2 — Multi-tenant + billing** — in progress (May 2026) |
+| Last milestone    | Campaign hardening (post-call finalize, cancel vs pause, stale call_log sweep); operator CLI (`scripts/cli.py`); docs in [`guides/`](guides/) and [`handoff/`](handoff/). |
+| Current focus     | React SPA (Phase 2B); pre-launch draft workflow ([ROADMAP §10](ROADMAP.md#10-pre-launch-client-workflow-priorities)) |
+| Next milestone    | Client portal: upload → draft leads → test call → Start |
+| Full plan         | [ROADMAP.md](ROADMAP.md) (phases) · [guides/aakash_arch.md](guides/aakash_arch.md) (schema & contracts) · [guides/CLI_GUIDE.md](guides/CLI_GUIDE.md) (ops CLI) |
 
 ---
 
 ## What this is
 
-**Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage **credits** (see [ROADMAP.md](ROADMAP.md) §1 and [aakash_arch.md](aakash_arch.md) §4).
+**Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage **credits** (see [ROADMAP.md](ROADMAP.md) §1 and [guides/aakash_arch.md](guides/aakash_arch.md) §4).
 
 **Phase 0 / Phase 1 (foundation) are done** — single-tenant dev server + SQLite + `POST /start`, two voice routes, post-call extraction. **Phase 2** Postgres schema + pool are in place; `just call` still uses SQLite until dialer/API wiring. Phase 1 client SPA resumes after Phase 2 backend APIs.
 
 **Config model (forward path).** The DB `bot_configs` row is a **registry** (`route`, `script_id`, `credits_per_minute`, Plivo number). Prompts, VAD, models, `LEAD_SCHEMA`, and **`EXTRACTION_SCHEMA`** live in [`sts_scripts/`](sts_scripts/) and [`cascade_scripts/`](cascade_scripts/). Post-call Groq reads `EXTRACTION_SCHEMA` from the active script at runtime.
 
-**Billing (forward path).** Clients hold **credits** (1 credit = ₹1 at launch). Campaigns pre-allocate budget from the master balance; calls bill in ceiling minutes × `credits_per_minute`. See [aakash_arch.md §4](aakash_arch.md).
+**Billing (forward path).** Clients hold **credits** (1 credit = ₹1 at launch). Campaigns pre-allocate budget from the master balance; calls bill in ceiling minutes × `credits_per_minute`. See [guides/aakash_arch.md §4](guides/aakash_arch.md).
 
 Two voice pipelines can call any Indian phone number via Plivo — details under [Tech stack](#tech-stack) below.
 
@@ -65,6 +65,58 @@ just call +919123866924 Satyam Pune
 ```
 
 That's it. The callee's phone rings; on pickup, Diya greets them in Marathi.
+
+## Phase 2 quick start (multi-tenant backend)
+
+Requires Postgres running locally. The Phase 0 single-call path still works without Postgres.
+
+```bash
+# Start Postgres (once)
+docker run --name aakashvani-pg -e POSTGRES_PASSWORD=dev -e POSTGRES_USER=aakashvani \
+  -e POSTGRES_DB=aakashvani -p 5432:5432 -d postgres:16
+
+# Or: just db-up
+just db-migrate
+just db-check
+
+# Create your first client (save the api_key — shown once)
+just create-client "My Company" "admin@company.com" "real_estate"
+
+# Add credits
+just add-credits <client-id> 1000
+
+# Upload sample leads (see fixtures/test_leads.csv)
+just upload-leads <api_key> <campaign_id> fixtures/test_leads.csv
+just start-campaign <api_key> <campaign_id>
+
+# Inspect campaigns without the HTTP API (Postgres only)
+just show-client "My Company"
+just show-campaign "<campaign name>"
+just campaign-calls "<campaign name>" --limit 5
+
+# Full walkthrough: guides/TESTING.md — operator CLI: guides/CLI_GUIDE.md
+```
+
+## Operator CLI (Phase 2)
+
+[`scripts/cli.py`](scripts/cli.py) talks to Postgres via `DATABASE_URL` — **no running server required**. Fuzzy name lookup (`just show-client "pyr"` matches “Pyramid Real Estate”).
+
+| Category | Examples |
+| -------- | -------- |
+| Inspection | `show-client`, `show-campaign`, `campaign-leads`, `campaign-calls`, `show-call`, `show-lead` |
+| Post-call debug | `failed-extractions`, `stuck-calls`, `rerun-extraction` |
+| Writes | `reset-lead`, `force-outcome`, `settle-campaign` |
+
+Full reference: **[guides/CLI_GUIDE.md](guides/CLI_GUIDE.md)**. API polling: `just watch-call <api_key> <session_call_id>`.
+
+## Dual storage (Phase 2)
+
+Phase 2 runs two storage layers simultaneously:
+
+- **SQLite** (`CALL_LOG_DB_PATH`) — always active. Every completed call writes here regardless of Postgres status. Use `just sqlite-calls` and `just test-call` to verify bot quality without any Postgres dependency.
+- **PostgreSQL** (`DATABASE_URL`) — active when `DATABASE_URL` is set. All multi-tenant data (clients, campaigns, leads, credits) lives here. Campaign calls write `call_logs` with transcript, `outcome`, `duration_seconds`, and `extraction_json` (e.g. `intent_status`, `callback_time`) after Groq post-call.
+
+A Postgres write failure never affects the Pipecat pipeline. SQLite is the isolation surface for bot testing.
 
 ### PostgreSQL (Phase 2 — Docker)
 
@@ -139,7 +191,7 @@ aakashvani/
 ├── docker-compose.yml       Postgres 16 for local dev (port 5432)
 ├── db/
 │   ├── postgres.py          asyncpg pool + client_id-scoped helpers + budget transactions
-│   ├── schema/001_initial.sql   Full schema ([aakash_arch.md](aakash_arch.md) §2)
+│   ├── schema/001_initial.sql   Full schema ([guides/aakash_arch.md](guides/aakash_arch.md) §2)
 │   └── seed/dev_tenant.sql  Dev client, bot_config, draft campaign
 ├── server.py                FastAPI app: /start, /answer (Plivo XML), /ws, /health
 ├── call_transcript.py       Turn buffer + pipeline end → call_logs + Groq + n8n POST
@@ -157,8 +209,9 @@ aakashvani/
 ├── bot_sts.py               Route B: Gemini Live pipeline (loads sts_scripts.*)
 ├── bot_cascade.py           Route A: Sarvam + Groq + Cartesia (loads cascade_scripts.*)
 ├── data/                    Default location for `call_logs.db` (gitignored; see CALL_LOG_DB_PATH)
-├── justfile                 Dev commands (dev, dev-sts, dev-cascade, tunnel, call, health, route, sync)
+├── justfile                 Dev commands (dev, db-*, campaigns, operator CLI recipes)
 ├── scripts/
+│   ├── cli.py               Operator CLI (inspection, post-call debug, lead reset)
 │   └── call.sh              Standalone call trigger (no `just` dependency)
 ├── env.example              Template for .env
 ├── .env                     Real secrets (not committed)
@@ -166,8 +219,13 @@ aakashvani/
 ├── uv.lock                  Pinned dependency lockfile
 ├── Dockerfile               Pipecat Cloud deploy image
 ├── pcc-deploy.toml          Pipecat Cloud deploy config
-├── aakash_arch.md           Architecture reference: schema, billing, dialer, contracts
-├── ROADMAP.md               Vision, phases, pricing; defers schema detail to aakash_arch.md
+├── guides/                  Operator guides (CLI, testing, architecture)
+│   ├── CLI_GUIDE.md         Operator CLI / `just show-*` recipes
+│   ├── TESTING.md           Phase 2 E2E walkthrough
+│   └── aakash_arch.md       Schema, billing, dialer, API contracts
+├── handoff/                 Session handoffs and audit notes for agents
+├── fixtures/                Sample CSVs for local testing
+├── ROADMAP.md               Vision, phases, pricing
 └── README.md                this file
 ```
 
@@ -218,6 +276,38 @@ sequenceDiagram
 | `just health`              | GET `/health` on the public URL                                             |
 | `just route`               | Print the currently-effective `BOT_ROUTE`                                   |
 | `just sync`                | `uv sync` (rebuilds `.venv` — useful if anything looks broken)              |
+| `just db-migrate`          | Alembic upgrade head (Postgres schema)                                      |
+| `just db-check`            | List public tables in Postgres                                              |
+| `just create-client`       | Admin: create client + API key (once)                                       |
+| `just add-credits`         | Admin: top up client balance                                                |
+| `just create-bot`          | Admin: register bot_config                                                    |
+| `just create-campaign`     | Admin: create campaign + budget allocation                                  |
+| `just upload-leads`        | Client: CSV upload to campaign                                              |
+| `just start-campaign`      | Client: start dialer                                                          |
+| `just stop-campaign`       | Client: pause dialer (leads preserved; credits stay on campaign)              |
+| `just cancel-campaign`     | Client: cancel campaign (fail non-terminal leads; return unused credits)      |
+| `just watch-call`          | Client API: poll one call by `session_call_id`                                |
+| `just test-call`           | Phase 0 outbound call (SQLite; bash `scripts/call.sh`)                      |
+| `just sqlite-calls`        | Inspect recent SQLite call_logs rows                                          |
+| `just test-phase2`         | Run `tests/test_phase2.py`                                                    |
+| `just release-stuck-leads` | Reset leads stuck in `calling` (no live Plivo leg)                            |
+| `just reconcile-campaign`  | Recompute campaign counter denorms from lead rows                             |
+| `just plivo-balance`       | Show Plivo prepaid balance                                                    |
+
+**Operator CLI** (Postgres direct — see [guides/CLI_GUIDE.md](guides/CLI_GUIDE.md)):
+
+| Command | What it does |
+| ------- | ------------ |
+| `just show-client "…"` | Client balance, bots, campaigns |
+| `just show-campaign "…"` | Budget, counters, bot config |
+| `just campaign-leads "…" --status pending` | Filter leads |
+| `just campaign-calls "…" --limit 10` | Recent `call_logs` |
+| `just show-call <session_id> --full` | Transcript + `extraction_json` |
+| `just failed-extractions` | Calls missing outcome or extraction error |
+| `just stuck-calls` | Orphaned `in_progress` call logs |
+| `just rerun-extraction <session_id>` | Re-run Groq on stored transcript |
+| `just reset-lead <phone> --campaign "…"` | Lead back to `pending` for retest |
+| `just settle-campaign "…"` | Force budget settlement |
 
 ---
 
@@ -229,6 +319,10 @@ sequenceDiagram
 - **Plivo says the WebSocket URL is unreachable** — confirm `just tunnel` is up and the reserved domain in `.env` (`NGROK_URL`) matches `https://<sub>.ngrok-free.dev` exactly.
 - **First bot utterance is still slow** — watch the `[⏱ Ns]` log lines from `bot_sts.py`. If `parse_telephony_websocket done` takes >1 s, it's Plivo's `start` frame; if `LLMRunFrame queued → first audio` takes >2 s, it's Gemini's WS handshake. Prewarm (STS only) should log `[prewarm:…] Gemini warmed up ✓` — if you see `Pre-warm failed (1011…)`, check `GOOGLE_API_KEY`, `STS_SCRIPT`, and that `BOT_ROUTE=sts`.
 - **Long STS calls and token growth** — enable context window compression (default on): `GEMINI_CONTEXT_COMPRESSION=1`, tune `GEMINI_CWC_TRIGGER_TOKENS` (default `20000`; API retains roughly half as the sliding target). `system_instruction` (project facts) stays on the Live connect payload.
+- **Live call polling stuck after a crash** — `STALE_CALL_LOG_SWEEP_ENABLED` (default true) finalizes `call_logs` left `in_progress` longer than `MAX_CALL_MINUTES + 2` minutes; runs at server startup and every `STALE_CALL_LOG_SWEEP_SECONDS` (default 300).
+- **Credits not returned after stopping a campaign** — `stop` only pauses. Use `just cancel-campaign` to fail remaining leads and return unused budget (waits for in-flight calls if any).
+- **`call_logs` has `ended_at` but empty `outcome` / `transcript`** — ensure `GROQ_API_KEY` is set and post-call completed; use `just show-call <session_id> --full` or `just failed-extractions`. If the pipeline logged turns but Postgres is empty, restart `just dev` after pulling latest (post-call finalize no longer requires `in_progress = TRUE`).
+- **Dialer shows pending leads but does not dial** — retry may be scheduled in the future (`next_attempt_at`); on campaign start, pending retries are bumped to now. See `just campaign-leads "…" --status pending` and [handoff/DEBUGGING_CONTEXT.md](handoff/DEBUGGING_CONTEXT.md).
 
 ---
 
@@ -236,16 +330,32 @@ sequenceDiagram
 
 **Phase 0 (foundation)** — complete. Dev testing stays on Plivo + ngrok (`just call`).
 
-**Phase 2 (current)** — admin-first backend per [aakash_arch.md §13](aakash_arch.md):
+**Phase 2 (current)** — backend largely complete; see [guides/TESTING.md](guides/TESTING.md):
 
-1. ~~Postgres 16 + full schema ([§2](aakash_arch.md))~~ — done (`just db-up` / `db-migrate` / `db-seed`)
-2. `/internal/*` admin endpoints (clients, bot-configs, campaigns, credits, webhooks)
-3. `post_call_processor`, lead upload, Postgres concurrent dialer
-4. Client `/api/*` + React SPA (Phase 2B)
+1. ~~Postgres 16 + Alembic + full schema~~ — done
+2. ~~`/internal/*` + `/api/*` endpoints~~ — done
+3. ~~`post_call_processor`, lead upload, concurrent dialer~~ — done
+4. ~~Campaign hardening (post-call guard, cancel vs pause, stale call_log sweep)~~ — done
+5. Client React SPA (Phase 2B) — next
 
-See [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing) for the full milestone table.
+### Pre-launch workflow priorities (implement in this order)
 
-**Deferred:** browser `SmallWebRTCTransport` dev path → Phase 4. Phase 1 client SPA → after Phase 2 backend. Razorpay → Phase 3.
+These are the highest-priority **client-facing** features before production campaigns. Full detail: [ROADMAP.md §10](ROADMAP.md#10-pre-launch-client-workflow-priorities).
+
+| Priority | Feature | Notes |
+| -------- | ------- | ----- |
+| **1** | **Data cleaning + pre-upload report** | Validate and normalize CSV against `LEAD_SCHEMA` before commit; return accepted / rejected / fixed rows. Catches bad data before it enters the system. |
+| **2** | **Draft-state lead management** | Single feature: while campaign is `draft`, edit, delete, and manually add leads (no full re-upload). API mutations blocked after start. |
+| **3** | **Single test call** | One real call from the draft screen (campaign `bot_config` + chosen lead) for pre-launch confidence; does not start the dialer. |
+| **4** | **Lock on Start** | `PATCH /api/campaigns/{id}/start` must reject unless `status = 'draft'` (409 otherwise), then transition to `running`. **Not enforced in API yet.** |
+
+Target UX: upload → review report → fix leads in draft → optional test call → Start.
+
+See [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing) for phase milestones and the **deferred hardening** list.
+
+**Campaign control:** `stop` = pause (resume later). `cancel` = terminal (unused credits return when no in-flight calls).
+
+**Deferred:** `credits_per_minute` snapshot, CostGuard overshoot docs, `attempt_kind` on call_logs — see [ROADMAP.md](ROADMAP.md). Browser `SmallWebRTCTransport` → Phase 4. Razorpay → Phase 3.
 
 ---
 
@@ -254,7 +364,9 @@ See [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing) for the 
 | Document | Use for |
 | -------- | ------- |
 | [README.md](README.md) | Dev setup, quick start, troubleshooting (this file) |
-| [ROADMAP.md](ROADMAP.md) | Vision, phases, pricing, compliance |
-| [aakash_arch.md](aakash_arch.md) | Postgres schema, credits, dialer, script contracts, security |
+| [ROADMAP.md](ROADMAP.md) | Vision, phases, [pre-launch priorities](ROADMAP.md#10-pre-launch-client-workflow-priorities), pricing, compliance |
+| [guides/](guides/) | [CLI](guides/CLI_GUIDE.md) (operator), [testing](guides/TESTING.md) (E2E), [architecture](guides/aakash_arch.md) |
+| [handoff/](handoff/) | [Phase 2 handoff](handoff/PHASE2_HANDOFF.md), [debugging](handoff/DEBUGGING_CONTEXT.md), audit [report](handoff/report.md) |
+| [fixtures/](fixtures/) | Sample CSVs (e.g. `test_leads.csv` for upload tests) |
 
-If README or ROADMAP conflict with `aakash_arch.md`, **arch wins**.
+If README or ROADMAP conflict with [guides/aakash_arch.md](guides/aakash_arch.md), **arch wins**.
