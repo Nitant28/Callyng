@@ -410,21 +410,19 @@ def attach_pipeline_finalize(
 
                         pool = _pg_pool()
                         if pool is not None:
-                            await _pg_write(
-                                process_post_call(
-                                    pool,
-                                    session_call_id,
-                                    UUID(pg_ctx["lead_id"]),
-                                    UUID(pg_ctx["campaign_id"]),
-                                    UUID(pg_ctx["client_id"]),
-                                    UUID(pg_ctx["bot_config_id"]),
-                                    duration_seconds,
-                                    transcript,
-                                    extraction or {},
-                                    usage=usage_dict,
-                                    extraction_model=extraction_model,
-                                    extraction_error=extraction_error,
-                                )
+                            await process_post_call(
+                                pool,
+                                session_call_id,
+                                UUID(pg_ctx["lead_id"]),
+                                UUID(pg_ctx["campaign_id"]),
+                                UUID(pg_ctx["client_id"]),
+                                UUID(pg_ctx["bot_config_id"]),
+                                duration_seconds,
+                                transcript,
+                                extraction or {},
+                                usage=usage_dict,
+                                extraction_model=extraction_model,
+                                extraction_error=extraction_error,
                             )
                     except Exception as exc:
                         logger.exception("post_call_processor failed: {}", exc)

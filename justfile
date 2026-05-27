@@ -269,3 +269,44 @@ force-outcome session_call_id outcome:
 # Force-settle a campaign and return unused budget to client
 settle-campaign name_or_id:
     PYTHONPATH=. uv run python scripts/cli.py settle-campaign "{{name_or_id}}"
+
+# ── LEAD MANAGEMENT (API — server must be running) ───────────────────────────
+
+# Add a single lead to a campaign. Usage: just add-lead <api_key> <campaign_id> +919876543210 "Rahul Sharma"
+add-lead api_key campaign_id phone name="" lead_type="cold" metadata="{}":
+    curl -s -X POST http://localhost:7860/api/campaigns/{{campaign_id}}/leads \
+      -H "Authorization: Bearer {{api_key}}" \
+      -H "Content-Type: application/json" \
+      -d '{"phone":"{{phone}}","name":"{{name}}","lead_type":"{{lead_type}}","metadata":{{metadata}}}' | (command -v jq >/dev/null && jq . || cat)
+
+# Edit a lead's fields. Usage: just edit-lead <api_key> <campaign_id> <lead_id> --name "New Name"
+edit-lead api_key campaign_id lead_id name="" lead_type="" metadata="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    body="{"
+    sep=""
+    if [[ -n "{{name}}" ]]; then body+="${sep}\"name\":\"{{name}}\""; sep=","; fi
+    if [[ -n "{{lead_type}}" ]]; then body+="${sep}\"lead_type\":\"{{lead_type}}\""; sep=","; fi
+    if [[ -n "{{metadata}}" ]]; then body+="${sep}\"metadata\":{{metadata}}"; sep=","; fi
+    body+="}"
+    curl -s -X PATCH "http://localhost:7860/api/campaigns/{{campaign_id}}/leads/{{lead_id}}" \
+      -H "Authorization: Bearer {{api_key}}" \
+      -H "Content-Type: application/json" \
+      -d "$body" | (command -v jq >/dev/null && jq . || cat)
+
+# Delete a lead. Usage: just delete-lead <api_key> <campaign_id> <lead_id>
+delete-lead api_key campaign_id lead_id:
+    curl -s -X DELETE http://localhost:7860/api/campaigns/{{campaign_id}}/leads/{{lead_id}} \
+      -H "Authorization: Bearer {{api_key}}" | (command -v jq >/dev/null && jq . || cat)
+
+# Manually change a lead's status. Usage: just change-lead-status <api_key> <campaign_id> <lead_id> pending
+change-lead-status api_key campaign_id lead_id status scheduled_at="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    body="{\"status\":\"{{status}}\""
+    if [[ -n "{{scheduled_at}}" ]]; then body+=",\"scheduled_at\":\"{{scheduled_at}}\""; fi
+    body+="}"
+    curl -s -X PATCH "http://localhost:7860/api/campaigns/{{campaign_id}}/leads/{{lead_id}}/status" \
+      -H "Authorization: Bearer {{api_key}}" \
+      -H "Content-Type: application/json" \
+      -d "$body" | (command -v jq >/dev/null && jq . || cat)

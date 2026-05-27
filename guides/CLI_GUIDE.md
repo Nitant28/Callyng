@@ -41,6 +41,15 @@ Run `just --list` to see all recipes. The new commands are grouped into three ca
 | `just force-outcome <session_id> <outcome>` | Manually set call outcome | `just force-outcome abc123 Interested` |
 | `just settle-campaign <name>` | Force-settle and return unused budget | `just settle-campaign "Pune Dec"` |
 
+### Lead Management (API — server must be running)
+
+| Command | What it does | Example |
+|---------|-------------|---------|
+| `just add-lead <key> <camp_id> <phone>` | Add a single lead to a campaign | `just add-lead $KEY $CID +919876543210 "Rahul"` |
+| `just edit-lead <key> <camp_id> <lead_id>` | Edit lead name/type/metadata | `just edit-lead $KEY $CID $LID name="New Name"` |
+| `just delete-lead <key> <camp_id> <lead_id>` | Hard-delete a lead (call_logs kept) | `just delete-lead $KEY $CID $LID` |
+| `just change-lead-status <key> <camp_id> <lead_id> <status>` | Manually change lead status | `just change-lead-status $KEY $CID $LID pending` |
+
 ---
 
 ## Common Workflows
@@ -175,6 +184,62 @@ just failed-extractions --limit 10
 # Database connectivity
 just db-check
 ```
+
+### 7. Manage Leads (add, edit, delete, change status)
+
+These commands require the **server to be running** (`just dev`) and use the client API key.
+
+```bash
+# Set variables for convenience
+KEY="your-api-key"
+CID="campaign-uuid"
+
+# ── Add a single lead ──
+just add-lead $KEY $CID +919876543210 "Rahul Sharma"
+# With lead_type and metadata:
+just add-lead $KEY $CID +919876543210 "Rahul" "warm" '{"city":"Pune","budget":"50L"}'
+
+# ── Edit lead fields ──
+LID="lead-uuid-from-above"
+just edit-lead $KEY $CID $LID name="Rahul S."
+just edit-lead $KEY $CID $LID lead_type="hot"
+just edit-lead $KEY $CID $LID metadata='{"city":"Mumbai","budget":"80L"}'
+
+# ── Change lead status ──
+# Re-queue a failed lead
+just change-lead-status $KEY $CID $LID pending
+
+# Schedule a callback (default: +4 hours)
+just change-lead-status $KEY $CID $LID callback_scheduled
+
+# Schedule callback at a specific time
+just change-lead-status $KEY $CID $LID callback_scheduled "2026-01-15T14:00:00Z"
+
+# Mark as DNC
+just change-lead-status $KEY $CID $LID dnc
+
+# ── Delete a lead ──
+just delete-lead $KEY $CID $LID
+```
+
+**Campaign status guard:**
+| Campaign Status | Add | Edit | Delete | Status Change |
+|----------------|-----|------|--------|---------------|
+| `draft` | ✅ | ✅ | ✅ | ✅ |
+| `paused` | ✅ | ✅ | ✅ | ✅ |
+| `running` | ❌ | ❌ | ❌ | ❌ |
+| `completed` | ❌ | ❌ | ❌ | ❌ |
+| `cancelled` | ❌ | ❌ | ❌ | ❌ |
+
+**Allowed status transitions:**
+| From | Allowed To |
+|------|-----------|
+| `pending` | `failed`, `dnc`, `callback_scheduled` |
+| `callback_scheduled` | `pending`, `failed`, `dnc` |
+| `failed` | `pending` |
+| `dnc` | `pending` |
+| `completed` | `pending` |
+| `calling` | *(blocked — live call)* |
 
 ---
 

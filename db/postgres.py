@@ -744,7 +744,7 @@ async def return_unused_budget(
     if final_status not in ("completed", "cancelled"):
         raise ValueError(f"Invalid final_status: {final_status}")
 
-    async def _run(connection: asyncpg.Connection) -> Decimal:
+    async def _run(connection: asyncpg.Connection) -> tuple[Decimal, bool]:
         return await try_settle_campaign_budget(
             campaign_id,
             client_id,
@@ -1222,20 +1222,11 @@ async def cancel_campaign(
                 conn, campaign_id, client_id
             )
 
-            credits_returned = await try_settle_campaign_budget(
+            credits_returned, _ = await try_settle_campaign_budget(
                 campaign_id,
                 client_id,
                 final_status="cancelled",
                 conn=conn,
-            )
-
-            row = await conn.fetchrow(
-                """
-                SELECT calling_leads, status, budget_returned_at
-                FROM campaigns WHERE id = $1 AND client_id = $2
-                """,
-                campaign_id,
-                client_id,
             )
 
     await reconcile_campaign_counters(pool, campaign_id, client_id)
@@ -1264,6 +1255,181 @@ async def get_lead(
         client_id,
     )
     return record_to_dict(row)
+
+
+async def list_campaign_leads(
+    pool: asyncpg.Pool,
+    campaign_id: UUID,
+    client_id: UUID,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+) -> list[dict]:
+    """Return a paginated list of leads for a campaign."""
+    query = "SELECT * FROM leads WHERE campaign_id = $1 AND client_id = $2"
+    args: list[Any] = [campaign_id, client_id]
+    idx = 3
+
+    if status:
+        query += f" AND status = ${idx}"
+        args.append(status)
+        idx += 1
+
+    query += f" ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+    args.extend([limit, offset])
+
+    rows = await pool.fetch(query, *args)
+    return records_to_dicts(rows)
+
+
+async def update_lead_fields(
+    pool: asyncpg.Pool,
+    lead_id: UUID,
+    client_id: UUID,
+    *,
+    name: str | None = None,
+    lead_type: str | None = None,
+    metadata: dict | None = None,
+) -> bool:
+    """Update user-editable fields on a lead. Returns True if a row was updated."""
+    sets: list[str] = []
+    args: list[Any] = []
+    idx = 1
+
+    if name is not None:
+        sets.append(f"name = ${idx}")
+        args.append(name)
+        idx += 1
+    if lead_type is not None:
+        sets.append(f"lead_type = ${idx}")
+        args.append(lead_type)
+        idx += 1
+    if metadata is not None:
+        sets.append(f"metadata = ${idx}::jsonb")
+        args.append(json.dumps(metadata, ensure_ascii=False))
+        idx += 1
+
+    if not sets:
+        return False
+
+    args.extend([lead_id, client_id])
+    result = await pool.execute(
+        f"UPDATE leads SET {', '.join(sets)} WHERE id = ${idx} AND client_id = ${idx + 1}",
+        *args,
+    )
+    return result.split()[-1] != "0"
+
+
+async def insert_single_lead(
+    pool: asyncpg.Pool,
+    lead: dict,
+) -> dict:
+    """Insert one lead. Returns the inserted row as a dict.
+
+    Raises ``ValueError`` if the phone is a duplicate within the campaign.
+    Counter increments are handled atomically.
+    """
+    meta = lead.get("metadata") or {}
+    meta_json = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else meta
+    lead_status = lead.get("status", "pending")
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                INSERT INTO leads (
+                    client_id, campaign_id, phone, name, lead_type,
+                    status, max_attempts, next_attempt_at, metadata
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8::jsonb)
+                ON CONFLICT (campaign_id, phone) DO NOTHING
+                RETURNING *
+                """,
+                lead["client_id"],
+                lead["campaign_id"],
+                lead["phone"],
+                lead.get("name"),
+                lead.get("lead_type", "cold"),
+                lead_status,
+                lead.get("max_attempts", 3),
+                meta_json,
+            )
+            if row is None:
+                raise ValueError(
+                    f"Duplicate phone {lead['phone']} in this campaign"
+                )
+
+            if lead_status == "dnc":
+                await conn.execute(
+                    """
+                    UPDATE campaigns SET
+                        total_leads = total_leads + 1,
+                        dnc_leads = dnc_leads + 1
+                    WHERE id = $1
+                    """,
+                    lead["campaign_id"],
+                )
+            else:
+                await increment_campaign_counters(
+                    conn,
+                    lead["campaign_id"],
+                    from_status="__upload__",
+                    to_status="pending",
+                    count=1,
+                )
+
+    return record_to_dict(row)
+
+
+async def delete_lead(
+    pool: asyncpg.Pool,
+    lead_id: UUID,
+    campaign_id: UUID,
+    client_id: UUID,
+) -> bool:
+    """Hard-delete a lead row. Returns True if a row was deleted.
+
+    call_logs rows for this lead are intentionally preserved.
+    Callers should run ``reconcile_campaign_counters`` after this.
+    """
+    result = await pool.execute(
+        "DELETE FROM leads WHERE id = $1 AND campaign_id = $2 AND client_id = $3",
+        lead_id,
+        campaign_id,
+        client_id,
+    )
+    return result.split()[-1] != "0"
+
+
+async def update_lead_status_manual(
+    pool: asyncpg.Pool,
+    lead_id: UUID,
+    client_id: UUID,
+    new_status: str,
+    *,
+    next_attempt_at: datetime | None = None,
+    scheduled_callback_at: datetime | None = None,
+) -> bool:
+    """Manually change a lead's status. Returns True if a row was updated.
+
+    Does NOT reconcile counters — callers should run
+    ``reconcile_campaign_counters`` after this.
+    """
+    result = await pool.execute(
+        """
+        UPDATE leads
+        SET status = $1,
+            next_attempt_at = $2,
+            scheduled_callback_at = $3
+        WHERE id = $4 AND client_id = $5
+        """,
+        new_status,
+        next_attempt_at,
+        scheduled_callback_at,
+        lead_id,
+        client_id,
+    )
+    return result.split()[-1] != "0"
 
 
 # ── Call logs ─────────────────────────────────────────────────────────────────

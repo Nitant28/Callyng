@@ -11,6 +11,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
+from api.guards import require_campaign_modifiable
 from compliance import add_dnd, is_call_allowed
 from db import postgres as pg_db
 from dialer.concurrent_dialer import start_dialer, stop_dialer
@@ -70,6 +71,8 @@ async def upload_leads(
     campaign = await pg_db.get_campaign(pool, campaign_id, cid)
     if campaign is None:
         raise HTTPException(404, "Campaign not found")
+
+    require_campaign_modifiable(campaign)
 
     bot = await pg_db.get_bot_config(
         pool, UUID(str(campaign["bot_config_id"])), cid
@@ -164,6 +167,9 @@ async def start_campaign(
     camp = await pg_db.get_campaign(pool, campaign_id, cid)
     if camp is None:
         raise HTTPException(404, "Campaign not found")
+
+    if camp["status"] not in ("draft", "paused"):
+        raise HTTPException(409, f"Cannot start a {camp['status']} campaign")
 
     budget = float(camp.get("budget_credits") or 0)
     used = float(camp.get("budget_used_credits") or 0)

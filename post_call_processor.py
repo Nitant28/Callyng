@@ -161,6 +161,7 @@ async def process_post_call(
 
     fire_webhook = False
     applied = False
+    just_completed = False
 
     async with pool.acquire() as conn:
         async with conn.transaction():
