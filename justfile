@@ -77,11 +77,6 @@ db-wait:
 db-migrate: db-wait
     uv run alembic upgrade head
 
-# Legacy: apply SQL directly via psql (same as pre-Alembic flow)
-db-migrate-psql: db-wait
-    docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/schema/001_initial.sql
-    docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/schema/002_compat.sql
-    docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/schema/003_campaign_settlement.sql
 
 db-seed: db-wait
     docker compose exec -T postgres psql -U aakashvani -d aakashvani -v ON_ERROR_STOP=1 < db/seed/dev_tenant.sql

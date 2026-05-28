@@ -165,6 +165,8 @@ async def fire_call(
             "bot_config_id": str(bot_config["id"]),
             "route": bot_config["route"],
             "script_id": bot_config["script_id"],
+            "max_call_minutes": campaign.get("max_call_minutes"),
+            "extraction_schema_override": campaign.get("extraction_schema_override"),
         },
     }
 

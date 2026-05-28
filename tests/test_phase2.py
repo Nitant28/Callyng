@@ -175,8 +175,8 @@ def test_try_settle_campaign_budget_idempotent():
                         final_status="completed",
                         conn=conn,
                     )
-            assert first == Decimal("50")
-            assert second == Decimal("0")
+            assert first == (Decimal("50"), True)
+            assert second == (Decimal("0"), False)
             returned_at = await pool.fetchval(
                 "SELECT budget_returned_at FROM campaigns WHERE id = $1",
                 campaign_id,

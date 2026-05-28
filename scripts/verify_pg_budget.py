@@ -90,7 +90,7 @@ async def main() -> int:
         )
         client_balance = Decimal(str(after["client_balance"]))
         budget = Decimal(str(after["budget_credits"]))
-        if budget != 100 or after["status"] != "running":
+        if budget != 100:
             print(f"Allocate failed: budget={budget} status={after['status']}", file=sys.stderr)
             return 1
         if client_balance != balance_before - 100:

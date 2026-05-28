@@ -426,6 +426,7 @@ async def create_campaign(
     calls_per_minute: int = 10,
     max_attempts: int = 3,
     retry_delay_minutes: int = 120,
+    max_call_minutes: int | None = None,
 ) -> UUID:
     bot_exists = await pool.fetchval(
         "SELECT 1 FROM bot_configs WHERE id = $1 AND client_id = $2",
@@ -440,9 +441,9 @@ async def create_campaign(
         INSERT INTO campaigns (
             client_id, bot_config_id, name, budget_credits,
             max_concurrent_calls, calls_per_minute, max_attempts, retry_delay_minutes,
-            status
+            max_call_minutes, status
         )
-        VALUES ($1, $2, $3, 0, $4, $5, $6, $7, 'draft')
+        VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, 'draft')
         RETURNING id
         """,
         client_id,
@@ -452,6 +453,7 @@ async def create_campaign(
         calls_per_minute,
         max_attempts,
         retry_delay_minutes,
+        max_call_minutes,
     )
     campaign_id = row["id"]
     if budget_credits > 0:
@@ -514,6 +516,7 @@ async def update_campaign_settings(
     calls_per_minute: int | None = None,
     max_attempts: int | None = None,
     retry_delay_minutes: int | None = None,
+    max_call_minutes: int | None = None,
 ) -> None:
     sets: list[str] = []
     args: list[Any] = []
@@ -537,6 +540,10 @@ async def update_campaign_settings(
     if retry_delay_minutes is not None:
         sets.append(f"retry_delay_minutes = ${idx}")
         args.append(retry_delay_minutes)
+        idx += 1
+    if max_call_minutes is not None:
+        sets.append(f"max_call_minutes = ${idx}")
+        args.append(max_call_minutes)
         idx += 1
     if not sets:
         return

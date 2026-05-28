@@ -190,7 +190,8 @@ async def run_bot(
     )
     _lap(t0, "PipelineTask created — registering event handlers")
 
-    max_minutes = parse_max_call_minutes()
+    pg = body.get("_pg") or {}
+    max_minutes = parse_max_call_minutes(pg.get("max_call_minutes"))
     call_limits = schedule_max_call_duration(
         task, max_minutes, "max_call_duration"
     )
@@ -208,6 +209,9 @@ async def run_bot(
         enabled=parse_goodbye_hangup_enabled(),
         delay_s=parse_goodbye_hangup_delay_s(),
     )
+    pg = body.get("_pg") or {}
+    extraction_schema = pg.get("extraction_schema_override") or sts.EXTRACTION_SCHEMA
+    
     session_call_id = body.get("_session_call_id")
     attach_pipeline_finalize(
         task,
@@ -220,7 +224,7 @@ async def run_bot(
         perf_start=perf_pipeline,
         strip_bootstrap=True,
         usage_accumulator=usage_accumulator,
-        extraction_schema=sts.EXTRACTION_SCHEMA,
+        extraction_schema=extraction_schema,
     )
 
     @transport.event_handler("on_client_connected")

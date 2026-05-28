@@ -45,6 +45,7 @@ class CreateCampaignBody(BaseModel):
     calls_per_minute: int = 10
     max_attempts: int = 3
     retry_delay_minutes: int = 120
+    max_call_minutes: int | None = None
 
 
 class PatchCampaignBody(BaseModel):
@@ -54,6 +55,7 @@ class PatchCampaignBody(BaseModel):
     calls_per_minute: int | None = None
     max_attempts: int | None = None
     retry_delay_minutes: int | None = None
+    max_call_minutes: int | None = None
 
 
 class WebhookConfigBody(BaseModel):
@@ -151,6 +153,7 @@ async def create_campaign(
             body.calls_per_minute,
             body.max_attempts,
             body.retry_delay_minutes,
+            body.max_call_minutes,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -184,6 +187,7 @@ async def patch_campaign(
         calls_per_minute=body.calls_per_minute,
         max_attempts=body.max_attempts,
         retry_delay_minutes=body.retry_delay_minutes,
+        max_call_minutes=body.max_call_minutes,
     )
     return {"campaign": await pg_db.get_campaign(pool, campaign_id, body.client_id)}
 

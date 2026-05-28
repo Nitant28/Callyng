@@ -76,7 +76,7 @@ docker run --name aakashvani-pg -e POSTGRES_PASSWORD=dev -e POSTGRES_USER=aakash
   -e POSTGRES_DB=aakashvani -p 5432:5432 -d postgres:16
 
 # Or: just db-up
-just db-migrate
+just db-migrate # Runs standard Alembic migrations
 just db-check
 
 # Create your first client (save the api_key — shown once)

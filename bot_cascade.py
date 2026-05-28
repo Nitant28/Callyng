@@ -179,7 +179,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         ),
     )
 
-    max_minutes = parse_max_call_minutes()
+    pg = body.get("_pg") or {}
+    max_minutes = parse_max_call_minutes(pg.get("max_call_minutes"))
     call_limits = schedule_max_call_duration(
         task, max_minutes, "max_call_duration"
     )
@@ -201,6 +202,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
 
     started_at_iso = datetime.now(timezone.utc).isoformat()
     perf_pipeline = time.perf_counter()
+    pg = body.get("_pg") or {}
+    extraction_schema = pg.get("extraction_schema_override") or casc.EXTRACTION_SCHEMA
+
     attach_pipeline_finalize(
         task,
         transcript_buffer,
@@ -212,7 +216,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         perf_start=perf_pipeline,
         strip_bootstrap=False,
         usage_accumulator=usage_accumulator,
-        extraction_schema=casc.EXTRACTION_SCHEMA,
+        extraction_schema=extraction_schema,
     )
 
     @transport.event_handler("on_client_connected")

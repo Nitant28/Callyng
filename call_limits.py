@@ -17,11 +17,13 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.services.llm_service import FunctionCallParams
 
 
-def parse_max_call_minutes() -> float:
+def parse_max_call_minutes(override: float | None = None) -> float:
     """Return minutes for the watchdog; ``0`` means disabled.
 
     Default ``10``. Invalid env values disable the watchdog (log warning).
     """
+    if override is not None and override > 0:
+        return float(override)
     raw = (os.getenv("MAX_CALL_MINUTES") or "10").strip()
     try:
         v = float(raw)
