@@ -139,7 +139,7 @@ Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`d
 | Persistence     | SQLite (Phase 0) → PostgreSQL 16  | SQLite done (Phase 0 calls); Postgres schema + pool done (Phase 2) |
 | Cache / pub-sub | Redis 7                           | maybe (Phase 3 SSE live monitor)             |
 | Vector DB       | ChromaDB                          | maybe — only if a client actually needs RAG  |
-| Frontend        | Operator CLI (`scripts/cli.py` + `just show-*`) + curl → React SPA | CLI done; SPA planned (Phase 2B) |
+| Frontend        | Operator CLI (`scripts/cli.py` + `just show-*`) + curl → React SPAs (monorepo `frontend/client/` and `frontend/admin/`) | CLI done; SPAs planned (Phase 2B) |
 | Reverse proxy   | nginx + wildcard TLS (`*.aakashvani.in`) | planned (deploy time)                 |
 | Containerization| Docker Compose (fastapi, postgres, n8n) | postgres service done locally; full stack at deploy |
 | Server          | Hetzner CX32 (Germany)            | planned — consider AWS Mumbai if latency hurts |
@@ -360,7 +360,7 @@ Packs expire in 90 days. Connected call time only — no charge for failed dials
 
 **Credit balance display:** progress bar + remaining credits on every page (top right). Full detail on `/credits`: balance, pack expiry, usage this month (calls made, credits used, avg duration).
 
-**Recharge flow:** Phase 2 — **manual only**: client pays via bank transfer; admin runs credit top-up via `/internal/clients/{id}/credits`. Phase 3 — **Razorpay** automates `credit_packs` insert via webhook.
+**Recharge flow:** Phase 2-4 — **manual only**: client pays via bank transfer; admin runs credit top-up via `/internal/clients/{id}/credits`. Phase 5 — **Razorpay** automates `credit_packs` insert via webhook.
 
 ### Add-ons
 
@@ -479,7 +479,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 
 **Call detail `/calls/{id}`:** full transcript; extraction JSON as structured fields; metadata (duration, route, outcome). Audio player consumes Phase 4 signed R2 URLs once available.
 
-**Explicitly out of scope for Phase 1:** React analytics charts, bot config UI, Razorpay, multi-tenant Postgres, white-label domains.
+**Explicitly out of scope for Phase 1:** React analytics charts, bot config UI, Razorpay, call recordings, multi-tenant Postgres, white-label domains.
 
 ### Phase 2 — Multi-tenant + billing
 **Status:** in progress (current focus)  
@@ -547,15 +547,16 @@ These four items are the highest-priority **client-facing** work after the Phase
 
 Build order: [guides/aakash_arch.md §13](guides/aakash_arch.md) (admin-first).
 
-### Phase 3 — Bot config UI + analytics + billing automation
+### Phase 3 — Bot config UI + analytics + call recordings
 **Status:** planned  
 **Timeline:** ~4–6 weeks
 
-**Goal:** Clients configure bot personality within guardrails. Razorpay recharge. Rich analytics.
+**Goal:** Clients configure bot personality within guardrails. Call recordings available in UI. Rich analytics.
 
 | Milestone | Status |
 | --------- | ------ |
-| Razorpay recharge → `credit_packs` automation | planned |
+| Plivo call recording → Cloudflare R2 upload post-call | planned |
+| Signed URL generation for audio player (1 hr expiry) | planned |
 | Bot configuration UI: structured form → backend compiles prompt (no raw editor) | planned |
 | `/analytics` page: intent breakdown, duration distribution, cost/day, trends | planned |
 | Campaign scheduling (run at specific time / recurring) | planned |
@@ -563,22 +564,24 @@ Build order: [guides/aakash_arch.md §13](guides/aakash_arch.md) (admin-first).
 
 **Bot configuration UI:** clients fill a **structured form**; backend compiles the real system prompt. **Never exposed:** route, model, extraction schema, Plivo number, TTS voice ID, temperature.
 
-### Phase 4 — WhatsApp + recordings + local dev transport
+### Phase 4 — Inbound Bot Integration + WhatsApp + local dev transport
 **Status:** planned
+
+**Goal:** Plivo DID routing for inbound calls handled by the same Pipecat/Gemini bots.
 
 | Milestone | Status |
 | --------- | ------ |
-| Plivo call recording → Cloudflare R2 upload post-call | planned |
-| Signed URL generation for audio player (1 hr expiry) | planned |
+| `inbound_configs` table (Plivo DID → client + route + script) | planned |
+| `/inbound/answer` Plivo webhook (resolves config, streams WS XML) | planned |
+| Inbound billing (direct deduction from `clients.balance_credits`) | planned |
 | Meta WhatsApp Business API for post-call follow-up messages | planned |
 | n8n WhatsApp workflow templates | planned |
 | Browser test path via `SmallWebRTCTransport` | planned |
 
-Recording flow: [guides/aakash_arch.md](guides/aakash_arch.md) and [§12](#12-context-for-ai-assistants) below.
-
-### Phase 5 — RAG (only if a client requests it)
+### Phase 5 — Razorpay + RAG (only if a client requests it)
 **Status:** maybe
 
+- Razorpay recharge → `credit_packs` automation.
 - ChromaDB per-client knowledge base.
 - Embedder + retriever wired into Route A between user_aggregator and LLM.
 - Only build if a real client requests answering complex domain questions.

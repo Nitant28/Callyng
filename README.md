@@ -21,7 +21,7 @@
 
 **Product model.** Aakashvani is a **managed voice automation service**: we own bot scripts, prompts, route/model choice, Plivo numbers, n8n workflow design, and CRM handoffs. Clients use a future web app to upload leads, run campaigns, inspect logs, and manage **credits** (see [ROADMAP.md](ROADMAP.md) §1 and [guides/aakash_arch.md](guides/aakash_arch.md) §4).
 
-**Phase 0 / Phase 1 (foundation) are done** — single-tenant dev server + SQLite + `POST /start`, two voice routes, post-call extraction. **Phase 2** Postgres schema + pool are in place; `just call` still uses SQLite until dialer/API wiring. Phase 1 client SPA resumes after Phase 2 backend APIs.
+**Phase 0 / Phase 1 (foundation) are done** — single-tenant dev server + SQLite + `POST /start`, two voice routes, post-call extraction. **Phase 2** Postgres schema + pool are in place; `just call` still uses SQLite until dialer/API wiring. Phase 1 client SPAs resume after Phase 2 backend APIs.
 
 **Config model (forward path).** The DB `bot_configs` row is a **registry** (`route`, `script_id`, `credits_per_minute`, Plivo number). Prompts, VAD, models, `LEAD_SCHEMA`, and **`EXTRACTION_SCHEMA`** live in [`sts_scripts/`](sts_scripts/) and [`cascade_scripts/`](cascade_scripts/). Post-call Groq reads `EXTRACTION_SCHEMA` from the active script at runtime.
 
@@ -189,6 +189,9 @@ Calls are placed by hitting `POST /start` on the FastAPI server in [server.py](s
 ```
 aakashvani/
 ├── docker-compose.yml       Postgres 16 for local dev (port 5432)
+├── frontend/                React SPAs (Phase 2B)
+│   ├── client/              Client portal
+│   └── admin/               Admin dashboard
 ├── db/
 │   ├── postgres.py          asyncpg pool + client_id-scoped helpers + budget transactions
 │   ├── schema/001_initial.sql   Full schema ([guides/aakash_arch.md](guides/aakash_arch.md) §2)
@@ -336,7 +339,7 @@ sequenceDiagram
 2. ~~`/internal/*` + `/api/*` endpoints~~ — done
 3. ~~`post_call_processor`, lead upload, concurrent dialer~~ — done
 4. ~~Campaign hardening (post-call guard, cancel vs pause, stale call_log sweep)~~ — done
-5. Client React SPA (Phase 2B) — next
+5. Client and Admin React SPAs (Phase 2B) — next
 
 ### Pre-launch workflow priorities (implement in this order)
 
@@ -355,7 +358,7 @@ See [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing) for phas
 
 **Campaign control:** `stop` = pause (resume later). `cancel` = terminal (unused credits return when no in-flight calls).
 
-**Deferred:** `credits_per_minute` snapshot, CostGuard overshoot docs, `attempt_kind` on call_logs — see [ROADMAP.md](ROADMAP.md). Browser `SmallWebRTCTransport` → Phase 4. Razorpay → Phase 3.
+**Deferred:** `credits_per_minute` snapshot, CostGuard overshoot docs, `attempt_kind` on call_logs — see [ROADMAP.md](ROADMAP.md). Browser `SmallWebRTCTransport` → Phase 4. Call Recordings → Phase 3. Inbound bots → Phase 4. Razorpay → Phase 5. For production, `ngrok` is replaced by `nginx` with wildcard TLS.
 
 ---
 
