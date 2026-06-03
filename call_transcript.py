@@ -410,13 +410,21 @@ def attach_pipeline_finalize(
 
                         pool = _pg_pool()
                         if pool is not None:
-                            await process_post_call(
-                                pool,
-                                session_call_id,
-                                UUID(pg_ctx["lead_id"]),
-                                UUID(pg_ctx["campaign_id"]),
-                                UUID(pg_ctx["client_id"]),
-                                UUID(pg_ctx["bot_config_id"]),
+                            lead_id_str = pg_ctx.get("lead_id")
+                            campaign_id_str = pg_ctx.get("campaign_id")
+                            client_id_str = pg_ctx.get("client_id")
+                            bot_config_id_str = pg_ctx.get("bot_config_id")
+                            
+                            if not all([lead_id_str, campaign_id_str, client_id_str, bot_config_id_str]):
+                                logger.error("Missing required pg_ctx fields for post_call_processor: {}", pg_ctx)
+                            else:
+                                await process_post_call(
+                                    pool,
+                                    session_call_id,
+                                    UUID(lead_id_str),
+                                    UUID(campaign_id_str),
+                                    UUID(client_id_str),
+                                    UUID(bot_config_id_str),
                                 duration_seconds,
                                 transcript,
                                 extraction or {},

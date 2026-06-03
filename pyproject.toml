@@ -19,6 +19,7 @@ dependencies = [
   "python-dotenv>=1.2.2",
   "python-multipart>=0.0.27",
   "pytz>=2026.2",
+  "slowapi>=0.1.9",
   "uvicorn>=0.46.0",
 ]
 

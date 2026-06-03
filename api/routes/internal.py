@@ -5,11 +5,13 @@ from __future__ import annotations
 import re
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+import os
 
 from api.auth import get_pool, require_admin
 from db import postgres as pg_db
+from telephony import fetch_plivo_cash_credits
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -49,7 +51,6 @@ class CreateCampaignBody(BaseModel):
 
 
 class PatchCampaignBody(BaseModel):
-    client_id: UUID
     name: str | None = None
     max_concurrent_calls: int | None = None
     calls_per_minute: int | None = None
@@ -63,6 +64,15 @@ class WebhookConfigBody(BaseModel):
     event: str
     url: str
     secret: str
+
+
+class ClientStatusBody(BaseModel):
+    active: bool
+
+
+class BotConfigPatchBody(BaseModel):
+    credits_per_minute: float | None = None
+    active: bool | None = None
 
 
 @router.post("/clients")
@@ -90,6 +100,29 @@ async def list_clients(
     return {"clients": await pg_db.get_all_clients(pool)}
 
 
+@router.get("/clients/{client_id}")
+async def get_client(
+    client_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    client = await pg_db.get_client(pool, client_id)
+    if client is None:
+        raise HTTPException(404, "Client not found")
+    return {"client": client}
+
+
+@router.patch("/clients/{client_id}/status")
+async def patch_client_status(
+    client_id: UUID,
+    body: ClientStatusBody,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    await pg_db.update_client_status(pool, client_id, body.active)
+    return {"client": await pg_db.get_client(pool, client_id)}
+
+
 @router.patch("/clients/{client_id}/credits")
 async def patch_client_credits(
     client_id: UUID,
@@ -97,13 +130,31 @@ async def patch_client_credits(
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
 ):
-    if body.amount < 0:
-        raise HTTPException(400, "Amount cannot be negative")
     try:
         balance = await pg_db.add_credits(pool, client_id, body.amount, body.note)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     return {"balance_credits": balance}
+
+
+@router.get("/clients/{client_id}/credits")
+async def list_client_credits(
+    client_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    txs = await pg_db.list_credit_transactions(pool, client_id)
+    return {"transactions": txs}
+
+
+@router.get("/clients/{client_id}/webhooks")
+async def list_client_webhooks(
+    client_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    rows = await pool.fetch("SELECT * FROM webhook_configs WHERE client_id = $1", client_id)
+    return {"webhooks": [dict(r) for r in rows]}
 
 
 @router.post("/bot-configs")
@@ -134,6 +185,31 @@ async def list_bot_configs(
     pool=Depends(get_pool),
 ):
     return {"bot_configs": await pg_db.list_bot_configs(pool, None)}
+
+
+@router.patch("/bot-configs/{bot_config_id}")
+async def patch_bot_config(
+    bot_config_id: UUID,
+    body: BotConfigPatchBody,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    sets = []
+    args = []
+    idx = 1
+    if body.credits_per_minute is not None:
+        sets.append(f"credits_per_minute = ${idx}")
+        args.append(body.credits_per_minute)
+        idx += 1
+    if body.active is not None:
+        sets.append(f"active = ${idx}")
+        args.append(body.active)
+        idx += 1
+    if sets:
+        args.append(bot_config_id)
+        await pool.execute(f"UPDATE bot_configs SET {', '.join(sets)} WHERE id = ${idx}", *args)
+    row = await pool.fetchrow("SELECT * FROM bot_configs WHERE id = $1", bot_config_id)
+    return {"bot_config": dict(row) if row else None}
 
 
 @router.post("/campaigns")
@@ -168,6 +244,18 @@ async def create_campaign(
     }
 
 
+@router.get("/campaigns/{campaign_id}")
+async def get_campaign(
+    campaign_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    return {"campaign": camp}
+
+
 @router.patch("/campaigns/{campaign_id}")
 async def patch_campaign(
     campaign_id: UUID,
@@ -175,13 +263,14 @@ async def patch_campaign(
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
 ):
-    camp = await pg_db.get_campaign(pool, campaign_id, body.client_id)
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
     if camp is None:
         raise HTTPException(404, "Campaign not found")
+    client_id = UUID(str(camp["client_id"]))
     await pg_db.update_campaign_settings(
         pool,
         campaign_id,
-        body.client_id,
+        client_id,
         name=body.name,
         max_concurrent_calls=body.max_concurrent_calls,
         calls_per_minute=body.calls_per_minute,
@@ -189,7 +278,45 @@ async def patch_campaign(
         retry_delay_minutes=body.retry_delay_minutes,
         max_call_minutes=body.max_call_minutes,
     )
-    return {"campaign": await pg_db.get_campaign(pool, campaign_id, body.client_id)}
+    return {"campaign": await pg_db.get_campaign_admin(pool, campaign_id)}
+
+
+@router.patch("/campaigns/{campaign_id}/stop")
+async def stop_campaign_admin(
+    campaign_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    from dialer.concurrent_dialer import stop_dialer
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    client_id = UUID(str(camp["client_id"]))
+    stop_dialer(campaign_id, client_id)
+    released = await pg_db.release_stuck_calling_leads(pool, campaign_id, client_id)
+    await pg_db.update_campaign_status(pool, campaign_id, client_id, "paused")
+    return {"status": "paused", "released_calling_leads": released}
+
+
+@router.patch("/campaigns/{campaign_id}/cancel")
+async def cancel_campaign_admin(
+    campaign_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    from dialer.concurrent_dialer import stop_dialer
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    if camp["status"] in ("completed", "cancelled"):
+        raise HTTPException(409, f"Campaign already {camp['status']}")
+    client_id = UUID(str(camp["client_id"]))
+    stop_dialer(campaign_id, client_id)
+    try:
+        result = await pg_db.cancel_campaign(pool, campaign_id, client_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"campaign_id": str(campaign_id), **result}
 
 
 @router.post("/webhook-configs")
@@ -211,4 +338,58 @@ async def list_all_calls(
     limit: int = 50,
     offset: int = 0,
 ):
-    return {"calls": await pg_db.list_call_logs(pool, None, limit=limit, offset=offset)}
+    calls, total = await pg_db.list_call_logs(pool, None, limit=limit, offset=offset)
+    return {"calls": calls, "total_count": total}
+
+
+@router.get("/scripts")
+async def list_scripts(_: None = Depends(require_admin)):
+    scripts = []
+    
+    def scan_dir(route_name, path):
+        if os.path.exists(path):
+            for f in os.listdir(path):
+                if f.endswith(".py") and not f.startswith("__"):
+                    scripts.append({"route": route_name, "script_id": f[:-3]})
+                    
+    scan_dir("sts", "sts_scripts")
+    scan_dir("cascaded", "cascade_scripts")
+    return {"scripts": scripts}
+
+
+@router.get("/stats")
+async def get_stats(_: None = Depends(require_admin), pool=Depends(get_pool)):
+    total_calls_today = await pool.fetchval("SELECT COUNT(*) FROM call_logs WHERE started_at >= CURRENT_DATE")
+    active_campaigns = await pool.fetchval("SELECT COUNT(*) FROM campaigns WHERE status = 'running'")
+    total_credits_used_today = await pool.fetchval("SELECT SUM(credits_charged) FROM call_logs WHERE started_at >= CURRENT_DATE")
+    return {
+        "total_calls_today": total_calls_today or 0,
+        "active_campaigns": active_campaigns or 0,
+        "total_credits_used_today": float(total_credits_used_today or 0)
+    }
+
+
+@router.get("/health")
+async def extended_health(
+    request: Request,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    active_calls = await pool.fetchval("SELECT COUNT(*) FROM call_logs WHERE in_progress = TRUE")
+    pool_stats = {
+        "size": pool.get_size(),
+        "idle": pool.get_idle_size(),
+    }
+    plivo_balance = None
+    try:
+        plivo_balance = float(await fetch_plivo_cash_credits(request.app.state.session))
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "active_calls": active_calls or 0,
+        "pool": pool_stats,
+        "plivo_balance": plivo_balance,
+        "dialer_tasks": len(getattr(request.app.state, "dialer_tasks", {})),
+    }

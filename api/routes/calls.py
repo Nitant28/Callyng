@@ -20,8 +20,8 @@ async def list_calls(
     offset: int = 0,
 ):
     cid = client_id_uuid(client)
-    calls = await pg_db.list_call_logs(pool, cid, limit=limit, offset=offset)
-    return {"calls": calls}
+    calls, total_count = await pg_db.list_call_logs(pool, cid, limit=limit, offset=offset)
+    return {"calls": calls, "total_count": total_count}
 
 
 @router.get("/{session_call_id}")

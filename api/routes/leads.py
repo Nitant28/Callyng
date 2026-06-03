@@ -80,7 +80,7 @@ async def list_leads(
     cid = client_id_uuid(client)
     await _get_campaign_or_404(pool, campaign_id, cid)
 
-    leads = await pg_db.list_campaign_leads(
+    leads, total_count = await pg_db.list_campaign_leads(
         pool,
         campaign_id,
         cid,
@@ -88,7 +88,7 @@ async def list_leads(
         offset=offset,
         status=status,
     )
-    return {"leads": leads, "limit": limit, "offset": offset, "status": status}
+    return {"leads": leads, "limit": limit, "offset": offset, "status": status, "total_count": total_count}
 
 
 @router.get("/{campaign_id}/leads/{lead_id}")

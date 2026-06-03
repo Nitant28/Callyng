@@ -331,21 +331,48 @@ async def add_credits(
     amount: float,
     note: str,
 ) -> float:
-    del note  # reserved for audit log in Phase 3
-    row = await pool.fetchrow(
-        """
-        UPDATE clients
-        SET balance_credits = balance_credits + $1
-        WHERE id = $2 AND active = TRUE
-        RETURNING balance_credits
-        """,
-        Decimal(str(amount)),
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                UPDATE clients
+                SET balance_credits = balance_credits + $1
+                WHERE id = $2 AND active = TRUE
+                RETURNING balance_credits
+                """,
+                Decimal(str(amount)),
+                client_id,
+            )
+            if row is None:
+                raise ValueError(f"Client not found: {client_id}")
+            
+            await conn.execute(
+                """
+                INSERT INTO credit_transactions (client_id, amount, note)
+                VALUES ($1, $2, $3)
+                """,
+                client_id,
+                Decimal(str(amount)),
+                note,
+            )
+            return float(row["balance_credits"])
+
+
+async def get_client(pool: asyncpg.Pool, client_id: UUID) -> dict | None:
+    row = await pool.fetchrow("SELECT * FROM clients WHERE id = $1", client_id)
+    return record_to_dict(row)
+
+
+async def update_client_status(pool: asyncpg.Pool, client_id: UUID, active: bool) -> None:
+    await pool.execute("UPDATE clients SET active = $1 WHERE id = $2", active, client_id)
+
+
+async def list_credit_transactions(pool: asyncpg.Pool, client_id: UUID) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT * FROM credit_transactions WHERE client_id = $1 ORDER BY created_at DESC",
         client_id,
     )
-    if row is None:
-        raise ValueError(f"Client not found: {client_id}")
-    return float(row["balance_credits"])
-
+    return records_to_dicts(rows)
 
 # ── Bot configs ───────────────────────────────────────────────────────────────
 
@@ -473,6 +500,17 @@ async def get_campaign(
         """,
         campaign_id,
         client_id,
+    )
+    return record_to_dict(row)
+
+
+async def get_campaign_admin(
+    pool: asyncpg.Pool,
+    campaign_id: UUID | str,
+) -> dict | None:
+    row = await pool.fetchrow(
+        "SELECT * FROM campaigns WHERE id = $1",
+        campaign_id,
     )
     return record_to_dict(row)
 
@@ -1271,22 +1309,25 @@ async def list_campaign_leads(
     limit: int = 50,
     offset: int = 0,
     status: str | None = None,
-) -> list[dict]:
-    """Return a paginated list of leads for a campaign."""
+) -> tuple[list[dict], int]:
+    """Return a paginated list of leads for a campaign, plus total count."""
     query = "SELECT * FROM leads WHERE campaign_id = $1 AND client_id = $2"
+    count_query = "SELECT COUNT(*) FROM leads WHERE campaign_id = $1 AND client_id = $2"
     args: list[Any] = [campaign_id, client_id]
     idx = 3
 
     if status:
         query += f" AND status = ${idx}"
+        count_query += f" AND status = ${idx}"
         args.append(status)
         idx += 1
 
+    total_count = await pool.fetchval(count_query, *args)
     query += f" ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
     args.extend([limit, offset])
 
     rows = await pool.fetch(query, *args)
-    return records_to_dicts(rows)
+    return records_to_dicts(rows), total_count
 
 
 async def update_lead_fields(
@@ -1913,8 +1954,9 @@ async def list_call_logs(
     client_id: UUID | None,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict]:
+) -> tuple[list[dict], int]:
     if client_id is None:
+        total = await pool.fetchval("SELECT COUNT(*) FROM call_logs")
         rows = await pool.fetch(
             """
             SELECT * FROM call_logs
@@ -1925,6 +1967,7 @@ async def list_call_logs(
             offset,
         )
     else:
+        total = await pool.fetchval("SELECT COUNT(*) FROM call_logs WHERE client_id = $1", client_id)
         rows = await pool.fetch(
             """
             SELECT * FROM call_logs
@@ -1936,7 +1979,7 @@ async def list_call_logs(
             limit,
             offset,
         )
-    return records_to_dicts(rows)
+    return records_to_dicts(rows), total
 
 
 # ── Webhooks ──────────────────────────────────────────────────────────────────

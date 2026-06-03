@@ -168,7 +168,7 @@ async def start_campaign(
     if camp is None:
         raise HTTPException(404, "Campaign not found")
 
-    if camp["status"] not in ("draft", "paused"):
+    if camp["status"] != "draft":
         raise HTTPException(409, f"Cannot start a {camp['status']} campaign")
 
     budget = float(camp.get("budget_credits") or 0)
