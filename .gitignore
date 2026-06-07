@@ -38,7 +38,8 @@ htmlcov/
 .pyright/
 .ruff_cache/
 .dmypy.json
-
+.agents
+.antigravitycli
 # Logs / runtime
 *.log
 logs/
@@ -67,3 +68,4 @@ recordings/
 *.wav
 *.mp3
 *.flac
+node_modules
