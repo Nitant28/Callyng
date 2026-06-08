@@ -368,6 +368,7 @@ See [ROADMAP.md §9 Phase 2](ROADMAP.md#phase-2--multi-tenant--billing) for phas
 | -------- | ------- |
 | [README.md](README.md) | Dev setup, quick start, troubleshooting (this file) |
 | [ROADMAP.md](ROADMAP.md) | Vision, phases, [pre-launch priorities](ROADMAP.md#10-pre-launch-client-workflow-priorities), pricing, compliance |
+| [future_updates.md](future_updates.md) | Scalability roadmap (Distributed task queue, Auto-resume, Connection pool scaling) |
 | [guides/](guides/) | [CLI](guides/CLI_GUIDE.md) (operator), [testing](guides/TESTING.md) (E2E), [architecture](guides/aakash_arch.md) |
 | [handoff/](handoff/) | [Phase 2 handoff](handoff/PHASE2_HANDOFF.md), [debugging](handoff/DEBUGGING_CONTEXT.md), audit [report](handoff/report.md) |
 | [fixtures/](fixtures/) | Sample CSVs (e.g. `test_leads.csv` for upload tests) |

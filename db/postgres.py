@@ -218,12 +218,17 @@ def database_url() -> str | None:
 
 async def create_db_pool(dsn: str) -> asyncpg.Pool:
     global _pool
+    import os
     if _pool is not None:
         await _pool.close()
+        
+    min_size = int(os.getenv("DB_POOL_MIN", "5"))
+    max_size = int(os.getenv("DB_POOL_MAX", "50"))
+    
     _pool = await asyncpg.create_pool(
         dsn=dsn,
-        min_size=5,
-        max_size=20,
+        min_size=min_size,
+        max_size=max_size,
         command_timeout=30,
     )
     return _pool
@@ -743,6 +748,38 @@ async def try_settle_campaign_budget(
     return unused, just_completed
 
 
+async def maybe_transition_pausing(
+    conn: asyncpg.Connection,
+    campaign_id: UUID | str,
+    client_id: UUID | str,
+) -> bool:
+    """Transition campaign from pausing to paused if calling_leads is 0."""
+    row = await conn.fetchrow(
+        """
+        SELECT status, calling_leads
+        FROM campaigns
+        WHERE id = $1 AND client_id = $2
+        FOR UPDATE
+        """,
+        campaign_id,
+        client_id,
+    )
+    if row is None:
+        return False
+    
+    if row["status"] == "pausing" and int(row["calling_leads"] or 0) == 0:
+        await conn.execute(
+            """
+            UPDATE campaigns SET status = 'paused'
+            WHERE id = $1 AND client_id = $2
+            """,
+            campaign_id,
+            client_id,
+        )
+        return True
+    return False
+
+
 async def maybe_auto_settle_campaign(
     conn: asyncpg.Connection,
     campaign_id: UUID | str,
@@ -1065,6 +1102,28 @@ async def release_stuck_calling_leads(
                 )
             return len(rows)
 
+async def release_all_stuck_calling_leads(pool: asyncpg.Pool) -> int:
+    """Run release_stuck_calling_leads for all campaigns with calling_leads > 0."""
+    rows = await pool.fetch("SELECT id, client_id FROM campaigns WHERE calling_leads > 0")
+    total_released = 0
+    for r in rows:
+        released = await release_stuck_calling_leads(pool, r["id"], r["client_id"])
+        total_released += released
+    return total_released
+
+
+async def transition_all_pausing_to_paused(pool: asyncpg.Pool) -> int:
+    """Transition any pausing campaign with calling_leads = 0 to paused."""
+    rows = await pool.fetch(
+        """
+        UPDATE campaigns
+        SET status = 'paused'
+        WHERE status = 'pausing' AND calling_leads = 0
+        RETURNING id
+        """
+    )
+    return len(rows)
+
 
 async def reconcile_campaign_counters(
     pool: asyncpg.Pool,
@@ -1309,6 +1368,7 @@ async def list_campaign_leads(
     limit: int = 50,
     offset: int = 0,
     status: str | None = None,
+    search: str | None = None,
 ) -> tuple[list[dict], int]:
     """Return a paginated list of leads for a campaign, plus total count."""
     query = "SELECT * FROM leads WHERE campaign_id = $1 AND client_id = $2"
@@ -1320,6 +1380,13 @@ async def list_campaign_leads(
         query += f" AND status = ${idx}"
         count_query += f" AND status = ${idx}"
         args.append(status)
+        idx += 1
+
+    if search:
+        search_pattern = f"%{search}%"
+        query += f" AND (name ILIKE ${idx} OR phone ILIKE ${idx})"
+        count_query += f" AND (name ILIKE ${idx} OR phone ILIKE ${idx})"
+        args.append(search_pattern)
         idx += 1
 
     total_count = await pool.fetchval(count_query, *args)

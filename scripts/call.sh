@@ -22,7 +22,24 @@ fi
 
 NGROK=${NGROK_URL:?"NGROK_URL not set in .env"}
 
-curl -sS -X POST "$NGROK/start" \
+RESPONSE=$(curl -sS -w "\n%{http_code}" -X POST "$NGROK/start" \
     -H "Content-Type: application/json" \
-    -d "{\"phone_number\":\"$PHONE\",\"body\":{\"lead_name\":\"$NAME\",\"city\":\"$CITY\"}}" \
-    | (command -v jq >/dev/null && jq . || cat)
+    -d "{\"phone_number\":\"$PHONE\",\"body\":{\"lead_name\":\"$NAME\",\"city\":\"$CITY\"}}")
+
+HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+BODY=$(echo "$RESPONSE" | sed '$d')
+
+if [[ "$HTTP_CODE" -ne 200 && "$HTTP_CODE" -ne 201 ]]; then
+    echo "Request failed with HTTP status $HTTP_CODE."
+    echo "Check if your NGROK_URL in .env is correct and the server is running."
+    echo ""
+    echo "Raw Response:"
+    echo "$BODY"
+    exit 1
+fi
+
+if command -v jq >/dev/null; then
+    echo "$BODY" | jq . 2>/dev/null || echo "$BODY"
+else
+    echo "$BODY"
+fi

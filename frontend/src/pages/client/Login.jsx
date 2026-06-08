@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import CanvasBackground from '../../components/shared/CanvasBackground';
 import { useTheme } from '../../hooks/useTheme';
 import clientApi from '../../api/client';
@@ -7,6 +8,7 @@ import { ThemeToggle } from '../../components/shared/ui';
 import { Button } from '../../components/shared/ui';
 
 const Login = () => {
+  const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);
@@ -32,9 +34,9 @@ const Login = () => {
     // Trigger redirect transition immediately for an enterprise feel
     setIsRedirecting(true);
     setTimeout(() => {
-      window.location.href = '/app';
+      navigate('/app');
     }, 150);
-  }, []);
+  }, [navigate]);
 
   const handleAuthenticate = useCallback(async (keyToVerify) => {
     const key = keyToVerify !== undefined ? keyToVerify : apiKey;
@@ -48,12 +50,6 @@ const Login = () => {
     setIsError(false);
 
     try {
-      // Simulation mode: if they enter "SECRET" or a long mock key, bypass request check
-      if (key === 'SECRET' || key.length > 24) {
-        triggerSuccess(key);
-        return;
-      }
-
       // Real API validation call
       const response = await clientApi.get('/api/credits', {
         headers: {
@@ -68,12 +64,7 @@ const Login = () => {
       }
     } catch (err) {
       console.error('Auth verification failed:', err);
-      if (key.length > 12) {
-        console.log('API call failed but key length > 12: entering demo/simulation mode');
-        triggerSuccess(key);
-      } else {
-        triggerError();
-      }
+      triggerError();
     } finally {
       setLoading(false);
     }
@@ -178,7 +169,7 @@ const Login = () => {
 
       {/* Footer Identity */}
       <footer className="fixed bottom-0 w-full flex justify-between items-center px-margin-desktop py-stack-md font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted opacity-60 z-10 animate-stagger-3">
-        <span>© 2024 Aakashvani. Enterprise-Grade Security.</span>
+        <span>© 2026 Aakashvani. Enterprise-Grade Security.</span>
         <div className="flex gap-gutter">
           <span className="hover:text-primary dark:hover:text-molten-primary cursor-pointer transition-colors">Privacy</span>
           <span className="hover:text-primary dark:hover:text-molten-primary cursor-pointer transition-colors">Status</span>

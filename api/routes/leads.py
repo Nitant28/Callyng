@@ -73,6 +73,7 @@ async def list_leads(
     limit: int = 50,
     offset: int = 0,
     status: str | None = None,
+    search: str | None = None,
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
 ):
@@ -87,8 +88,9 @@ async def list_leads(
         limit=limit,
         offset=offset,
         status=status,
+        search=search,
     )
-    return {"leads": leads, "limit": limit, "offset": offset, "status": status, "total_count": total_count}
+    return {"leads": leads, "limit": limit, "offset": offset, "status": status, "search": search, "total_count": total_count}
 
 
 @router.get("/{campaign_id}/leads/{lead_id}")
@@ -303,3 +305,29 @@ async def change_lead_status(
         "transition": f"{current} → {target}",
         "counters": counters,
     }
+
+
+# ── Feature 4: Delete Lead ──────────────────────────────────────────────────
+
+@router.delete("/{campaign_id}/leads/{lead_id}")
+async def delete_lead(
+    campaign_id: UUID,
+    lead_id: UUID,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    """Delete a single lead from a campaign."""
+    cid = client_id_uuid(client)
+    camp = await _get_campaign_or_404(pool, campaign_id, cid)
+    require_campaign_modifiable(camp)
+
+    lead = await _get_lead_or_404(pool, lead_id, cid, campaign_id)
+    require_lead_not_calling(lead)
+
+    deleted = await pg_db.delete_lead(pool, lead_id, cid)
+    if not deleted:
+        raise HTTPException(404, "Lead not found")
+
+    counters = await pg_db.reconcile_campaign_counters(pool, campaign_id, cid)
+
+    return {"success": True, "counters": counters}

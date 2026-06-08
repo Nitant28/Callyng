@@ -3,7 +3,9 @@ import Login from './pages/client/Login';
 import ClientDashboard from './pages/client/Dashboard';
 import ClientCampaignDetail from './pages/client/CampaignDetail';
 import ClientCallLogs from './pages/client/CallLogs';
+import ClientSettings from './pages/client/Settings';
 import { ClientGuard, AdminGuard } from './components/shared/Guards';
+import Layout from './components/shared/layout/Layout';
 
 const AdminLogin = () => (
   <div className="flex flex-col items-center justify-center min-h-screen bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text">
@@ -41,9 +43,12 @@ const AdminCalls = () => (
   </div>
 );
 
+import { ToastProvider } from './contexts/ToastContext';
+
 function App() {
   return (
-    <Router>
+    <ToastProvider>
+      <Router>
       <Routes>
         {/* Client Routes */}
         <Route path="/login" element={<Login />} />
@@ -51,7 +56,9 @@ function App() {
           path="/app"
           element={
             <ClientGuard>
-              <ClientDashboard />
+              <Layout>
+                <ClientDashboard />
+              </Layout>
             </ClientGuard>
           }
         />
@@ -59,7 +66,9 @@ function App() {
           path="/app/campaigns/:id"
           element={
             <ClientGuard>
-              <ClientCampaignDetail />
+              <Layout>
+                <ClientCampaignDetail />
+              </Layout>
             </ClientGuard>
           }
         />
@@ -67,7 +76,19 @@ function App() {
           path="/app/calls"
           element={
             <ClientGuard>
-              <ClientCallLogs />
+              <Layout>
+                <ClientCallLogs />
+              </Layout>
+            </ClientGuard>
+          }
+        />
+        <Route
+          path="/app/settings"
+          element={
+            <ClientGuard>
+              <Layout>
+                <ClientSettings />
+              </Layout>
             </ClientGuard>
           }
         />
@@ -119,7 +140,8 @@ function App() {
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="*" element={<div className="p-8 text-center text-xl">404 Not Found</div>} />
       </Routes>
-    </Router>
+      </Router>
+    </ToastProvider>
   );
 }
 

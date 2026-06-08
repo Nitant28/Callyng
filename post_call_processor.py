@@ -263,6 +263,9 @@ async def process_post_call(
                     _, just_completed = await pg_db.maybe_auto_settle_campaign(
                         conn, campaign_id, client_id
                     )
+                    await pg_db.maybe_transition_pausing(
+                        conn, campaign_id, client_id
+                    )
                     applied = True
 
     if applied and just_completed:

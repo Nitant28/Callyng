@@ -14,6 +14,10 @@ export const Badge = ({ status, className = '' }) => {
         </span>
       );
       break;
+    case 'pausing':
+      badgeClasses = 'bg-arctic-warning/15 text-arctic-warning';
+      label = 'Pausing...';
+      break;
     case 'paused':
       badgeClasses = 'bg-arctic-warning/15 text-arctic-warning';
       break;

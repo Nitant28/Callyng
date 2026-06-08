@@ -595,6 +595,7 @@ Build order: [guides/aakash_arch.md §13](guides/aakash_arch.md) (admin-first).
 - Multi-region deployment (AWS Mumbai for PSTN latency to India).
 - Inbound calls (same bots handle return calls).
 - Human handoff (bot conferences in a human on demand).
+- Enterprise Scalability Upgrades (Redis Task Queue, Global Rate Limiting, Server Auto-Resume, pgBouncer pool scaling). See `future_updates.md`.
 
 ---
 

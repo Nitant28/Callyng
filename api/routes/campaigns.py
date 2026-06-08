@@ -47,6 +47,26 @@ async def list_campaigns(
     return {"campaigns": await pg_db.list_campaigns(pool, cid)}
 
 
+from pydantic import BaseModel, Field
+
+class ClientCreateCampaignBody(BaseModel):
+    name: str
+    bot_config_id: UUID
+    budget_credits: float = Field(ge=0)
+    max_concurrent_calls: int = 5
+    calls_per_minute: int = 10
+    max_attempts: int = 3
+    retry_delay_minutes: int = 120
+    max_call_minutes: int | None = None
+
+class ClientPatchCampaignBody(BaseModel):
+    name: str | None = None
+    max_concurrent_calls: int | None = None
+    calls_per_minute: int | None = None
+    max_attempts: int | None = None
+    retry_delay_minutes: int | None = None
+    max_call_minutes: int | None = None
+
 @router.get("/{campaign_id}/stats")
 async def campaign_stats(
     campaign_id: UUID,
@@ -58,6 +78,60 @@ async def campaign_stats(
     if camp is None:
         raise HTTPException(404, "Campaign not found")
     return {"stats": camp}
+
+
+@router.post("")
+async def create_campaign(
+    body: ClientCreateCampaignBody,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    cid = client_id_uuid(client)
+    try:
+        campaign_id = await pg_db.create_campaign(
+            pool,
+            cid,
+            body.bot_config_id,
+            body.name,
+            body.budget_credits,
+            body.max_concurrent_calls,
+            body.calls_per_minute,
+            body.max_attempts,
+            body.retry_delay_minutes,
+            body.max_call_minutes,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {"id": str(campaign_id)}
+
+
+@router.patch("/{campaign_id}")
+async def patch_campaign(
+    campaign_id: UUID,
+    body: ClientPatchCampaignBody,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    cid = client_id_uuid(client)
+    camp = await pg_db.get_campaign(pool, campaign_id, cid)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+
+    require_campaign_modifiable(camp, allow_paused=True)
+
+    await pg_db.update_campaign_settings(
+        pool,
+        campaign_id,
+        cid,
+        name=body.name,
+        max_concurrent_calls=body.max_concurrent_calls,
+        calls_per_minute=body.calls_per_minute,
+        max_attempts=body.max_attempts,
+        retry_delay_minutes=body.retry_delay_minutes,
+        max_call_minutes=body.max_call_minutes,
+    )
+    return {"success": True}
 
 
 @router.post("/{campaign_id}/leads/upload")
@@ -168,7 +242,7 @@ async def start_campaign(
     if camp is None:
         raise HTTPException(404, "Campaign not found")
 
-    if camp["status"] != "draft":
+    if camp["status"] not in ("draft", "paused", "pausing"):
         raise HTTPException(409, f"Cannot start a {camp['status']} campaign")
 
     budget = float(camp.get("budget_credits") or 0)
@@ -235,9 +309,14 @@ async def stop_campaign(
         raise HTTPException(404, "Campaign not found")
     stop_dialer(campaign_id, cid)
     released = await pg_db.release_stuck_calling_leads(pool, campaign_id, cid)
-    await pg_db.update_campaign_status(pool, campaign_id, cid, "paused")
+    
+    camp_updated = await pg_db.get_campaign(pool, campaign_id, cid)
+    calling = int(camp_updated.get("calling_leads") or 0)
+    new_status = "pausing" if calling > 0 else "paused"
+    
+    await pg_db.update_campaign_status(pool, campaign_id, cid, new_status)
     return {
-        "status": "paused",
+        "status": new_status,
         "campaign_id": str(campaign_id),
         "released_calling_leads": released,
     }

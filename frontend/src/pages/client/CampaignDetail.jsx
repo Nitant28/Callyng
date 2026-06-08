@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useTheme } from '../../hooks/useTheme';
+import { useToast } from '../../contexts/ToastContext';
 import clientApi from '../../api/client';
 import LoaderOverlay from '../../components/shared/LoaderOverlay';
 import CallTranscriptDrawer from '../../components/shared/CallTranscriptDrawer';
@@ -8,6 +9,7 @@ import CallTranscriptDrawer from '../../components/shared/CallTranscriptDrawer';
 const CampaignDetail = () => {
   const { id } = useParams();
   const { theme, toggleTheme } = useTheme();
+  const { showToast } = useToast();
 
   // Campaign Details & UI State
   const [campaign, setCampaign] = useState(null);
@@ -32,6 +34,10 @@ const CampaignDetail = () => {
   const [isAddLeadOpen, setIsAddLeadOpen] = useState(false);
   const [newLead, setNewLead] = useState({ name: '', phone: '', lead_type: 'cold', metadata: {} });
 
+  // Edit Lead Modal State
+  const [isEditLeadOpen, setIsEditLeadOpen] = useState(false);
+  const [editLeadData, setEditLeadData] = useState(null);
+
   // Ticking calling counter animation state
   const [liveCallingCount, setLiveCallingCount] = useState(0);
 
@@ -53,36 +59,12 @@ const CampaignDetail = () => {
       if (response.data && response.data.stats) {
         setCampaign(response.data.stats);
         setLiveCallingCount(response.data.stats.calling_leads || 0);
+      } else {
+        setCampaign(null);
       }
     } catch (err) {
-      console.warn('API error fetching campaign, resolving from local cache', err);
-      // Fallback: search in local storage campaigns
-      const localCamps = JSON.parse(localStorage.getItem('local_campaigns') || '[]');
-      const found = localCamps.find(c => c.id === id);
-      if (found) {
-        setCampaign(found);
-        setLiveCallingCount(found.calling_leads || 0);
-      } else {
-        // Mock fallback if nothing found
-        const mockCamp = {
-          id: id,
-          name: 'Q4 Real Estate Outreach',
-          status: 'running',
-          description: 'Automated cold-calling for luxury properties in Mumbai region.',
-          total_leads: 2450,
-          calling_leads: 42,
-          completed_leads: 1682,
-          failed_leads: 142,
-          budget_credits: 5000,
-          budget_used_credits: 1250,
-          max_concurrent_calls: 100,
-          calls_per_minute: 20,
-          max_attempts: 3,
-          retry_delay_minutes: 120
-        };
-        setCampaign(mockCamp);
-        setLiveCallingCount(mockCamp.calling_leads);
-      }
+      console.warn('API error fetching campaign', err);
+      setCampaign(null);
     } finally {
       setLoading(false);
     }
@@ -97,43 +79,20 @@ const CampaignDetail = () => {
           limit: leadsLimit,
           offset: leadsOffset,
           status: leadsStatusFilter || undefined,
+          search: leadsSearch || undefined,
         }
       });
       if (response.data) {
         setLeads(response.data.leads || []);
         setTotalLeadsCount(response.data.total_count || 0);
+      } else {
+        setLeads([]);
+        setTotalLeadsCount(0);
       }
     } catch (err) {
-      console.warn('API error listing leads, using mocked/cached list', err);
-      // Fallback
-      const localLeads = JSON.parse(localStorage.getItem(`leads_${id}`) || '[]');
-      let filtered = localLeads;
-      if (leadsStatusFilter) {
-        filtered = filtered.filter(l => l.status === leadsStatusFilter);
-      }
-      if (leadsSearch) {
-        filtered = filtered.filter(l => 
-          (l.name && l.name.toLowerCase().includes(leadsSearch.toLowerCase())) ||
-          l.phone.includes(leadsSearch)
-        );
-      }
-      
-      // If empty, generate standard mock leads
-      if (filtered.length === 0 && !leadsStatusFilter && !leadsSearch) {
-        const mockLeads = [
-          { id: 'l1', name: 'Rajesh Kumar', phone: '+919876543210', status: 'completed', attempts: 1, lead_type: 'hot' },
-          { id: 'l2', name: 'Priya Sharma', phone: '+919999888777', status: 'calling', attempts: 2, lead_type: 'warm' },
-          { id: 'l3', name: 'Amit Patel', phone: '+918887776665', status: 'pending', attempts: 0, lead_type: 'cold' },
-          { id: 'l4', name: 'Sunita Rao', phone: '+917776665554', status: 'failed', attempts: 3, lead_type: 'cold' },
-          { id: 'l5', name: 'Vikram Singh', phone: '+919911223344', status: 'dnc', attempts: 0, lead_type: 'warm' },
-        ];
-        setLeads(mockLeads);
-        setTotalLeadsCount(mockLeads.length);
-        localStorage.setItem(`leads_${id}`, JSON.stringify(mockLeads));
-      } else {
-        setLeads(filtered.slice(leadsOffset, leadsOffset + leadsLimit));
-        setTotalLeadsCount(filtered.length);
-      }
+      console.warn('API error listing leads', err);
+      setLeads([]);
+      setTotalLeadsCount(0);
     } finally {
       setLeadsLoading(false);
     }
@@ -172,20 +131,18 @@ const CampaignDetail = () => {
     }
   }, [activeTab, loading]);
 
-  // Ticking counter simulation (matches prototype ticking behavior)
+  // Real-time polling for campaign stats
   useEffect(() => {
-    if (!campaign || campaign.status !== 'running') return;
+    if (!campaign) return;
+    const isPausing = campaign.status === 'pausing' || (campaign.status === 'paused' && campaign.calling_leads > 0);
+    if (campaign.status !== 'running' && !isPausing) return;
     
+    const pollInterval = isPausing ? 3000 : 10000;
     const interval = setInterval(() => {
-      setLiveCallingCount(prev => {
-        const delta = Math.floor(Math.random() * 5) - 2; // fluctuate by -2 to +2
-        const next = Math.max(0, prev + delta);
-        return next;
-      });
-    }, 4000);
-
+      loadCampaignDetails();
+    }, pollInterval);
     return () => clearInterval(interval);
-  }, [campaign]);
+  }, [campaign, loadCampaignDetails]);
 
   const handleOpenTranscript = (lead) => {
     setSelectedLeadForTranscript(lead);
@@ -199,27 +156,14 @@ const CampaignDetail = () => {
     try {
       const response = await clientApi.patch(`/api/campaigns/${id}/${action}`);
       if (response.data) {
+        showToast(`Campaign ${action === 'start' ? 'started' : 'paused'} successfully.`, 'success');
         loadCampaignDetails();
         return;
       }
     } catch (err) {
-      console.warn(`Campaign state toggle to ${action} failed. Simulating locally.`, err);
+      console.warn(`Campaign state toggle to ${action} failed.`, err);
+      showToast(`Failed to ${action} campaign. See console for details.`, 'error');
     }
-
-    // Local simulation update
-    const nextStatus = campaign.status === 'running' ? 'paused' : 'running';
-    const updatedCamp = {
-      ...campaign,
-      status: nextStatus,
-      calling_leads: nextStatus === 'running' ? 42 : 0,
-    };
-    setCampaign(updatedCamp);
-    setLiveCallingCount(updatedCamp.calling_leads);
-
-    // Save to local storage campaigns list
-    const localCamps = JSON.parse(localStorage.getItem('local_campaigns') || '[]');
-    const updatedLocalCamps = localCamps.map(c => c.id === id ? updatedCamp : c);
-    localStorage.setItem('local_campaigns', JSON.stringify(updatedLocalCamps));
   };
 
   const handleCancelCampaign = async () => {
@@ -228,21 +172,14 @@ const CampaignDetail = () => {
     try {
       const response = await clientApi.patch(`/api/campaigns/${id}/cancel`);
       if (response.data) {
+        showToast('Campaign cancelled successfully.', 'success');
         loadCampaignDetails();
         return;
       }
     } catch (err) {
-      console.warn('Campaign cancel endpoint failed, simulating locally.', err);
+      console.warn('Campaign cancel endpoint failed.', err);
+      showToast('Failed to cancel campaign.', 'error');
     }
-
-    // Local simulation update
-    const updatedCamp = { ...campaign, status: 'cancelled', calling_leads: 0 };
-    setCampaign(updatedCamp);
-    setLiveCallingCount(0);
-
-    const localCamps = JSON.parse(localStorage.getItem('local_campaigns') || '[]');
-    const updatedLocalCamps = localCamps.map(c => c.id === id ? updatedCamp : c);
-    localStorage.setItem('local_campaigns', JSON.stringify(updatedLocalCamps));
   };
 
   // Drag & Drop / File Upload handlers
@@ -280,6 +217,7 @@ const CampaignDetail = () => {
       });
 
       if (response.data) {
+        showToast('Leads uploaded successfully.', 'success');
         setUploadResult({
           success: true,
           message: 'Leads uploaded successfully!',
@@ -290,53 +228,11 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.error('File upload failed', err);
-      // Simulate successful upload if in demo/offline mode
-      if (file.name.endsWith('.csv') || file.name.endsWith('.xlsx')) {
-        setTimeout(() => {
-          const mockResult = {
-            leads_uploaded: 150,
-            invalid_phones: 4,
-            duplicates_skipped: 12,
-            dnc_on_upload: 2,
-          };
-          setUploadResult({
-            success: true,
-            message: 'Simulation: Leads processed successfully.',
-            details: mockResult
-          });
-          
-          // Generate new mock leads in local state
-          const currentLocalLeads = JSON.parse(localStorage.getItem(`leads_${id}`) || '[]');
-          const newMockLeads = Array.from({ length: 5 }).map((_, idx) => ({
-            id: `l-upload-${idx}-${Date.now()}`,
-            name: `Imported Client ${idx + 1}`,
-            phone: `+91900000000${idx}`,
-            status: 'pending',
-            attempts: 0,
-            lead_type: 'cold'
-          }));
-          const mergedLeads = [...newMockLeads, ...currentLocalLeads];
-          localStorage.setItem(`leads_${id}`, JSON.stringify(mergedLeads));
-          
-          // Increment campaign total count
-          if (campaign) {
-            const updatedCamp = {
-              ...campaign,
-              total_leads: (campaign.total_leads || 0) + 150
-            };
-            setCampaign(updatedCamp);
-            const localCamps = JSON.parse(localStorage.getItem('local_campaigns') || '[]');
-            localStorage.setItem('local_campaigns', JSON.stringify(localCamps.map(c => c.id === id ? updatedCamp : c)));
-          }
-
-          loadLeads();
-        }, 1500);
-      } else {
-        setUploadResult({
-          success: false,
-          message: 'Failed to upload leads. Please verify file formatting.'
-        });
-      }
+      showToast('Failed to upload leads. Please verify file formatting.', 'error');
+      setUploadResult({
+        success: false,
+        message: 'Failed to upload leads. Please verify file formatting.'
+      });
     } finally {
       setIsUploading(false);
     }
@@ -350,6 +246,11 @@ const CampaignDetail = () => {
     try {
       const response = await clientApi.post(`/api/campaigns/${id}/leads`, newLead);
       if (response.data) {
+        if (response.data.dnc) {
+          showToast('Warning: This number is on the DNC (Do Not Call) list and was blocked.', 'warning');
+          return;
+        }
+        showToast('Lead added successfully.', 'success');
         setIsAddLeadOpen(false);
         setNewLead({ name: '', phone: '', lead_type: 'cold', metadata: {} });
         loadLeads();
@@ -357,33 +258,73 @@ const CampaignDetail = () => {
         return;
       }
     } catch (err) {
-      console.warn('Manual lead add endpoint failed, simulating locally.', err);
+      console.warn('Manual lead add endpoint failed.', err);
+      showToast('Failed to add lead. Please try again.', 'error');
     }
+  };
 
-    // Local simulation
-    const currentLocalLeads = JSON.parse(localStorage.getItem(`leads_${id}`) || '[]');
-    const newLeadObj = {
-      id: `l-man-${Date.now()}`,
-      name: newLead.name || 'Unnamed Contact',
-      phone: newLead.phone,
-      status: 'pending',
-      attempts: 0,
-      lead_type: newLead.lead_type
-    };
-    const updatedLeads = [newLeadObj, ...currentLocalLeads];
-    localStorage.setItem(`leads_${id}`, JSON.stringify(updatedLeads));
+  // Edit Lead
+  const handleEditLead = async (e) => {
+    e.preventDefault();
+    if (!editLeadData.name?.trim()) return;
 
-    // Update campaign counter
-    if (campaign) {
-      const updatedCamp = { ...campaign, total_leads: (campaign.total_leads || 0) + 1 };
-      setCampaign(updatedCamp);
-      const localCamps = JSON.parse(localStorage.getItem('local_campaigns') || '[]');
-      localStorage.setItem('local_campaigns', JSON.stringify(localCamps.map(c => c.id === id ? updatedCamp : c)));
+    try {
+      // 1. Update basic fields
+      await clientApi.patch(`/api/campaigns/${id}/leads/${editLeadData.id}`, {
+        name: editLeadData.name,
+        lead_type: editLeadData.lead_type || 'cold'
+      });
+
+      // 2. Update status if changed
+      if (editLeadData.status && editLeadData.status !== editLeadData.original_status) {
+        await clientApi.patch(`/api/campaigns/${id}/leads/${editLeadData.id}/status`, {
+          status: editLeadData.status
+        });
+      }
+
+      showToast('Lead updated successfully.', 'success');
+      setIsEditLeadOpen(false);
+      setEditLeadData(null);
+      loadLeads();
+      loadCampaignDetails();
+    } catch (err) {
+      console.error('Failed to edit lead', err);
+      showToast('Failed to edit lead. Transition may not be allowed.', 'error');
     }
+  };
 
-    setIsAddLeadOpen(false);
-    setNewLead({ name: '', phone: '', lead_type: 'cold', metadata: {} });
-    loadLeads();
+  // Delete Lead
+  const handleDeleteLead = async (leadId) => {
+    if (!window.confirm('Are you sure you want to delete this lead?')) return;
+    
+    try {
+      const response = await clientApi.delete(`/api/campaigns/${id}/leads/${leadId}`);
+      if (response.data) {
+        showToast('Lead deleted successfully.', 'success');
+        loadLeads();
+        loadCampaignDetails();
+      }
+    } catch (err) {
+      console.error('Failed to delete lead', err);
+      showToast('Failed to delete lead. It may be currently active.', 'error');
+    }
+  };
+
+  // Change Lead Status
+  const handleChangeLeadStatus = async (leadId, newStatus) => {
+    try {
+      const response = await clientApi.patch(`/api/campaigns/${id}/leads/${leadId}/status`, {
+        status: newStatus
+      });
+      if (response.data) {
+        showToast('Status updated successfully.', 'success');
+        loadLeads();
+        loadCampaignDetails();
+      }
+    } catch (err) {
+      console.error('Failed to change lead status', err);
+      showToast('Failed to change lead status. The transition may not be allowed.', 'error');
+    }
   };
 
   // Settings Save
@@ -398,19 +339,14 @@ const CampaignDetail = () => {
         retry_delay_minutes: campaign.retry_delay_minutes,
       });
       if (response.data) {
-        alert('Settings updated successfully!');
+        showToast('Settings updated successfully!', 'success');
         loadCampaignDetails();
         return;
       }
     } catch (err) {
-      console.warn('API PATCH campaign failed, saving changes in local cache.', err);
+      console.warn('API PATCH campaign failed.', err);
+      showToast('Failed to save settings.', 'error');
     }
-
-    // Save to local storage campaigns list
-    const localCamps = JSON.parse(localStorage.getItem('local_campaigns') || '[]');
-    const updatedLocalCamps = localCamps.map(c => c.id === id ? campaign : c);
-    localStorage.setItem('local_campaigns', JSON.stringify(updatedLocalCamps));
-    alert('Settings saved locally.');
   };
 
   if (loading) {
@@ -435,84 +371,12 @@ const CampaignDetail = () => {
   const completedPercent = total > 0 ? (campaign.completed_leads / total) * 100 : 0;
   const failedPercent = total > 0 ? (campaign.failed_leads / total) * 100 : 0;
 
+  const isPausing = campaign.status === 'pausing' || (campaign.status === 'paused' && campaign.calling_leads > 0);
+
   return (
-    <div className="bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text min-h-screen font-body-md transition-colors duration-300">
-      
-      {/* TopNavBar */}
-      <header className="w-full sticky top-0 z-50 bg-arctic-surface dark:bg-molten-surface border-b border-outline-variant dark:border-[#2A345E] shadow-[0_4px_20px_rgba(22,71,232,0.05)] dark:shadow-none">
-        <div className="flex justify-between items-center px-gutter py-4 max-w-container-max mx-auto">
-          <div className="flex items-center gap-8">
-            <span className="font-headline-md text-headline-md font-extrabold text-primary dark:text-molten-primary tracking-tight">Aakashvani</span>
-            {/* Top nav links removed — navigation handled via sidebar */}
-          </div>
-          <div className="flex items-center gap-4">
-            {/* TODO: Credit recharge/top-up (Razorpay integration Phase 5)
-            <button className="shimmer-btn hidden sm:flex items-center px-4 py-2 bg-primary dark:bg-molten-primary text-on-primary font-label-md rounded-lg active:scale-95 transition-all shadow-sm">
-              Add Credits
-            </button>
-            */}
-            <div className="flex items-center gap-2">
-              <button onClick={toggleTheme} className="p-2 text-on-surface-variant dark:text-molten-text-muted hover:text-primary dark:hover:text-molten-primary theme-toggle-btn cursor-pointer">
-                <span className="material-symbols-outlined theme-toggle-icon">{theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
-              </button>
-              <button className="p-2 text-on-surface-variant dark:text-molten-text-muted hover:text-primary dark:hover:text-molten-primary">
-                <span className="material-symbols-outlined">notifications</span>
-              </button>
-            </div>
-            <img alt="User profile avatar" className="w-10 h-10 rounded-full border border-outline-variant" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCwu6IPYWZorfJl9pN24qrs9IIG7SntBwx6xgBxQxDoa0R0guK98vdpVjWdedHScIJqCQIJwzi_pCWkVOv_MxkBo4zgrRdLHee7eQLHqs8hW88M4GlngM_B0LxEuTUJUrtc0c3gT3Uq1NUPfa5EFv5s3Ed9GaL1azlr77QKYpjHh-H29AqauQzrsC2WH-9m9Wdju7xDx9zecOdoG9towUlSR1jKxt4OAlaReoB1CtfuJlh25lHk8-noe9ZVTLnst0652iHGnOxCf70" />
-          </div>
-        </div>
-      </header>
-
-      <div className="flex min-h-[calc(100vh-72px)]">
-        {/* SideNavBar */}
-        <aside className="hidden md:flex h-auto w-64 flex-col gap-stack-md p-margin-desktop bg-arctic-bg dark:bg-molten-bg border-r border-outline-variant dark:border-[#2A345E]">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-primary-container rounded-lg flex items-center justify-center">
-              <span className="material-symbols-outlined text-on-primary-container">campaign</span>
-            </div>
-            <div>
-              <h2 className="font-headline-sm text-headline-sm font-bold text-on-surface dark:text-molten-text leading-tight">Aakashvani</h2>
-              <p className="font-label-md text-label-md text-on-surface-variant dark:text-molten-text-muted">Management Console</p>
-            </div>
-          </div>
-          <nav className="flex flex-col gap-1">
-            <Link className="flex items-center gap-3 px-4 py-3 text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-low dark:hover:bg-molten-surface hover:translate-x-1 transition-all duration-200 rounded-lg font-label-md" to="/app">
-              <span className="material-symbols-outlined">dashboard</span> Dashboard
-            </Link>
-            {/* TODO: Phase 3 Analytics
-            <a className="flex items-center gap-3 px-4 py-3 bg-primary-container dark:bg-tertiary-container text-on-primary-container dark:text-on-tertiary-container rounded-lg font-bold font-label-md" href="#">
-              <span className="material-symbols-outlined fill-icon">analytics</span> Analytics
-            </a>
-            */}
-            <Link className="flex items-center gap-3 px-4 py-3 text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-low dark:hover:bg-molten-surface hover:translate-x-1 transition-all duration-200 rounded-lg font-label-md" to="/app/calls">
-              <span className="material-symbols-outlined">list_alt</span> Logs
-            </Link>
-            {/* TODO: Security settings
-            <a className="flex items-center gap-3 px-4 py-3 text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-low dark:hover:bg-molten-surface hover:translate-x-1 transition-all duration-200 rounded-lg font-label-md" href="#">
-              <span className="material-symbols-outlined">security</span> Security
-            </a>
-            */}
-          </nav>
-          <div className="mt-auto pt-6 border-t border-outline-variant dark:border-[#2A345E] flex flex-col gap-1">
-            {/* TODO: Billing Plan Upgrade
-            <button className="w-full mb-4 py-2 px-4 bg-tertiary text-white rounded-lg font-label-md hover:translate-y-px transition-all cursor-pointer">Upgrade Plan</button>
-            */}
-            {/* TODO: Campaign Settings view
-            <a className="flex items-center gap-3 px-4 py-3 text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-low dark:hover:bg-molten-surface hover:translate-x-1 transition-all duration-200 rounded-lg font-label-md" href="#">
-              <span className="material-symbols-outlined">settings</span> Settings
-            </a>
-            */}
-            {/* TODO: Help / documentation
-            <a className="flex items-center gap-3 px-4 py-3 text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-low dark:hover:bg-molten-surface hover:translate-x-1 transition-all duration-200 rounded-lg font-label-md" href="#">
-              <span className="material-symbols-outlined">help</span> Help
-            </a>
-            */}
-          </div>
-        </aside>
-
-        {/* Main Content */}
-        <main className="flex-1 p-gutter max-w-7xl mx-auto w-full">
+    <>
+      <LoaderOverlay isVisible={isPausing} message="Finishing ongoing leads..." />
+      <div className="flex-1 w-full">
           
           {/* Header Section */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-stack-lg animate-fade-in">
@@ -535,10 +399,10 @@ const CampaignDetail = () => {
                   </span>
                 )}
 
-                {campaign.status === 'paused' && (
+                {(campaign.status === 'paused' || campaign.status === 'pausing') && (
                   <span className="status-pulse-container px-3 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-label-sm text-label-sm rounded-full border border-amber-500/20 flex items-center gap-1 transition-all duration-500">
                     <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>
-                    <span className="status-text">Paused</span>
+                    <span className="status-text">{campaign.status === 'pausing' ? 'Pausing...' : 'Paused'}</span>
                   </span>
                 )}
 
@@ -557,7 +421,7 @@ const CampaignDetail = () => {
                 )}
               </div>
               <p className="text-arctic-text-muted dark:text-molten-text-muted font-body-sm">
-                Campaign ID: {campaign.id} • Started Oct 12, 2023
+                Campaign ID: {campaign.id} • Started {campaign.created_at ? new Date(campaign.created_at).toLocaleDateString() : 'N/A'}
               </p>
             </div>
             
@@ -594,7 +458,7 @@ const CampaignDetail = () => {
               <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Total Leads</p>
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="text-headline-md font-bold tabular-nums">{total.toLocaleString()}</span>
-                <span className="text-label-sm text-secondary">+12%</span>
+                {/* <span className="text-label-sm text-secondary">+12%</span> */}
               </div>
               <div className="h-1.5 w-full bg-surface-container-highest dark:bg-[#1f2937] rounded-full overflow-hidden">
                 <div 
@@ -723,8 +587,10 @@ const CampaignDetail = () => {
                       <h4 className="font-bold text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">Bot Strategy</h4>
                       <div>
                         <p className="text-xs text-arctic-text-muted">AI Personality Configuration</p>
-                        <p className="text-lg font-bold">Sales Specialist Bot</p>
-                        <p className="text-xs text-arctic-text-muted mt-1">Pricing Rate: 5 credits/minute</p>
+                        <p className="text-lg font-bold">{campaign.bot_config?.name || 'Assigned Bot'}</p>
+                        {campaign.bot_config?.credits_per_minute && (
+                          <p className="text-xs text-arctic-text-muted mt-1">Pricing Rate: {campaign.bot_config.credits_per_minute} credits/minute</p>
+                        )}
                       </div>
                       <div className="grid grid-cols-2 gap-4 mt-2">
                         <div>
@@ -838,6 +704,18 @@ const CampaignDetail = () => {
                             <tr>
                               <td colSpan="5" className="px-6 py-8 text-center text-sm text-arctic-text-muted">Loading leads...</td>
                             </tr>
+                          ) : leads.length === 0 ? (
+                            <tr>
+                              <td colSpan="5" className="px-6 py-12 text-center">
+                                <div className="flex flex-col items-center justify-center">
+                                  <div className="w-12 h-12 bg-surface-variant dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-full flex items-center justify-center mb-3">
+                                    <span className="material-symbols-outlined text-arctic-text-muted dark:text-molten-text-muted text-2xl">person_off</span>
+                                  </div>
+                                  <p className="text-on-surface-variant dark:text-molten-text-muted font-medium mb-1">No leads found</p>
+                                  <p className="text-sm text-arctic-text-muted dark:text-molten-text-muted max-w-xs">Try adjusting your search or filter, or add new leads to this campaign.</p>
+                                </div>
+                              </td>
+                            </tr>
                           ) : (
                             leads.map((lead) => {
                               // Determine status style
@@ -913,12 +791,33 @@ const CampaignDetail = () => {
                                   </td>
                                   <td className="py-3 px-4 tabular-nums">{lead.attempts || 0}</td>
                                   <td className="py-3 px-4 text-right">
-                                    <button 
-                                      className="text-primary dark:text-molten-primary hover:text-primary/80 font-medium text-sm transition-colors cursor-pointer"
-                                      onClick={(e) => { e.stopPropagation(); handleOpenTranscript(lead); }}
-                                    >
-                                      View Details
-                                    </button>
+                                    <div className="flex items-center justify-end gap-2">
+                                      <button 
+                                        className="text-on-surface-variant dark:text-molten-text-muted hover:text-primary dark:hover:text-molten-primary transition-colors cursor-pointer p-1"
+                                        title="Edit Lead"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setEditLeadData({ ...lead, original_status: lead.status });
+                                          setIsEditLeadOpen(true);
+                                        }}
+                                      >
+                                        <span className="material-symbols-outlined text-[20px]">edit</span>
+                                      </button>
+                                      <button 
+                                        className="text-on-surface-variant dark:text-molten-text-muted hover:text-error dark:hover:text-rose-400 transition-colors cursor-pointer p-1"
+                                        title="Delete Lead"
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
+                                      >
+                                        <span className="material-symbols-outlined text-[20px]">delete</span>
+                                      </button>
+                                      <button 
+                                        className="text-primary dark:text-molten-primary hover:text-primary/80 font-medium text-sm transition-colors cursor-pointer ml-2"
+                                        title="View Transcript"
+                                        onClick={(e) => { e.stopPropagation(); handleOpenTranscript(lead); }}
+                                      >
+                                        View Details
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               );
@@ -953,7 +852,6 @@ const CampaignDetail = () => {
               )}
 
               {/* Tab 3: Settings Content */}
-              {/* TODO: Tab 3 Settings Content
               {activeTab === 'settings' && (
                 <form onSubmit={handleSaveSettings} className="space-y-6 animate-fade-in max-w-xl">
                   <h3 className="font-headline-sm text-headline-sm">Campaign Settings</h3>
@@ -1017,13 +915,11 @@ const CampaignDetail = () => {
                   </button>
                 </form>
               )}
-              */}
 
             </div>
           </div>
 
-        </main>
-      </div>
+        </div>
 
       {/* Manual Add Lead Modal */}
       {isAddLeadOpen && (
@@ -1087,27 +983,86 @@ const CampaignDetail = () => {
         </div>
       )}
 
-      {/* Mobile BottomNavBar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-arctic-surface dark:bg-molten-surface border-t border-outline-variant dark:border-[#2A345E] flex justify-around items-center py-3 z-50">
-        <Link className="flex flex-col items-center gap-1 text-on-surface-variant dark:text-molten-text-muted" to="/app">
-          <span className="material-symbols-outlined">dashboard</span>
-          <span className="text-[10px]">Home</span>
-        </Link>
-        <button className="flex flex-col items-center gap-1 text-primary dark:text-molten-primary font-bold">
-          <span className="material-symbols-outlined fill-icon">analytics</span>
-          <span className="text-[10px]">Leads</span>
-        </button>
-        <Link className="flex flex-col items-center gap-1 text-on-surface-variant dark:text-molten-text-muted" to="/app/calls">
-          <span className="material-symbols-outlined">list_alt</span>
-          <span className="text-[10px]">Logs</span>
-        </Link>
-        {/* TODO: Mobile settings
-        <button className="flex flex-col items-center gap-1 text-on-surface-variant dark:text-molten-text-muted">
-          <span className="material-symbols-outlined">settings</span>
-          <span className="text-[10px]">Settings</span>
-        </button>
-        */}
-      </nav>
+      {/* Edit Lead Modal */}
+      {isEditLeadOpen && editLeadData && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsEditLeadOpen(false)}></div>
+          <form onSubmit={handleEditLead} className="relative bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4 text-on-surface dark:text-molten-text">
+            <h3 className="text-xl font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2">Edit Lead</h3>
+            
+            <div>
+              <label className="block text-xs text-arctic-text-muted mb-1">Full Name</label>
+              <input
+                type="text"
+                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none focus:border-primary"
+                value={editLeadData.name || ''}
+                onChange={(e) => setEditLeadData({ ...editLeadData, name: e.target.value })}
+                placeholder="e.g. Rahul Patil"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-arctic-text-muted mb-1">Phone Number (with prefix)</label>
+              <input
+                type="tel"
+                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none focus:border-primary font-mono opacity-50"
+                value={editLeadData.phone}
+                disabled
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-arctic-text-muted mb-1">Lead Type</label>
+              <select
+                value={editLeadData.lead_type || 'cold'}
+                onChange={(e) => setEditLeadData({ ...editLeadData, lead_type: e.target.value })}
+                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none"
+              >
+                <option value="cold">Cold</option>
+                <option value="warm">Warm</option>
+                <option value="hot">Hot</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs text-arctic-text-muted mb-1">Status</label>
+              <select
+                value={editLeadData.status || 'pending'}
+                onChange={(e) => setEditLeadData({ ...editLeadData, status: e.target.value })}
+                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none"
+              >
+                <option value="pending">Pending</option>
+                <option value="failed">Failed</option>
+                <option value="dnc">DNC</option>
+                <option value="completed">Completed</option>
+                <option value="callback_scheduled">Callback Scheduled</option>
+                {/* Prevent selecting calling manually */}
+                {editLeadData.status === 'calling' && <option value="calling" disabled>Calling (In Progress)</option>}
+              </select>
+              {editLeadData.status !== editLeadData.original_status && (
+                <p className="text-[10px] text-amber-500 mt-1">Status change may require confirmation.</p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsEditLeadOpen(false)}
+                className="px-4 py-2 hover:bg-surface-container rounded cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-6 py-2 bg-primary text-white rounded cursor-pointer font-bold hover:brightness-110"
+              >
+                Save Changes
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
 
       <CallTranscriptDrawer
         isOpen={isTranscriptOpen}
@@ -1116,7 +1071,7 @@ const CampaignDetail = () => {
         onClose={() => setIsTranscriptOpen(false)}
       />
 
-    </div>
+    </>
   );
 };
 

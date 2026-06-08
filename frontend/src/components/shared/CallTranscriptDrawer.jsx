@@ -20,27 +20,8 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
         setIsPolling(call.in_progress === true);
       }
     } catch (err) {
-      console.warn('API error fetching call details, using mock data for demo', err);
-      // Load mock transcript (Sarah Jenkins prototype)
-      const mockCall = {
-        session_call_id: sessionCallId,
-        phone: '+1 (555) 019-2834',
-        duration_seconds: 252, // 4m 12s
-        in_progress: false,
-        status: 'completed',
-        transcript: [
-          { role: 'assistant', content: 'Hi Sarah, this is Alex calling from LeadGen Pro. I saw you recently downloaded our guide on automated outreach. Do you have a quick minute?', ts: '2026-06-06T14:00:01Z' },
-          { role: 'user', content: "Yes, I have a minute. I'm actually looking into tools for my team right now.", ts: '2026-06-06T14:00:05Z' },
-          { role: 'assistant', content: "That's great timing. What's the biggest challenge you're facing with your current outreach process?", ts: '2026-06-06T14:00:10Z' },
-          { role: 'user', content: 'Mostly just tracking who we\'ve called and managing the follow-ups. It gets messy in spreadsheets.', ts: '2026-06-06T14:00:15Z' },
-        ],
-        extraction_json: {
-          'Interest Level': 'High',
-          'Pain Point': 'Tracking follow-ups in spreadsheets',
-          'Suggested Action': 'Schedule product demo next week',
-        }
-      };
-      setCallData(mockCall);
+      console.warn('API error fetching call details', err);
+      setCallData(null);
       setIsPolling(false);
     } finally {
       if (showSpinner) setLoading(false);

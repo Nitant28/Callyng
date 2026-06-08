@@ -39,44 +39,7 @@ const CallLogs = () => {
         setTotalCount(response.data.total_count || 0);
       }
     } catch (err) {
-      console.warn('API error listing call logs, falling back to prototype mock logs', err);
-      // Prototype mock records
-      const mockCalls = [
-        {
-          session_call_id: 'call-alice-chen',
-          name: 'Alice Chen',
-          phone: '+1 (555) 019-2834',
-          duration_seconds: 252, // 04:12
-          status: 'completed',
-          time_label: '10:42 AM',
-        },
-        {
-          session_call_id: 'call-marcus-vance',
-          name: 'Marcus Vance',
-          phone: '+1 (555) 837-9921',
-          duration_seconds: 725, // 12:05
-          status: 'follow_up',
-          time_label: '09:15 AM',
-        },
-        {
-          session_call_id: 'call-sarah-jenkins',
-          name: 'Sarah Jenkins',
-          phone: '+1 (555) 223-1100',
-          duration_seconds: 45, // 00:45
-          status: 'voicemail',
-          time_label: 'Yesterday',
-        },
-        {
-          session_call_id: 'call-david-kim',
-          name: 'David Kim',
-          phone: '+1 (555) 445-8822',
-          duration_seconds: 12, // 00:12
-          status: 'failed',
-          time_label: 'Yesterday',
-        }
-      ];
-      setCalls(mockCalls);
-      setTotalCount(128); // Mock total
+      console.warn('API error listing call logs', err);
     } finally {
       setLoading(false);
     }
@@ -105,28 +68,8 @@ const CallLogs = () => {
         throw new Error('Call details not returned');
       }
     } catch (err) {
-      console.warn('API error fetching call transcript details, simulating locally', err);
-      // Mock transcript and JSON extraction matching prototype
-      const mockDetails = {
-        session_call_id: call.session_call_id,
-        phone: call.phone,
-        duration_seconds: call.duration_seconds,
-        status: call.status,
-        transcript: [
-          { role: 'assistant', content: 'Hi Alice, this is the Signal Ops automated assistant calling regarding your recent inquiry. Are you still interested in a platform demo?' },
-          { role: 'user', content: 'Yes, I am. I was actually hoping to schedule something for this week.' },
-          { role: 'assistant', content: 'Great. I have availability this Thursday at 2 PM or Friday at 10 AM EST. Do either of those work?' },
-          { role: 'user', content: 'Thursday at 2 PM works perfectly. We have budget approved and want to move quickly.' },
-          { role: 'assistant', content: 'Excellent. I\'ve logged the budget confirmation and scheduled the demo for Thursday at 2 PM. You\'ll receive a calendar invite shortly.' }
-        ],
-        extraction_json: {
-          intent: 'schedule_demo',
-          urgency: 'high',
-          mentioned_competitor: false,
-          budget_confirmed: true,
-        }
-      };
-      setCallData(mockDetails);
+      console.warn('API error fetching call transcript details', err);
+      setCallData(null);
     } finally {
       setCallLoading(false);
     }
@@ -163,105 +106,9 @@ const CallLogs = () => {
   };
 
   return (
-    <div className="bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text font-body-md overflow-hidden flex h-screen transition-colors duration-300">
-      
-      {/* SideNavBar */}
-      <aside className="bg-arctic-bg dark:bg-molten-bg border-r border-outline-variant dark:border-molten-surface h-screen w-64 fixed left-0 top-0 flex flex-col p-stack-md z-30 transition-colors duration-300 md:flex hidden">
-        {/* Header Branding */}
-        <div className="mb-stack-lg flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-surface-container dark:bg-molten-surface flex items-center justify-center">
-            <span className="material-symbols-outlined text-primary dark:text-molten-primary">radar</span>
-          </div>
-          <div>
-            <h2 className="font-headline-sm text-headline-sm font-bold text-on-surface dark:text-molten-text">Aakashvani Ops</h2>
-            <p className="font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted">Enterprise Tier</p>
-          </div>
-        </div>
-
-        {/* Navigation Links */}
-        <nav className="flex-1 space-y-2">
-          <Link to="/app" className="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-high dark:hover:bg-molten-surface/50 hover:translate-x-1 transition-all font-label-md text-label-md">
-            <span className="material-symbols-outlined">dashboard</span> Dashboard
-          </Link>
-          <Link to="/app/calls" className="flex items-center gap-3 px-3 py-2 rounded-lg bg-primary-container dark:bg-molten-surface text-on-primary-container dark:text-molten-primary font-bold font-label-md text-label-md">
-            <span className="material-symbols-outlined">call</span> Call Logs
-          </Link>
-          {/* TODO: Phase 3 analytics
-          <a className="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-high dark:hover:bg-molten-surface/50 hover:translate-x-1 transition-all font-label-md text-label-md" href="#">
-            <span className="material-symbols-outlined">insights</span> Analytics
-          </a>
-          */}
-          {/* TODO: Team page
-          <a className="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-high dark:hover:bg-molten-surface/50 hover:translate-x-1 transition-all font-label-md text-label-md" href="#">
-            <span className="material-symbols-outlined">group</span> Team
-          </a>
-          */}
-          {/* TODO: API Keys management
-          <a className="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-high dark:hover:bg-molten-surface/50 hover:translate-x-1 transition-all font-label-md text-label-md" href="#">
-            <span className="material-symbols-outlined">code</span> API Keys
-          </a>
-          */}
-        </nav>
-
-        {/* TODO: CRM integrations
-        <div className="mt-auto mb-stack-md">
-          <button className="w-full py-2 bg-primary dark:bg-molten-primary text-on-primary dark:text-molten-bg font-label-md text-label-md rounded-lg shadow-inner hover:brightness-95 active:translate-y-px transition-all cursor-pointer">
-            New Integration
-          </button>
-        </div>
-        */}
-
-        {/* Footer Navigation */}
-        <div className="space-y-1 border-t border-outline-variant/50 dark:border-molten-surface pt-stack-sm">
-          {/* TODO: Support
-          <a className="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-high dark:hover:bg-molten-surface/50 hover:translate-x-1 transition-all font-label-md text-label-md" href="#">
-            <span className="material-symbols-outlined">help</span> Support
-          </a>
-          */}
-          {/* TODO: Documentation
-          <a className="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-high dark:hover:bg-molten-surface/50 hover:translate-x-1 transition-all font-label-md text-label-md" href="#">
-            <span className="material-symbols-outlined">description</span> Documentation
-          </a>
-          */}
-        </div>
-      </aside>
-
-      {/* Main Content Pane */}
-      <main className="flex-1 ml-0 md:ml-64 flex flex-col h-screen overflow-hidden relative">
-        
-        {/* TopNavBar */}
-        <header className="bg-surface dark:bg-molten-bg border-b border-outline-variant dark:border-molten-surface shadow-sm dark:shadow-none w-full h-16 flex justify-between items-center px-margin-desktop z-20 shrink-0 transition-colors duration-300">
-          <div className="flex items-center gap-4">
-            <span className="font-headline-md text-headline-md font-extrabold text-primary dark:text-molten-primary">
-              Aakashvani
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
-            <button onClick={toggleTheme} className="p-2 rounded-full text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container dark:hover:bg-molten-surface transition-colors active:scale-95 cursor-pointer">
-              <span className="material-symbols-outlined">
-                {theme === 'dark' ? 'light_mode' : 'dark_mode'}
-              </span>
-            </button>
-            <button className="p-2 rounded-full text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container dark:hover:bg-molten-surface transition-colors active:scale-95">
-              <span className="material-symbols-outlined">notifications</span>
-            </button>
-            {/* TODO: Settings
-            <button className="p-2 rounded-full text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container dark:hover:bg-molten-surface transition-colors active:scale-95">
-              <span className="material-symbols-outlined">settings</span>
-            </button>
-            */}
-            <div className="w-8 h-8 rounded-full bg-primary-container overflow-hidden border border-outline-variant dark:border-molten-surface ml-2">
-              <img
-                alt="User profile"
-                className="w-full h-full object-cover"
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuCF9F92E25Al36bGeVzXa42pvA7tarY9-Js5oY5olIi-mkOR6U7pk0vY_hAwsLr_oDV8lDNgUnnmD9T0mjjaj9kfhbFWIXCj-FKVTCg_n2TZce_tNkwsDiQyHZ0FSvNrLEwffkycWZeKfjM5eikkzB4-_ZoWKRXNX3UtEHevDr_RPtBNsgZVZAYnmz5k8_Aw6FLTvr35lv5LhIy_rhRa8x7pSuKvphmKo1-34fBu94Znd0f7NG204PRYNlsMHZLxAXUN2gkEZqzDeo"
-              />
-            </div>
-          </div>
-        </header>
-
-        {/* Page Canvas (Split Pane Layout) */}
-        <div className="flex flex-1 overflow-hidden relative w-full">
+    <>
+      {/* Page Canvas (Split Pane Layout) */}
+      <div className="flex flex-1 overflow-hidden relative w-full h-[calc(100vh-64px)]">
           
           {/* Table Container (Left Pane) - Narrows dynamically when drawer opens */}
           <div 
@@ -489,10 +336,8 @@ const CallLogs = () => {
             )}
           </div>
 
-        </div>
-      </main>
-
-    </div>
+      </div>
+    </>
   );
 };
 

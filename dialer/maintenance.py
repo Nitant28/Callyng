@@ -29,6 +29,15 @@ async def run_stale_call_log_sweep(pool: asyncpg.Pool) -> int:
     n = await pg_db.finalize_all_stale_in_progress_call_logs(pool)
     if n:
         logger.info("Stale call_log sweep finalized {} row(s)", n)
+    
+    released = await pg_db.release_all_stuck_calling_leads(pool)
+    if released:
+        logger.info("Global sweep released {} stuck calling lead(s)", released)
+        
+    transitioned = await pg_db.transition_all_pausing_to_paused(pool)
+    if transitioned:
+        logger.info("Global sweep transitioned {} pausing campaign(s) to paused", transitioned)
+        
     return n
 
 

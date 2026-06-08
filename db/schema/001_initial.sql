@@ -122,7 +122,7 @@ CREATE TABLE campaigns (
     -- e.g. "Pune Dec Batch", "Mumbai Jan Warm Leads"
 
     status               VARCHAR(50) DEFAULT 'draft'
-                             CHECK (status IN ('draft', 'running', 'paused',
+                             CHECK (status IN ('draft', 'running', 'pausing', 'paused',
                                                'completed', 'cancelled')),
     -- draft      → campaign configured, no leads uploaded or dialer not started
     -- running    → dialer actively placing calls
