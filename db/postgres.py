@@ -509,6 +509,15 @@ async def get_campaign(
     return record_to_dict(row)
 
 
+async def get_all_running_campaigns(pool: asyncpg.Pool) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, client_id, status FROM campaigns WHERE status = 'running'
+        """
+    )
+    return records_to_dicts(rows)
+
+
 async def get_campaign_admin(
     pool: asyncpg.Pool,
     campaign_id: UUID | str,
@@ -2011,6 +2020,24 @@ async def get_call_log(
         WHERE session_call_id = $1 AND client_id = $2
         """,
         session_call_id,
+        client_id,
+    )
+    return record_to_dict(row)
+
+
+async def get_latest_call_log_for_lead(
+    pool: asyncpg.Pool,
+    lead_id: UUID,
+    client_id: UUID,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM call_logs
+        WHERE lead_id = $1 AND client_id = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        lead_id,
         client_id,
     )
     return record_to_dict(row)

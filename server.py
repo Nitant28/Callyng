@@ -192,7 +192,7 @@ async def lifespan(app: FastAPI):
     app.state.dialer_tasks: dict[str, asyncio.Task] = {}
     app.state.session = aiohttp.ClientSession()
     app.state.stale_call_log_task = None
-    if pool is not None:
+    if app.state.pool is not None:
         from dialer.maintenance import (
             run_stale_call_log_sweep,
             stale_call_log_loop,
@@ -214,6 +214,18 @@ async def lifespan(app: FastAPI):
                 interval,
                 pg_db.live_call_grace_minutes(),
             )
+            
+        # Auto-resume campaigns
+        try:
+            running_camps = await pg_db.get_all_running_campaigns(pool)
+            if running_camps:
+                from dialer.concurrent_dialer import start_dialer
+                host = (os.getenv("DIALER_CALLBACK_HOST") or os.getenv("NGROK_URL") or "localhost:7860").strip()
+                logger.info(f"[startup] Found {len(running_camps)} running campaigns. Auto-resuming...")
+                for camp in running_camps:
+                    start_dialer(app, camp["id"], camp["client_id"], host=host)
+        except Exception as exc:
+            logger.warning("[startup] Failed to auto-resume campaigns: {}", exc)
     yield
     stale_task = getattr(app.state, "stale_call_log_task", None)
     if stale_task is not None and not stale_task.done():

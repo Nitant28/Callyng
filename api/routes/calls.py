@@ -32,6 +32,16 @@ async def get_call(
 ):
     cid = client_id_uuid(client)
     row = await pg_db.get_call_log(pool, session_call_id, cid)
+    
+    # Fallback if session_call_id is actually a lead_id
+    if row is None:
+        try:
+            lead_uuid = UUID(session_call_id)
+            row = await pg_db.get_latest_call_log_for_lead(pool, lead_uuid, cid)
+        except ValueError:
+            pass
+
     if row is None:
         raise HTTPException(404, "Call not found")
+        
     return {"calls": [row]}

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
-from api.guards import require_campaign_modifiable, require_lead_not_calling
+from api.guards import require_campaign_modifiable, require_lead_not_calling, require_lead_unstarted
 from compliance import add_dnd, is_call_allowed
 from db import postgres as pg_db
 from lead_upload.normaliser import normalise_phone
@@ -125,7 +125,7 @@ async def edit_lead(
     require_campaign_modifiable(camp)
 
     lead = await _get_lead_or_404(pool, lead_id, cid, campaign_id)
-    require_lead_not_calling(lead)
+    require_lead_unstarted(lead)
 
     if body.lead_type is not None and body.lead_type not in ("cold", "warm", "hot"):
         raise HTTPException(422, "lead_type must be one of: cold, warm, hot")
@@ -218,7 +218,7 @@ async def delete_lead(
     require_campaign_modifiable(camp)
 
     lead = await _get_lead_or_404(pool, lead_id, cid, campaign_id)
-    require_lead_not_calling(lead)
+    require_lead_unstarted(lead)
 
     deleted = await pg_db.delete_lead(pool, lead_id, campaign_id, cid)
     if not deleted:
@@ -307,27 +307,3 @@ async def change_lead_status(
     }
 
 
-# ── Feature 4: Delete Lead ──────────────────────────────────────────────────
-
-@router.delete("/{campaign_id}/leads/{lead_id}")
-async def delete_lead(
-    campaign_id: UUID,
-    lead_id: UUID,
-    client: dict = Depends(get_client_from_token),
-    pool=Depends(get_pool),
-):
-    """Delete a single lead from a campaign."""
-    cid = client_id_uuid(client)
-    camp = await _get_campaign_or_404(pool, campaign_id, cid)
-    require_campaign_modifiable(camp)
-
-    lead = await _get_lead_or_404(pool, lead_id, cid, campaign_id)
-    require_lead_not_calling(lead)
-
-    deleted = await pg_db.delete_lead(pool, lead_id, cid)
-    if not deleted:
-        raise HTTPException(404, "Lead not found")
-
-    counters = await pg_db.reconcile_campaign_counters(pool, campaign_id, cid)
-
-    return {"success": True, "counters": counters}

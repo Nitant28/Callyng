@@ -17,11 +17,10 @@ These updates are designed to resolve current single-server bottlenecks and ensu
 - Implement a Redis-backed token bucket algorithm for global, cross-server rate limiting per client and per campaign.
 - **Estimated Time to Implement:** 2-4 days.
 
-## 3. Auto-Resume Campaigns on Server Restart
+## 3. Auto-Resume Campaigns on Server Restart (COMPLETED)
 **The Problem:** If the server reboots, deploys an update, or crashes, the local memory is cleared. Campaigns with a `running` status in the database are left frozen because their dialer loops are not automatically restarted.
-**The Fix:**
-- Add a startup hook in the server's `lifespan` to query Postgres for all campaigns where `status = 'running'` and auto-launch their dialer tasks.
-- **Estimated Time to Implement:** 1 day.
+**The Fix (Applied):**
+- Added a startup hook in the server's `lifespan` to query Postgres for all campaigns where `status = 'running'` and auto-launch their dialer tasks.
 
 ## 4. Database Connection Pool Scaling (COMPLETED)
 **The Problem:** The `asyncpg` connection pool was hardcoded to a maximum of 20 connections, risking connection starvation (`TimeoutError`).

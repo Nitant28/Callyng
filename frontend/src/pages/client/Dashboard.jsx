@@ -109,8 +109,8 @@ const Dashboard = () => {
         return;
       }
     } catch (err) {
-      console.warn(`API campaign ${action} failed.`, err);
-      showToast('Failed to toggle campaign status', 'error');
+      console.error('Failed to toggle campaign status', err);
+      showToast(err.customErrorMessage || 'Failed to toggle campaign status', 'error');
     }
   };
 

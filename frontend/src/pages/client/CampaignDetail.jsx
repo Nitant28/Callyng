@@ -162,7 +162,7 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.warn(`Campaign state toggle to ${action} failed.`, err);
-      showToast(`Failed to ${action} campaign. See console for details.`, 'error');
+      showToast(err.customErrorMessage || `Failed to ${action} campaign. See console for details.`, 'error');
     }
   };
 
@@ -178,7 +178,7 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.warn('Campaign cancel endpoint failed.', err);
-      showToast('Failed to cancel campaign.', 'error');
+      showToast(err.customErrorMessage || 'Failed to cancel campaign.', 'error');
     }
   };
 
@@ -228,10 +228,10 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.error('File upload failed', err);
-      showToast('Failed to upload leads. Please verify file formatting.', 'error');
+      showToast(err.customErrorMessage || 'Failed to upload leads. Please verify file formatting.', 'error');
       setUploadResult({
         success: false,
-        message: 'Failed to upload leads. Please verify file formatting.'
+        message: err.customErrorMessage || 'Failed to upload leads. Please verify file formatting.'
       });
     } finally {
       setIsUploading(false);
@@ -259,7 +259,7 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.warn('Manual lead add endpoint failed.', err);
-      showToast('Failed to add lead. Please try again.', 'error');
+      showToast(err.customErrorMessage || 'Failed to add lead. Please try again.', 'error');
     }
   };
 
@@ -289,7 +289,7 @@ const CampaignDetail = () => {
       loadCampaignDetails();
     } catch (err) {
       console.error('Failed to edit lead', err);
-      showToast('Failed to edit lead. Transition may not be allowed.', 'error');
+      showToast(err.customErrorMessage || 'Failed to edit lead. Transition may not be allowed.', 'error');
     }
   };
 
@@ -306,7 +306,7 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.error('Failed to delete lead', err);
-      showToast('Failed to delete lead. It may be currently active.', 'error');
+      showToast(err.customErrorMessage || 'Failed to delete lead. It may be currently active.', 'error');
     }
   };
 
@@ -323,7 +323,7 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.error('Failed to change lead status', err);
-      showToast('Failed to change lead status. The transition may not be allowed.', 'error');
+      showToast(err.customErrorMessage || 'Failed to change lead status. The transition may not be allowed.', 'error');
     }
   };
 
@@ -345,7 +345,7 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.warn('API PATCH campaign failed.', err);
-      showToast('Failed to save settings.', 'error');
+      showToast(err.customErrorMessage || 'Failed to save settings.', 'error');
     }
   };
 
@@ -612,7 +612,9 @@ const CampaignDetail = () => {
                 <div className="flex flex-col gap-gutter animate-fade-in">
                   
                   {/* CSV Upload Zone (Collapsible/Bento Style) */}
-                  <div 
+                  {(campaign.status === 'draft' || campaign.status === 'paused') ? (
+                    <>
+                      <div 
                     onDragOver={handleDragOver}
                     onDrop={handleFileDrop}
                     className="bg-arctic-surface dark:bg-molten-surface rounded-xl border border-outline-variant dark:border-[#2A345E] shadow-[0_4px_20px_rgba(22,71,232,0.05)] dark:shadow-none p-6 flex flex-col sm:flex-row items-center gap-6 transition-all duration-300"
@@ -663,6 +665,12 @@ const CampaignDetail = () => {
                           <li>Invalid formats skipped: <strong>{uploadResult.details.invalid_phones}</strong></li>
                         </ul>
                       )}
+                    </div>
+                  )}
+                    </>
+                  ) : (
+                    <div className="bg-arctic-surface dark:bg-molten-surface rounded-xl border border-outline-variant dark:border-[#2A345E] p-6 text-center text-arctic-text-muted dark:text-molten-text-muted">
+                      Campaign modifications (Import/Add leads) are locked while the campaign is active, completed, or cancelled.
                     </div>
                   )}
 
@@ -792,24 +800,32 @@ const CampaignDetail = () => {
                                   <td className="py-3 px-4 tabular-nums">{lead.attempts || 0}</td>
                                   <td className="py-3 px-4 text-right">
                                     <div className="flex items-center justify-end gap-2">
-                                      <button 
-                                        className="text-on-surface-variant dark:text-molten-text-muted hover:text-primary dark:hover:text-molten-primary transition-colors cursor-pointer p-1"
-                                        title="Edit Lead"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setEditLeadData({ ...lead, original_status: lead.status });
-                                          setIsEditLeadOpen(true);
-                                        }}
-                                      >
-                                        <span className="material-symbols-outlined text-[20px]">edit</span>
-                                      </button>
-                                      <button 
-                                        className="text-on-surface-variant dark:text-molten-text-muted hover:text-error dark:hover:text-rose-400 transition-colors cursor-pointer p-1"
-                                        title="Delete Lead"
-                                        onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
-                                      >
-                                        <span className="material-symbols-outlined text-[20px]">delete</span>
-                                      </button>
+                                      {(lead.status === 'pending' || lead.status === 'callback_scheduled') ? (
+                                        <>
+                                          <button 
+                                            className="text-on-surface-variant dark:text-molten-text-muted hover:text-primary dark:hover:text-molten-primary transition-colors cursor-pointer p-1"
+                                            title="Edit Lead"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setEditLeadData({ ...lead, original_status: lead.status });
+                                              setIsEditLeadOpen(true);
+                                            }}
+                                          >
+                                            <span className="material-symbols-outlined text-[20px]">edit</span>
+                                          </button>
+                                          <button 
+                                            className="text-on-surface-variant dark:text-molten-text-muted hover:text-error dark:hover:text-rose-400 transition-colors cursor-pointer p-1"
+                                            title="Delete Lead"
+                                            onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
+                                          >
+                                            <span className="material-symbols-outlined text-[20px]">delete</span>
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <span title="Actions locked for started leads" className="text-outline-variant p-1 cursor-not-allowed opacity-50 flex items-center">
+                                          <span className="material-symbols-outlined text-[20px]">lock</span>
+                                        </span>
+                                      )}
                                       <button 
                                         className="text-primary dark:text-molten-primary hover:text-primary/80 font-medium text-sm transition-colors cursor-pointer ml-2"
                                         title="View Transcript"
