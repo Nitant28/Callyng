@@ -27,3 +27,12 @@ These updates are designed to resolve current single-server bottlenecks and ensu
 **The Fix (Applied):**
 - Exposed the pool size to environment variables (`DB_POOL_MIN`, `DB_POOL_MAX`) defaulting to 5 and 50 respectively.
 - Future consideration: Introduce PgBouncer as a connection multiplexer if active connections still exceed Postgres limits.
+
+## 5. Audited Security Logging System
+**The Problem:** The "Recent Activity / Security Logs" card on the admin dashboard currently displays mock logs. There is no active backend mechanism to track critical admin operations, API key lifecycle actions, or client credit adjustments, creating a security audit gap.
+**The Fix:**
+- **Database Schema:** Create a database table `audit_logs` to store UUID identifiers, timestamps, actor types (`admin`, `client`, `system`), event types (e.g., `login_success`, `api_key_regenerate`, `credits_adjusted`), IP addresses, user agents, and context metadata in a JSONB field.
+- **Backend Logging Helper:** Implement a global `log_security_event` helper in the backend to capture API key rotations, credit adjustments, onboarding actions, and admin login attempts (including failed attempts for brute-force alerting).
+- **Audit Logs API:** Build a new route `GET /internal/audit-logs` that exposes a paginated list of security logs.
+- **Frontend Dashboard Integration:** Wire the "Security Logs" component in `AdminOverview.jsx` to fetch recent events from the backend, mapping them to icons (`verified_user`, `lock_reset`, `payments`), and implement a dedicated `/admin/security-logs` page for full administrative audits.
+- **Estimated Time to Implement:** 3-5 days.

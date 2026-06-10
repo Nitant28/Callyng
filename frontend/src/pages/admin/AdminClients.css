@@ -1,0 +1,49 @@
+.table-row-hover { transition: background-color 0.2s ease; cursor: pointer; }
+.table-row-hover:hover { background-color: var(--color-surface-container); }
+.dark .table-row-hover:hover { background-color: var(--color-molten-surface); }
+
+.drawer {
+    transform: translateX(100%);
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.drawer.open {
+    transform: translateX(0);
+}
+.drawer-overlay {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+.drawer-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.modal {
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(0.95) translateY(10px);
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.modal.open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: scale(1) translateY(0);
+}
+.modal-overlay {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+.modal-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.btn-copy { transition: transform 0.1s, color 0.2s; }
+.btn-copy:active { transform: scale(0.95); }
+.btn-copy.copied { color: var(--color-secondary); }
+.dark .btn-copy.copied { color: var(--color-molten-success); }
+
+.shadow-arctic { box-shadow: 0 4px 20px rgba(22, 71, 232, 0.05); }
+.btn-tactile { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2); }

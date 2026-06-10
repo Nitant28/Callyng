@@ -7,49 +7,32 @@ import ClientSettings from './pages/client/Settings';
 import { ClientGuard, AdminGuard } from './components/shared/Guards';
 import Layout from './components/shared/layout/Layout';
 
-const AdminLogin = () => (
-  <div className="flex flex-col items-center justify-center min-h-screen bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text">
-    <h1 className="text-2xl font-bold">Admin Login (Coming Soon)</h1>
-  </div>
-);
+import AdminLogin from './pages/admin/AdminLogin';
 
-const AdminOverview = () => (
-  <div className="flex flex-col items-center justify-center min-h-screen bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text">
-    <h1 className="text-2xl font-bold">Admin Overview (Coming Soon)</h1>
-  </div>
-);
+import AdminOverview from './pages/admin/AdminOverview';
+import AdminLayout from './components/shared/layout/AdminLayout';
 
-const AdminClients = () => (
-  <div className="flex flex-col items-center justify-center min-h-screen bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text">
-    <h1 className="text-2xl font-bold">Admin Clients (Coming Soon)</h1>
-  </div>
-);
+import AdminClients from './pages/admin/AdminClients';
 
-const AdminClientDetail = () => (
-  <div className="flex flex-col items-center justify-center min-h-screen bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text">
-    <h1 className="text-2xl font-bold">Admin Client Detail (Coming Soon)</h1>
-  </div>
-);
+import AdminClientDetail from './pages/admin/AdminClientDetail';
 
-const AdminBotConfigs = () => (
-  <div className="flex flex-col items-center justify-center min-h-screen bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text">
-    <h1 className="text-2xl font-bold">Admin Bot Configs (Coming Soon)</h1>
-  </div>
-);
-
-const AdminCalls = () => (
-  <div className="flex flex-col items-center justify-center min-h-screen bg-arctic-bg dark:bg-molten-bg text-on-surface dark:text-molten-text">
-    <h1 className="text-2xl font-bold">Admin Global Calls (Coming Soon)</h1>
-  </div>
-);
+import AdminBotConfigs from './pages/admin/AdminBotConfigs';
+import AdminCalls from './pages/admin/AdminCalls';
+import AdminCampaigns from './pages/admin/AdminCampaigns';
+import AdminDiagnostics from './pages/admin/AdminDiagnostics';
+import AdminWebhooks from './pages/admin/AdminWebhooks';
 
 import { ToastProvider } from './contexts/ToastContext';
+import { AdminAuthProvider } from './contexts/AdminAuthContext';
+import { AdminDataProvider } from './contexts/AdminDataContext';
 
 function App() {
   return (
     <ToastProvider>
-      <Router>
-      <Routes>
+      <AdminAuthProvider>
+        <AdminDataProvider>
+        <Router>
+        <Routes>
         {/* Client Routes */}
         <Route path="/login" element={<Login />} />
         <Route
@@ -99,7 +82,9 @@ function App() {
           path="/admin"
           element={
             <AdminGuard>
-              <AdminOverview />
+              <AdminLayout>
+                <AdminOverview />
+              </AdminLayout>
             </AdminGuard>
           }
         />
@@ -107,7 +92,9 @@ function App() {
           path="/admin/clients"
           element={
             <AdminGuard>
-              <AdminClients />
+              <AdminLayout>
+                <AdminClients />
+              </AdminLayout>
             </AdminGuard>
           }
         />
@@ -115,7 +102,9 @@ function App() {
           path="/admin/clients/:id"
           element={
             <AdminGuard>
-              <AdminClientDetail />
+              <AdminLayout>
+                <AdminClientDetail />
+              </AdminLayout>
             </AdminGuard>
           }
         />
@@ -123,7 +112,9 @@ function App() {
           path="/admin/bot-configs"
           element={
             <AdminGuard>
-              <AdminBotConfigs />
+              <AdminLayout>
+                <AdminBotConfigs />
+              </AdminLayout>
             </AdminGuard>
           }
         />
@@ -131,7 +122,39 @@ function App() {
           path="/admin/calls"
           element={
             <AdminGuard>
-              <AdminCalls />
+              <AdminLayout>
+                <AdminCalls />
+              </AdminLayout>
+            </AdminGuard>
+          }
+        />
+        <Route
+          path="/admin/campaigns"
+          element={
+            <AdminGuard>
+              <AdminLayout>
+                <AdminCampaigns />
+              </AdminLayout>
+            </AdminGuard>
+          }
+        />
+        <Route
+          path="/admin/diagnostics"
+          element={
+            <AdminGuard>
+              <AdminLayout>
+                <AdminDiagnostics />
+              </AdminLayout>
+            </AdminGuard>
+          }
+        />
+        <Route
+          path="/admin/webhooks"
+          element={
+            <AdminGuard>
+              <AdminLayout>
+                <AdminWebhooks />
+              </AdminLayout>
             </AdminGuard>
           }
         />
@@ -141,6 +164,8 @@ function App() {
         <Route path="*" element={<div className="p-8 text-center text-xl">404 Not Found</div>} />
       </Routes>
       </Router>
+      </AdminDataProvider>
+      </AdminAuthProvider>
     </ToastProvider>
   );
 }

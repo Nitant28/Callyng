@@ -303,6 +303,17 @@ async def create_client(
     return row["id"], raw_key
 
 
+async def regenerate_client_key(pool: asyncpg.Pool, client_id: UUID) -> str:
+    raw_key = secrets.token_urlsafe(32)
+    key_hash = hash_api_key(raw_key)
+    await pool.execute(
+        "UPDATE clients SET api_key_hash = $1 WHERE id = $2",
+        key_hash,
+        client_id,
+    )
+    return raw_key
+
+
 async def get_client_by_token(pool: asyncpg.Pool, raw_token: str) -> dict | None:
     key_hash = hash_api_key(raw_token.strip())
     row = await pool.fetchrow(
@@ -2048,31 +2059,34 @@ async def list_call_logs(
     client_id: UUID | None,
     limit: int = 50,
     offset: int = 0,
+    search: str | None = None,
 ) -> tuple[list[dict], int]:
-    if client_id is None:
-        total = await pool.fetchval("SELECT COUNT(*) FROM call_logs")
-        rows = await pool.fetch(
-            """
-            SELECT * FROM call_logs
-            ORDER BY created_at DESC
-            LIMIT $1 OFFSET $2
-            """,
-            limit,
-            offset,
-        )
-    else:
-        total = await pool.fetchval("SELECT COUNT(*) FROM call_logs WHERE client_id = $1", client_id)
-        rows = await pool.fetch(
-            """
-            SELECT * FROM call_logs
-            WHERE client_id = $1
-            ORDER BY created_at DESC
-            LIMIT $2 OFFSET $3
-            """,
-            client_id,
-            limit,
-            offset,
-        )
+    base_query = "FROM call_logs"
+    conditions = []
+    args = []
+    idx = 1
+    
+    if client_id is not None:
+        conditions.append(f"client_id = ${idx}")
+        args.append(client_id)
+        idx += 1
+        
+    if search:
+        search_pattern = f"%{search}%"
+        conditions.append(f"(session_call_id ILIKE ${idx} OR outcome ILIKE ${idx})")
+        args.append(search_pattern)
+        idx += 1
+        
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    
+    total = await pool.fetchval(f"SELECT COUNT(*) {base_query} {where_clause}", *args)
+    
+    args.extend([limit, offset])
+    rows = await pool.fetch(
+        f"SELECT * {base_query} {where_clause} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+        *args
+    )
+    
     return records_to_dicts(rows), total
 
 

@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import re
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-import os
 
 from api.auth import get_pool, require_admin
 from db import postgres as pg_db
+from dialer.concurrent_dialer import start_dialer, stop_dialer
 from telephony import fetch_plivo_cash_credits
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -70,7 +72,17 @@ class ClientStatusBody(BaseModel):
     active: bool
 
 
+class PatchClientBody(BaseModel):
+    name: str | None = None
+    contact_email: str | None = None
+    industry: str | None = None
+
+
 class BotConfigPatchBody(BaseModel):
+    name: str | None = None
+    route: str | None = None
+    script_id: str | None = None
+    telephony_number: str | None = None
     credits_per_minute: float | None = None
     active: bool | None = None
 
@@ -96,8 +108,15 @@ async def create_client(
 async def list_clients(
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
+    search: Optional[str] = Query(None),
 ):
-    return {"clients": await pg_db.get_all_clients(pool)}
+    clients = await pg_db.get_all_clients(pool)
+    if search:
+        q = search.lower()
+        clients = [c for c in clients if q in (c.get("name") or "").lower()
+                   or q in (c.get("industry") or "").lower()
+                   or q in (c.get("contact_email") or "").lower()]
+    return {"clients": clients}
 
 
 @router.get("/clients/{client_id}")
@@ -110,6 +129,54 @@ async def get_client(
     if client is None:
         raise HTTPException(404, "Client not found")
     return {"client": client}
+
+
+@router.post("/clients/{client_id}/regenerate-key")
+async def regenerate_key(
+    client_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    # Verify client exists
+    client = await pg_db.get_client(pool, client_id)
+    if client is None:
+        raise HTTPException(404, "Client not found")
+        
+    raw_key = await pg_db.regenerate_client_key(pool, client_id)
+    return {
+        "api_key": raw_key,
+        "message": "Save api_key now — it will not be shown again."
+    }
+
+
+@router.patch("/clients/{client_id}")
+async def patch_client(
+    client_id: UUID,
+    body: PatchClientBody,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    sets = []
+    args = []
+    idx = 1
+    if body.name is not None:
+        sets.append(f"name = ${idx}")
+        args.append(body.name)
+        idx += 1
+    if body.contact_email is not None:
+        sets.append(f"contact_email = ${idx}")
+        args.append(body.contact_email)
+        idx += 1
+    if body.industry is not None:
+        sets.append(f"industry = ${idx}")
+        args.append(body.industry)
+        idx += 1
+    if sets:
+        args.append(client_id)
+        await pool.execute(
+            f"UPDATE clients SET {', '.join(sets)} WHERE id = ${idx}", *args
+        )
+    return {"client": await pg_db.get_client(pool, client_id)}
 
 
 @router.patch("/clients/{client_id}/status")
@@ -183,8 +250,27 @@ async def create_bot_config(
 async def list_bot_configs(
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
+    search: Optional[str] = Query(None),
+    client_id: Optional[UUID] = Query(None),
 ):
-    return {"bot_configs": await pg_db.list_bot_configs(pool, None)}
+    bots = await pg_db.list_bot_configs(pool, client_id)
+    if search:
+        q = search.lower()
+        bots = [b for b in bots if q in (b.get("name") or "").lower()
+                or q in (b.get("script_id") or "").lower()]
+    return {"bot_configs": bots}
+
+
+@router.get("/bot-configs/{bot_config_id}")
+async def get_bot_config(
+    bot_config_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    row = await pool.fetchrow("SELECT * FROM bot_configs WHERE id = $1", bot_config_id)
+    if row is None:
+        raise HTTPException(404, "Bot config not found")
+    return {"bot_config": pg_db.record_to_dict(row)}
 
 
 @router.patch("/bot-configs/{bot_config_id}")
@@ -197,6 +283,26 @@ async def patch_bot_config(
     sets = []
     args = []
     idx = 1
+    if body.name is not None:
+        sets.append(f"name = ${idx}")
+        args.append(body.name)
+        idx += 1
+    if body.route is not None:
+        if body.route not in ("sts", "cascaded"):
+            raise HTTPException(422, "route must be sts or cascaded")
+        sets.append(f"route = ${idx}")
+        args.append(body.route)
+        idx += 1
+    if body.script_id is not None:
+        if not _SCRIPT_ID_RE.fullmatch(body.script_id):
+            raise HTTPException(422, "script_id validation failed")
+        sets.append(f"script_id = ${idx}")
+        args.append(body.script_id)
+        idx += 1
+    if body.telephony_number is not None:
+        sets.append(f"telephony_number = ${idx}")
+        args.append(body.telephony_number)
+        idx += 1
     if body.credits_per_minute is not None:
         sets.append(f"credits_per_minute = ${idx}")
         args.append(body.credits_per_minute)
@@ -209,7 +315,7 @@ async def patch_bot_config(
         args.append(bot_config_id)
         await pool.execute(f"UPDATE bot_configs SET {', '.join(sets)} WHERE id = ${idx}", *args)
     row = await pool.fetchrow("SELECT * FROM bot_configs WHERE id = $1", bot_config_id)
-    return {"bot_config": dict(row) if row else None}
+    return {"bot_config": pg_db.record_to_dict(row) if row else None}
 
 
 @router.post("/campaigns")
@@ -242,6 +348,26 @@ async def create_campaign(
         "campaign": campaign,
         "balance_credits": float(row["balance_credits"]) if row else None,
     }
+
+
+@router.get("/campaigns")
+async def list_campaigns_admin(
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+    client_id: Optional[UUID] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    if client_id is not None:
+        campaigns = await pg_db.list_campaigns(pool, client_id)
+    else:
+        rows = await pool.fetch(
+            "SELECT * FROM campaigns ORDER BY created_at DESC LIMIT 200"
+        )
+        campaigns = pg_db.records_to_dicts(rows)
+    if search:
+        q = search.lower()
+        campaigns = [c for c in campaigns if q in (c.get("name") or "").lower()]
+    return {"campaigns": campaigns}
 
 
 @router.get("/campaigns/{campaign_id}")
@@ -298,13 +424,46 @@ async def stop_campaign_admin(
     return {"status": "paused", "released_calling_leads": released}
 
 
+@router.patch("/campaigns/{campaign_id}/start")
+async def start_campaign_admin(
+    campaign_id: UUID,
+    request: Request,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    if camp["status"] not in ("draft", "paused", "pausing"):
+        raise HTTPException(409, f"Cannot start a {camp['status']} campaign")
+    budget = float(camp.get("budget_credits") or 0)
+    used = float(camp.get("budget_used_credits") or 0)
+    if budget - used < 2:
+        raise HTTPException(400, "Campaign has insufficient remaining budget to start")
+    client_id = UUID(str(camp["client_id"]))
+    released = await pg_db.release_stuck_calling_leads(pool, campaign_id, client_id)
+    bumped_retry = await pg_db.bump_pending_retry_to_now(pool, campaign_id, client_id)
+    counter_snapshot = await pg_db.reconcile_campaign_counters(pool, campaign_id, client_id)
+    await pg_db.update_campaign_status(pool, campaign_id, client_id, "running")
+    host = (os.getenv("DIALER_CALLBACK_HOST") or os.getenv("NGROK_URL") or "").strip()
+    if not host:
+        host = request.headers.get("host", "localhost:7860")
+    start_dialer(request.app, campaign_id, client_id, host=host)
+    return {
+        "status": "running",
+        "campaign_id": str(campaign_id),
+        "released_calling_leads": released,
+        "bumped_pending_retry": bumped_retry,
+        "counters": counter_snapshot,
+    }
+
+
 @router.patch("/campaigns/{campaign_id}/cancel")
 async def cancel_campaign_admin(
     campaign_id: UUID,
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
 ):
-    from dialer.concurrent_dialer import stop_dialer
     camp = await pg_db.get_campaign_admin(pool, campaign_id)
     if camp is None:
         raise HTTPException(404, "Campaign not found")
@@ -317,6 +476,53 @@ async def cancel_campaign_admin(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"campaign_id": str(campaign_id), **result}
+
+
+@router.post("/campaigns/{campaign_id}/reconcile")
+async def reconcile_campaign(
+    campaign_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    client_id = UUID(str(camp["client_id"]))
+    counts = await pg_db.reconcile_campaign_counters(pool, campaign_id, client_id)
+    return {"campaign_id": str(campaign_id), "counters": counts}
+
+
+@router.post("/campaigns/{campaign_id}/release-stuck")
+async def release_stuck(
+    campaign_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    client_id = UUID(str(camp["client_id"]))
+    released = await pg_db.release_stuck_calling_leads(pool, campaign_id, client_id)
+    return {"campaign_id": str(campaign_id), "released": released}
+
+
+@router.get("/campaigns/{campaign_id}/leads")
+async def list_campaign_leads_admin(
+    campaign_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = Query(None),
+):
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    client_id = UUID(str(camp["client_id"]))
+    leads, total = await pg_db.list_campaign_leads(
+        pool, campaign_id, client_id, limit=limit, offset=offset, status=status
+    )
+    return {"leads": leads, "total_count": total}
 
 
 @router.post("/webhook-configs")
@@ -335,11 +541,24 @@ async def create_webhook_config(
 async def list_all_calls(
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
 ):
-    calls, total = await pg_db.list_call_logs(pool, None, limit=limit, offset=offset)
+    calls, total = await pg_db.list_call_logs(pool, None, limit=limit, offset=offset, search=search)
     return {"calls": calls, "total_count": total}
+
+
+@router.get("/calls/{session_call_id}")
+async def get_call_admin(
+    session_call_id: str,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    call = await pg_db.get_call_log_by_session(pool, session_call_id)
+    if call is None:
+        raise HTTPException(404, "Call not found")
+    return {"call": call}
 
 
 @router.get("/scripts")

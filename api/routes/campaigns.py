@@ -8,7 +8,8 @@ import re
 from uuid import UUID
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from typing import Optional
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from api.guards import require_campaign_modifiable
@@ -42,9 +43,14 @@ def _col_map(df: pd.DataFrame) -> dict[str, str]:
 async def list_campaigns(
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
+    search: Optional[str] = Query(None),
 ):
     cid = client_id_uuid(client)
-    return {"campaigns": await pg_db.list_campaigns(pool, cid)}
+    campaigns = await pg_db.list_campaigns(pool, cid)
+    if search:
+        q = search.lower()
+        campaigns = [c for c in campaigns if q in (c.get("name") or "").lower()]
+    return {"campaigns": campaigns}
 
 
 from pydantic import BaseModel, Field

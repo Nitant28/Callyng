@@ -7,7 +7,7 @@ const clientApi = axios.create({
 
 clientApi.interceptors.request.use((config) => {
   const apiKey = localStorage.getItem('client_api_key');
-  if (apiKey) {
+  if (apiKey && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${apiKey}`;
   }
   return config;

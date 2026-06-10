@@ -20,6 +20,45 @@ const Dashboard = () => {
   // Credit balance count-up animation state
   const [displayBalance, setDisplayBalance] = useState(0);
 
+  // Resume Confirmation Modal State
+  const [confirmStartCampaign, setConfirmStartCampaign] = useState(null);
+
+  const [copiedCampaignId, setCopiedCampaignId] = useState(null);
+
+  const handleCopyCampaignId = (e, id) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(id);
+    setCopiedCampaignId(id);
+    setTimeout(() => setCopiedCampaignId(null), 2000);
+  };
+
+  // IST Compliance window state
+  const [istStatus, setIstStatus] = useState({ isInside: true, formattedIst: '' });
+
+  useEffect(() => {
+    const updateIst = () => {
+      const now = new Date();
+      // Calculate IST time (UTC +5:30)
+      const istTime = new Date(now.getTime() + (now.getTimezoneOffset() * 60000) + (5.5 * 60 * 60 * 1000));
+      const hour = istTime.getHours();
+      const minutes = istTime.getMinutes();
+      const isInside = hour >= 9 && hour < 21;
+      
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const displayHour = hour % 12 || 12;
+      const displayMin = minutes < 10 ? '0' + minutes : minutes;
+      
+      setIstStatus({
+        isInside,
+        formattedIst: `${displayHour}:${displayMin} ${ampm} IST`
+      });
+    };
+
+    updateIst();
+    const interval = setInterval(updateIst, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
 
 
   // Load dashboard data
@@ -101,16 +140,39 @@ const Dashboard = () => {
   // Campaign State Control handlers (Real API bindings + fallback simulation)
   const handleToggleState = async (campaignId, currentStatus) => {
     const action = currentStatus === 'running' ? 'stop' : 'start';
+    if (action === 'start') {
+      const camp = campaigns.find(c => c.id === campaignId);
+      setConfirmStartCampaign(camp);
+      return;
+    }
+
     try {
-      const response = await clientApi.patch(`/api/campaigns/${campaignId}/${action}`);
+      const response = await clientApi.patch(`/api/campaigns/${campaignId}/stop`);
       if (response.data) {
-        showToast(`Campaign ${action === 'start' ? 'started' : 'paused'} successfully.`, 'success');
+        showToast('Campaign paused successfully.', 'success');
         loadDashboardData();
         return;
       }
     } catch (err) {
       console.error('Failed to toggle campaign status', err);
       showToast(err.customErrorMessage || 'Failed to toggle campaign status', 'error');
+    }
+  };
+
+  const handleConfirmStart = async () => {
+    if (!confirmStartCampaign) return;
+    const campaignId = confirmStartCampaign.id;
+    try {
+      const response = await clientApi.patch(`/api/campaigns/${campaignId}/start`);
+      if (response.data) {
+        showToast('Campaign started successfully.', 'success');
+        setConfirmStartCampaign(null);
+        loadDashboardData();
+        return;
+      }
+    } catch (err) {
+      console.error('Failed to start campaign', err);
+      showToast(err.customErrorMessage || 'Failed to start campaign', 'error');
     }
   };
 
@@ -133,6 +195,47 @@ const Dashboard = () => {
   return (
     <>
           <LoaderOverlay isVisible={isPausing} message="Finishing ongoing leads..." />
+          
+          {/* Calling Window Compliance Banner */}
+          <div className={`mb-stack-lg p-4 rounded-xl border border-l-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all duration-300 animate-fade-in ${
+            istStatus.isInside 
+              ? 'bg-emerald-500/[0.07] dark:bg-emerald-500/[0.03] border-emerald-500/25 dark:border-emerald-500/15 border-l-emerald-500 text-emerald-800 dark:text-emerald-300' 
+              : 'bg-amber-500/[0.07] dark:bg-amber-500/[0.03] border-amber-500/25 dark:border-amber-500/15 border-l-amber-500 text-amber-800 dark:text-amber-300'
+          }`}>
+            <div className="flex items-start gap-3">
+              <div className="mt-1 shrink-0 flex items-center">
+                {istStatus.isInside ? (
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                  </span>
+                ) : (
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                  </span>
+                )}
+              </div>
+              <div>
+                <h4 className="font-bold text-sm tracking-wide uppercase flex items-center gap-2">
+                  {istStatus.isInside ? 'Calling Window Active' : 'Calling Window Paused (TRAI Compliance)'}
+                  <span className="text-xs px-2 py-0.5 rounded bg-surface/50 dark:bg-molten-bg/50 border border-current/10 font-mono font-medium">
+                    {istStatus.formattedIst}
+                  </span>
+                </h4>
+                <p className="text-xs mt-1 opacity-90 leading-relaxed max-w-3xl">
+                  {istStatus.isInside 
+                    ? 'The compliant calling hours (9:00 AM – 9:00 PM IST) are active. Outbound campaigns are permitted to dial normally.' 
+                    : 'We are currently outside the TRAI-compliant hours (9:00 AM – 9:00 PM IST). Automated dialing is paused and will automatically resume at 9:00 AM IST tomorrow. You can still safely start campaigns, upload leads, or adjust settings now.'}
+                </p>
+              </div>
+            </div>
+            <div className="shrink-0 flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg bg-surface/40 dark:bg-black/10 border border-current/10 font-mono">
+              <span className="material-symbols-outlined text-[16px]">schedule</span>
+              9 AM - 9 PM IST enforced
+            </div>
+          </div>
+
           {/* Credit Balance Section */}
           <section className="mb-stack-lg animate-fade-in">
             <div className="bg-arctic-surface dark:bg-molten-surface p-6 rounded-xl border border-outline-variant/50 dark:border-[#2A345E]/50 shadow-md relative overflow-hidden group transition-all duration-300">
@@ -210,7 +313,20 @@ const Dashboard = () => {
                                 </button>
                               </div>
                             </div>
-                            <h3 className="font-headline-sm text-headline-sm mb-2">{camp.name}</h3>
+                            <h3 className="font-headline-sm text-headline-sm mb-1">{camp.name}</h3>
+                            <div className="flex items-center gap-1.5 mb-3 group/uuid w-fit" onClick={(e) => handleCopyCampaignId(e, camp.id)}>
+                              <span className="text-xs text-on-surface-variant/70 dark:text-molten-text-muted font-mono select-all">
+                                ID: {camp.id.substring(0, 8)}...
+                              </span>
+                              <button 
+                                className="opacity-0 group-hover/uuid:opacity-100 p-0.5 hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded text-on-surface-variant dark:text-molten-text transition-all flex items-center"
+                                title="Copy Full Campaign UUID"
+                              >
+                                <span className="material-symbols-outlined text-[12px]">
+                                  {copiedCampaignId === camp.id ? 'check' : 'content_copy'}
+                                </span>
+                              </button>
+                            </div>
                             <p className="text-arctic-text-muted dark:text-molten-text-muted text-body-sm mb-6">
                               {camp.description || 'Campaign outbound calling process active.'}
                             </p>
@@ -238,7 +354,20 @@ const Dashboard = () => {
                               <span className="material-symbols-outlined">more_vert</span>
                             </button>
                           </div>
-                          <h3 className="font-headline-sm text-headline-sm mb-2">{camp.name}</h3>
+                          <h3 className="font-headline-sm text-headline-sm mb-1">{camp.name}</h3>
+                          <div className="flex items-center gap-1.5 mb-3 group/uuid w-fit" onClick={(e) => handleCopyCampaignId(e, camp.id)}>
+                            <span className="text-xs text-on-surface-variant/70 dark:text-molten-text-muted font-mono select-all">
+                              ID: {camp.id.substring(0, 8)}...
+                            </span>
+                            <button 
+                              className="opacity-0 group-hover/uuid:opacity-100 p-0.5 hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded text-on-surface-variant dark:text-molten-text transition-all flex items-center"
+                              title="Copy Full Campaign UUID"
+                            >
+                              <span className="material-symbols-outlined text-[12px]">
+                                {copiedCampaignId === camp.id ? 'check' : 'content_copy'}
+                              </span>
+                            </button>
+                          </div>
                           <p className="text-arctic-text-muted dark:text-molten-text-muted text-body-sm mb-6">
                             {camp.description || 'Campaign outbound calling process paused.'}
                           </p>
@@ -275,7 +404,20 @@ const Dashboard = () => {
                               <span className="material-symbols-outlined">more_vert</span>
                             </button>
                           </div>
-                          <h3 className="font-headline-sm text-headline-sm mb-2">{camp.name}</h3>
+                          <h3 className="font-headline-sm text-headline-sm mb-1">{camp.name}</h3>
+                          <div className="flex items-center gap-1.5 mb-3 group/uuid w-fit" onClick={(e) => handleCopyCampaignId(e, camp.id)}>
+                            <span className="text-xs text-on-surface-variant/70 dark:text-molten-text-muted font-mono select-all">
+                              ID: {camp.id.substring(0, 8)}...
+                            </span>
+                            <button 
+                              className="opacity-0 group-hover/uuid:opacity-100 p-0.5 hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded text-on-surface-variant dark:text-molten-text transition-all flex items-center"
+                              title="Copy Full Campaign UUID"
+                            >
+                              <span className="material-symbols-outlined text-[12px]">
+                                {copiedCampaignId === camp.id ? 'check' : 'content_copy'}
+                              </span>
+                            </button>
+                          </div>
                           <p className="text-arctic-text-muted dark:text-molten-text-muted text-body-sm mb-6">
                             {camp.description || 'Campaign configurations in progress.'}
                           </p>
@@ -296,6 +438,88 @@ const Dashboard = () => {
               )}
             </div>
           )}
+
+      {/* Resume Campaign Confirmation Modal */}
+      {confirmStartCampaign && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-[#0c1941]/40 dark:bg-black/60 backdrop-blur-sm animate-fade-in" onClick={() => setConfirmStartCampaign(null)}></div>
+          <div className="relative bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-5 text-on-surface dark:text-molten-text animate-scale-up">
+            
+            {/* Modal Header */}
+            <div className="flex items-center gap-3 border-b border-outline-variant dark:border-[#2A345E] pb-3">
+              <div className="w-10 h-10 rounded-full bg-primary/10 dark:bg-molten-primary/10 text-primary dark:text-molten-primary flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-[24px] animate-pulse">play_circle</span>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold">Start Outbound Dialer</h3>
+                <p className="text-xs text-arctic-text-muted dark:text-molten-text-muted">Campaign: {confirmStartCampaign.name}</p>
+              </div>
+            </div>
+
+            {/* Warning Message / Details */}
+            <div className="space-y-3">
+              <p className="text-sm opacity-90 leading-relaxed">
+                You are about to launch the outbound dialer queue. Please verify compliance and resource parameters:
+              </p>
+              
+              {/* Campaign stats preview */}
+              <div className="bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant/60 dark:border-[#2A345E] rounded-xl p-3 text-xs space-y-2 font-mono">
+                <div className="flex justify-between">
+                  <span className="text-arctic-text-muted dark:text-molten-text-muted">Max Concurrency:</span>
+                  <span className="font-bold">{confirmStartCampaign.max_concurrent_calls} channels</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-arctic-text-muted dark:text-molten-text-muted">Calls / Minute:</span>
+                  <span className="font-bold">{confirmStartCampaign.calls_per_minute || 10} calls</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-arctic-text-muted dark:text-molten-text-muted">Attempts Limit:</span>
+                  <span className="font-bold">{confirmStartCampaign.max_attempts || 3} attempts</span>
+                </div>
+              </div>
+
+              {/* Compliance Warning Banner */}
+              <div className={`p-3 rounded-xl border flex gap-3 text-xs ${
+                istStatus.isInside 
+                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-800 dark:text-emerald-400' 
+                  : 'bg-amber-500/10 border-amber-500/20 text-amber-800 dark:text-amber-400'
+              }`}>
+                <span className="material-symbols-outlined shrink-0 text-[18px]">info</span>
+                <div>
+                  <p className="font-bold uppercase tracking-wider mb-0.5">
+                    {istStatus.isInside ? 'Calling Hours Active' : 'Calling Hours Restricted'}
+                  </p>
+                  <p className="opacity-90">
+                    {istStatus.isInside 
+                      ? `Outbound dialing is allowed. Current time is ${istStatus.formattedIst}.` 
+                      : `Dialer is paused until 9 AM IST. Current time is ${istStatus.formattedIst}. Calls will queue automatically.`}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Buttons */}
+            <div className="flex justify-end gap-2 pt-2 border-t border-outline-variant dark:border-[#2A345E]">
+              <button
+                type="button"
+                onClick={() => setConfirmStartCampaign(null)}
+                className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted border border-outline-variant dark:border-[#2A345E] hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded-lg cursor-pointer transition-colors text-sm font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmStart}
+                className="px-5 py-2 bg-primary dark:bg-molten-primary text-on-primary dark:text-molten-bg rounded-lg cursor-pointer font-bold hover:brightness-110 transition-all text-sm flex items-center gap-1.5"
+              >
+                <span className="material-symbols-outlined text-[18px]">rocket_launch</span>
+                Acknowledge & Start
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
     </>
   );
 };

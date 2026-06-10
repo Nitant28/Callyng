@@ -41,6 +41,36 @@ const CampaignDetail = () => {
   // Ticking calling counter animation state
   const [liveCallingCount, setLiveCallingCount] = useState(0);
 
+  // Resume Confirmation Modal State
+  const [isStartConfirmOpen, setIsStartConfirmOpen] = useState(false);
+
+  // IST Compliance window state
+  const [istStatus, setIstStatus] = useState({ isInside: true, formattedIst: '' });
+
+  useEffect(() => {
+    const updateIst = () => {
+      const now = new Date();
+      // Calculate IST time (UTC +5:30)
+      const istTime = new Date(now.getTime() + (now.getTimezoneOffset() * 60000) + (5.5 * 60 * 60 * 1000));
+      const hour = istTime.getHours();
+      const minutes = istTime.getMinutes();
+      const isInside = hour >= 9 && hour < 21;
+      
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const displayHour = hour % 12 || 12;
+      const displayMin = minutes < 10 ? '0' + minutes : minutes;
+      
+      setIstStatus({
+        isInside,
+        formattedIst: `${displayHour}:${displayMin} ${ampm} IST`
+      });
+    };
+
+    updateIst();
+    const interval = setInterval(updateIst, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
 
   // Tab slider sizing refs
   const overviewTabRef = useRef(null);
@@ -150,19 +180,40 @@ const CampaignDetail = () => {
   };
 
   // Actions
+  // Actions
   const handleToggleState = async () => {
     if (!campaign) return;
     const action = campaign.status === 'running' ? 'stop' : 'start';
+    if (action === 'start') {
+      setIsStartConfirmOpen(true);
+      return;
+    }
+
     try {
-      const response = await clientApi.patch(`/api/campaigns/${id}/${action}`);
+      const response = await clientApi.patch(`/api/campaigns/${id}/stop`);
       if (response.data) {
-        showToast(`Campaign ${action === 'start' ? 'started' : 'paused'} successfully.`, 'success');
+        showToast('Campaign paused successfully.', 'success');
         loadCampaignDetails();
         return;
       }
     } catch (err) {
-      console.warn(`Campaign state toggle to ${action} failed.`, err);
-      showToast(err.customErrorMessage || `Failed to ${action} campaign. See console for details.`, 'error');
+      console.warn('Campaign pause failed.', err);
+      showToast(err.customErrorMessage || 'Failed to pause campaign.', 'error');
+    }
+  };
+
+  const handleConfirmStart = async () => {
+    try {
+      const response = await clientApi.patch(`/api/campaigns/${id}/start`);
+      if (response.data) {
+        showToast('Campaign started successfully.', 'success');
+        setIsStartConfirmOpen(false);
+        loadCampaignDetails();
+        return;
+      }
+    } catch (err) {
+      console.warn('Campaign start failed.', err);
+      showToast(err.customErrorMessage || 'Failed to start campaign.', 'error');
     }
   };
 
@@ -451,6 +502,46 @@ const CampaignDetail = () => {
             </div>
           </div>
 
+          {/* Calling Window Compliance Banner */}
+          <div className={`mb-stack-lg p-4 rounded-xl border border-l-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all duration-300 animate-fade-in ${
+            istStatus.isInside 
+              ? 'bg-emerald-500/[0.07] dark:bg-emerald-500/[0.03] border-emerald-500/25 dark:border-emerald-500/15 border-l-emerald-500 text-emerald-800 dark:text-emerald-300' 
+              : 'bg-amber-500/[0.07] dark:bg-amber-500/[0.03] border-amber-500/25 dark:border-amber-500/15 border-l-amber-500 text-amber-800 dark:text-amber-300'
+          }`}>
+            <div className="flex items-start gap-3">
+              <div className="mt-1 shrink-0 flex items-center">
+                {istStatus.isInside ? (
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                  </span>
+                ) : (
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                  </span>
+                )}
+              </div>
+              <div>
+                <h4 className="font-bold text-sm tracking-wide uppercase flex items-center gap-2">
+                  {istStatus.isInside ? 'Calling Window Active' : 'Calling Window Paused (TRAI Compliance)'}
+                  <span className="text-xs px-2 py-0.5 rounded bg-surface/50 dark:bg-molten-bg/50 border border-current/10 font-mono font-medium">
+                    {istStatus.formattedIst}
+                  </span>
+                </h4>
+                <p className="text-xs mt-1 opacity-90 leading-relaxed max-w-3xl">
+                  {istStatus.isInside 
+                    ? 'The compliant calling hours (9:00 AM – 9:00 PM IST) are active. Outbound campaigns are permitted to dial normally.' 
+                    : 'We are currently outside the TRAI-compliant hours (9:00 AM – 9:00 PM IST). Automated dialing is paused and will automatically resume at 9:00 AM IST tomorrow. You can still safely start campaigns, upload leads, or adjust settings now.'}
+                </p>
+              </div>
+            </div>
+            <div className="shrink-0 flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-lg bg-surface/40 dark:bg-black/10 border border-current/10 font-mono">
+              <span className="material-symbols-outlined text-[16px]">schedule</span>
+              9 AM - 9 PM IST enforced
+            </div>
+          </div>
+
           {/* Metric Cards */}
           <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter mb-stack-lg">
             {/* Total Leads */}
@@ -644,11 +735,12 @@ const CampaignDetail = () => {
                           <button onClick={() => fileInputRef.current?.click()} className="bg-surface-variant dark:bg-surface-variant/20 text-primary dark:text-molten-primary px-4 py-2 rounded-lg font-label-md text-label-md hover:bg-surface-container-high dark:hover:bg-surface-variant/40 transition-colors cursor-pointer">
                             Browse Files
                           </button>
-                          {/* TODO: Download Template CSV
-                          <button className="text-arctic-text-muted hover:text-on-surface dark:hover:text-molten-text px-4 py-2 rounded-lg font-label-md text-label-md transition-colors cursor-pointer border border-transparent hover:border-outline-variant">
-                            Download Template
+                          <button 
+                            onClick={() => setIsAddLeadOpen(true)}
+                            className="border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text hover:bg-surface-container dark:hover:bg-[#2A345E]/50 px-4 py-2 rounded-lg font-label-md text-label-md transition-colors cursor-pointer"
+                          >
+                            Add Lead Manually
                           </button>
-                          */}
                         </div>
                       )}
                     </div>
@@ -677,8 +769,17 @@ const CampaignDetail = () => {
                   {/* Leads Table Card */}
                   <div className="bg-arctic-surface dark:bg-molten-surface rounded-xl border border-outline-variant dark:border-[#2A345E] shadow-[0_4px_20px_rgba(22,71,232,0.05)] dark:shadow-none overflow-hidden flex flex-col h-[500px]">
                     <div className="p-4 border-b border-outline-variant dark:border-[#2A345E] flex justify-between items-center bg-surface dark:bg-molten-surface/40">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-4">
                         <h3 className="font-label-md text-label-md font-bold text-on-surface dark:text-molten-text">Active Leads ({totalLeadsCount.toLocaleString()})</h3>
+                        {(campaign.status === 'draft' || campaign.status === 'paused') && (
+                          <button 
+                            onClick={() => setIsAddLeadOpen(true)}
+                            className="bg-primary/15 hover:bg-primary/25 dark:bg-molten-primary/10 dark:hover:bg-molten-primary/20 text-primary dark:text-molten-primary px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 active:scale-95"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">person_add</span>
+                            Add Contact
+                          </button>
+                        )}
                       </div>
                       <div className="flex items-center gap-3">
                         <div className="relative">
@@ -939,16 +1040,16 @@ const CampaignDetail = () => {
 
       {/* Manual Add Lead Modal */}
       {isAddLeadOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsAddLeadOpen(false)}></div>
-          <form onSubmit={handleAddLead} className="relative bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4 text-on-surface dark:text-molten-text">
-            <h3 className="text-xl font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2">Add New Lead</h3>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-[#0c1941]/40 dark:bg-black/60 backdrop-blur-sm" onClick={() => setIsAddLeadOpen(false)}></div>
+          <form onSubmit={handleAddLead} className="relative bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4 text-on-surface dark:text-molten-text animate-fade-in">
+            <h3 className="text-xl font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2 text-on-surface dark:text-molten-text">Add New Lead</h3>
             
             <div>
-              <label className="block text-xs text-arctic-text-muted mb-1">Full Name</label>
+              <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold">Full Name</label>
               <input
                 type="text"
-                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none focus:border-primary"
+                className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
                 value={newLead.name}
                 onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
                 placeholder="e.g. Rahul Patil"
@@ -956,10 +1057,10 @@ const CampaignDetail = () => {
             </div>
 
             <div>
-              <label className="block text-xs text-arctic-text-muted mb-1">Phone Number (with prefix)</label>
+              <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold">Phone Number (with prefix)</label>
               <input
                 type="tel"
-                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none focus:border-primary font-mono"
+                className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text font-mono"
                 value={newLead.phone}
                 onChange={(e) => setNewLead({ ...newLead, phone: e.target.value })}
                 placeholder="e.g. +919988776655"
@@ -968,15 +1069,15 @@ const CampaignDetail = () => {
             </div>
 
             <div>
-              <label className="block text-xs text-arctic-text-muted mb-1">Lead Type</label>
+              <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold">Lead Type</label>
               <select
                 value={newLead.lead_type}
                 onChange={(e) => setNewLead({ ...newLead, lead_type: e.target.value })}
-                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none"
+                className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
               >
-                <option value="cold">Cold</option>
-                <option value="warm">Warm</option>
-                <option value="hot">Hot</option>
+                <option className="dark:bg-[#1A1C24]" value="cold">Cold</option>
+                <option className="dark:bg-[#1A1C24]" value="warm">Warm</option>
+                <option className="dark:bg-[#1A1C24]" value="hot">Hot</option>
               </select>
             </div>
 
@@ -984,13 +1085,13 @@ const CampaignDetail = () => {
               <button
                 type="button"
                 onClick={() => setIsAddLeadOpen(false)}
-                className="px-4 py-2 hover:bg-surface-container rounded cursor-pointer"
+                className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted border border-outline-variant dark:border-[#2A345E] hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded-lg cursor-pointer transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-6 py-2 bg-primary text-white rounded cursor-pointer font-bold hover:brightness-110"
+                className="px-6 py-2 bg-primary dark:bg-molten-primary text-on-primary dark:text-molten-bg rounded-lg cursor-pointer font-bold hover:brightness-110 transition-all"
               >
                 Add Contact
               </button>
@@ -1001,16 +1102,16 @@ const CampaignDetail = () => {
 
       {/* Edit Lead Modal */}
       {isEditLeadOpen && editLeadData && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsEditLeadOpen(false)}></div>
-          <form onSubmit={handleEditLead} className="relative bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4 text-on-surface dark:text-molten-text">
-            <h3 className="text-xl font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2">Edit Lead</h3>
+          <form onSubmit={handleEditLead} className="relative bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4 text-on-surface dark:text-molten-text animate-fade-in">
+            <h3 className="text-xl font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2 text-on-surface dark:text-molten-text">Edit Lead</h3>
             
             <div>
-              <label className="block text-xs text-arctic-text-muted mb-1">Full Name</label>
+              <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold">Full Name</label>
               <input
                 type="text"
-                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none focus:border-primary"
+                className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
                 value={editLeadData.name || ''}
                 onChange={(e) => setEditLeadData({ ...editLeadData, name: e.target.value })}
                 placeholder="e.g. Rahul Patil"
@@ -1018,42 +1119,42 @@ const CampaignDetail = () => {
             </div>
 
             <div>
-              <label className="block text-xs text-arctic-text-muted mb-1">Phone Number (with prefix)</label>
+              <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold">Phone Number (with prefix)</label>
               <input
                 type="tel"
-                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none focus:border-primary font-mono opacity-50"
+                className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text font-mono opacity-50 cursor-not-allowed"
                 value={editLeadData.phone}
                 disabled
               />
             </div>
 
             <div>
-              <label className="block text-xs text-arctic-text-muted mb-1">Lead Type</label>
+              <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold">Lead Type</label>
               <select
                 value={editLeadData.lead_type || 'cold'}
                 onChange={(e) => setEditLeadData({ ...editLeadData, lead_type: e.target.value })}
-                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none"
+                className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
               >
-                <option value="cold">Cold</option>
-                <option value="warm">Warm</option>
-                <option value="hot">Hot</option>
+                <option className="dark:bg-[#1A1C24]" value="cold">Cold</option>
+                <option className="dark:bg-[#1A1C24]" value="warm">Warm</option>
+                <option className="dark:bg-[#1A1C24]" value="hot">Hot</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-xs text-arctic-text-muted mb-1">Status</label>
+              <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold">Status</label>
               <select
                 value={editLeadData.status || 'pending'}
                 onChange={(e) => setEditLeadData({ ...editLeadData, status: e.target.value })}
-                className="w-full bg-surface-container-low dark:bg-surface-variant/10 border border-outline-variant dark:border-[#2A345E] p-2 rounded outline-none"
+                className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
               >
-                <option value="pending">Pending</option>
-                <option value="failed">Failed</option>
-                <option value="dnc">DNC</option>
-                <option value="completed">Completed</option>
-                <option value="callback_scheduled">Callback Scheduled</option>
+                <option className="dark:bg-[#1A1C24]" value="pending">Pending</option>
+                <option className="dark:bg-[#1A1C24]" value="failed">Failed</option>
+                <option className="dark:bg-[#1A1C24]" value="dnc">DNC</option>
+                <option className="dark:bg-[#1A1C24]" value="completed">Completed</option>
+                <option className="dark:bg-[#1A1C24]" value="callback_scheduled">Callback Scheduled</option>
                 {/* Prevent selecting calling manually */}
-                {editLeadData.status === 'calling' && <option value="calling" disabled>Calling (In Progress)</option>}
+                {editLeadData.status === 'calling' && <option className="dark:bg-[#1A1C24]" value="calling" disabled>Calling (In Progress)</option>}
               </select>
               {editLeadData.status !== editLeadData.original_status && (
                 <p className="text-[10px] text-amber-500 mt-1">Status change may require confirmation.</p>
@@ -1064,13 +1165,13 @@ const CampaignDetail = () => {
               <button
                 type="button"
                 onClick={() => setIsEditLeadOpen(false)}
-                className="px-4 py-2 hover:bg-surface-container rounded cursor-pointer"
+                className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted border border-outline-variant dark:border-[#2A345E] hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded-lg cursor-pointer transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-6 py-2 bg-primary text-white rounded cursor-pointer font-bold hover:brightness-110"
+                className="px-6 py-2 bg-primary dark:bg-molten-primary text-on-primary dark:text-molten-bg rounded-lg cursor-pointer font-bold hover:brightness-110 transition-all"
               >
                 Save Changes
               </button>
@@ -1078,6 +1179,89 @@ const CampaignDetail = () => {
           </form>
         </div>
       )}
+
+      {/* Resume Campaign Confirmation Modal */}
+      {isStartConfirmOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-[#0c1941]/40 dark:bg-black/60 backdrop-blur-sm animate-fade-in" onClick={() => setIsStartConfirmOpen(false)}></div>
+          <div className="relative bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-5 text-on-surface dark:text-molten-text animate-scale-up">
+            
+            {/* Modal Header */}
+            <div className="flex items-center gap-3 border-b border-outline-variant dark:border-[#2A345E] pb-3">
+              <div className="w-10 h-10 rounded-full bg-primary/10 dark:bg-molten-primary/10 text-primary dark:text-molten-primary flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-[24px] animate-pulse">play_circle</span>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold">Start Outbound Dialer</h3>
+                <p className="text-xs text-arctic-text-muted dark:text-molten-text-muted">Campaign: {campaign.name}</p>
+              </div>
+            </div>
+
+            {/* Warning Message / Details */}
+            <div className="space-y-3">
+              <p className="text-sm opacity-90 leading-relaxed">
+                You are about to launch the outbound dialer queue. Please verify compliance and resource parameters:
+              </p>
+              
+              {/* Campaign stats preview */}
+              <div className="bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant/60 dark:border-[#2A345E] rounded-xl p-3 text-xs space-y-2 font-mono">
+                <div className="flex justify-between">
+                  <span className="text-arctic-text-muted dark:text-molten-text-muted">Max Concurrency:</span>
+                  <span className="font-bold">{campaign.max_concurrent_calls} channels</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-arctic-text-muted dark:text-molten-text-muted">Calls / Minute:</span>
+                  <span className="font-bold">{campaign.calls_per_minute || 10} calls</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-arctic-text-muted dark:text-molten-text-muted">Attempts Limit:</span>
+                  <span className="font-bold">{campaign.max_attempts || 3} attempts</span>
+                </div>
+              </div>
+
+              {/* Compliance Warning Banner */}
+              <div className={`p-3 rounded-xl border flex gap-3 text-xs ${
+                istStatus.isInside 
+                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-800 dark:text-emerald-400' 
+                  : 'bg-amber-500/10 border-amber-500/20 text-amber-800 dark:text-amber-400'
+              }`}>
+                <span className="material-symbols-outlined shrink-0 text-[18px]">info</span>
+                <div>
+                  <p className="font-bold uppercase tracking-wider mb-0.5">
+                    {istStatus.isInside ? 'Calling Hours Active' : 'Calling Hours Restricted'}
+                  </p>
+                  <p className="opacity-90">
+                    {istStatus.isInside 
+                      ? `Outbound dialing is allowed. Current time is ${istStatus.formattedIst}.` 
+                      : `Dialer is paused until 9 AM IST. Current time is ${istStatus.formattedIst}. Calls will queue automatically.`}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Buttons */}
+            <div className="flex justify-end gap-2 pt-2 border-t border-outline-variant dark:border-[#2A345E]">
+              <button
+                type="button"
+                onClick={() => setIsStartConfirmOpen(false)}
+                className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted border border-outline-variant dark:border-[#2A345E] hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded-lg cursor-pointer transition-colors text-sm font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmStart}
+                className="px-5 py-2 bg-primary dark:bg-molten-primary text-on-primary dark:text-molten-bg rounded-lg cursor-pointer font-bold hover:brightness-110 transition-all text-sm flex items-center gap-1.5"
+              >
+                <span className="material-symbols-outlined text-[18px]">rocket_launch</span>
+                Acknowledge & Start
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
 
 
       <CallTranscriptDrawer

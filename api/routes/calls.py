@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import Optional
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from db import postgres as pg_db
@@ -16,11 +17,12 @@ router = APIRouter(prefix="/api/calls", tags=["calls"])
 async def list_calls(
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
 ):
     cid = client_id_uuid(client)
-    calls, total_count = await pg_db.list_call_logs(pool, cid, limit=limit, offset=offset)
+    calls, total_count = await pg_db.list_call_logs(pool, cid, limit=limit, offset=offset, search=search)
     return {"calls": calls, "total_count": total_count}
 
 
