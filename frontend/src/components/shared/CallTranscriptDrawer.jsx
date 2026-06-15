@@ -16,6 +16,13 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
       const response = await clientApi.get(`/api/calls/${sessionCallId}`);
       if (response.data && response.data.calls && response.data.calls.length > 0) {
         const call = response.data.calls[0];
+        // Defensive: parse JSONB fields if backend returned them as strings
+        if (typeof call.transcript === 'string') {
+          try { call.transcript = JSON.parse(call.transcript); } catch { call.transcript = []; }
+        }
+        if (typeof call.extraction_json === 'string') {
+          try { call.extraction_json = JSON.parse(call.extraction_json); } catch { call.extraction_json = null; }
+        }
         setCallData(call);
         setIsPolling(call.in_progress === true);
       }
@@ -74,19 +81,11 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-end">
-      {/* Background Overlay */}
-      <div 
-        onClick={onClose}
-        className="absolute inset-0 drawer-overlay transition-opacity duration-300 animate-fade-in"
-      ></div>
-
-      {/* Drawer Panel */}
-      <div 
-        ref={drawerRef}
-        className="absolute right-0 top-0 bottom-0 w-full sm:w-[480px] bg-arctic-surface dark:bg-molten-surface shadow-2xl flex flex-col border-l border-outline-variant dark:border-[#2A345E] transition-all transform animate-slide-in-right z-10"
-        id="drawerContent"
-      >
+    <div 
+      ref={drawerRef}
+      className="fixed right-0 top-0 bottom-0 w-full sm:w-[480px] bg-arctic-surface dark:bg-molten-surface shadow-2xl flex flex-col border-l border-outline-variant dark:border-[#2A345E] transition-all transform animate-slide-in-right z-50"
+      id="drawerContent"
+    >
         {loading ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-primary">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
@@ -142,7 +141,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
 
             {/* Transcript Conversation Area */}
             <div className="flex-1 overflow-y-auto p-6 bg-arctic-bg dark:bg-molten-bg/40 flex flex-col gap-6" id="chatArea">
-              {callData.transcript && callData.transcript.length > 0 ? (
+              {Array.isArray(callData.transcript) && callData.transcript.length > 0 ? (
                 callData.transcript.map((turn, index) => {
                   const isAi = turn.role === 'assistant' || turn.role === 'bot';
                   return isAi ? (
@@ -183,7 +182,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
 
               {/* In Progress Typing Indicator */}
               {callData.in_progress && (
-                <div className="flex gap-3 max-w-[85%] opacity-0 transform -translate-x-4" style={{ animation: `bubble-left 0.4s ease-out ${(callData.transcript.length * 0.2) + 0.1}s forwards` }}>
+                <div className="flex gap-3 max-w-[85%] opacity-0 transform -translate-x-4" style={{ animation: `bubble-left 0.4s ease-out ${((Array.isArray(callData.transcript) ? callData.transcript.length : 0) * 0.2) + 0.1}s forwards` }}>
                   <div className="w-8 h-8 rounded-full bg-primary-container dark:bg-molten-primary/10 text-primary dark:text-molten-primary flex items-center justify-center shrink-0 mt-1">
                     <span className="material-symbols-outlined text-sm">robot_2</span>
                   </div>
@@ -247,7 +246,6 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
           </div>
         )}
       </div>
-    </div>
   );
 };
 

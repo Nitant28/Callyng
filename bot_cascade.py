@@ -61,8 +61,8 @@ _CASCADE_SCRIPT_ATTRS = (
 )
 
 
-def _load_cascade_script() -> ModuleType:
-    raw = (os.getenv("CASCADE_SCRIPT") or "prowave").strip()
+def _load_cascade_script(script_id_override: str | None = None) -> ModuleType:
+    raw = (script_id_override or os.getenv("CASCADE_SCRIPT") or "prowave").strip()
     if not re.fullmatch(r"[a-z][a-z0-9_]*", raw):
         raise ValueError(
             f"Invalid CASCADE_SCRIPT={raw!r}; use a snake_case module under cascade_scripts/"
@@ -78,7 +78,12 @@ def _load_cascade_script() -> ModuleType:
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_call_id: str):
     body = getattr(runner_args, "body", {}) or {}
     ctx = LeadContext.from_body(body, default_lead_name="Sir")
-    casc = _load_cascade_script()
+    
+    # 3-tier resolution order step 2: read script_id from _pg
+    pg = body.get("_pg") or {}
+    script_id_override = pg.get("script_id")
+    
+    casc = _load_cascade_script(script_id_override)
     sid = getattr(casc, "SCRIPT_ID", os.getenv("CASCADE_SCRIPT", "prowave"))
     logger.info("Cascade script active: {} ({})", sid, casc.__name__)
 

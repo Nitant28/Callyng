@@ -82,8 +82,8 @@ const CampaignDetail = () => {
   const fileInputRef = useRef(null);
 
   // Load campaign & stats details
-  const loadCampaignDetails = useCallback(async () => {
-    setLoading(true);
+  const loadCampaignDetails = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     try {
       const response = await clientApi.get(`/api/campaigns/${id}/stats`);
       if (response.data && response.data.stats) {
@@ -96,7 +96,7 @@ const CampaignDetail = () => {
       console.warn('API error fetching campaign', err);
       setCampaign(null);
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
   }, [id]);
 
@@ -169,7 +169,7 @@ const CampaignDetail = () => {
     
     const pollInterval = isPausing ? 3000 : 10000;
     const interval = setInterval(() => {
-      loadCampaignDetails();
+      loadCampaignDetails(false);
     }, pollInterval);
     return () => clearInterval(interval);
   }, [campaign, loadCampaignDetails]);
@@ -543,7 +543,7 @@ const CampaignDetail = () => {
           </div>
 
           {/* Metric Cards */}
-          <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter mb-stack-lg">
+          <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-gutter mb-stack-lg">
             {/* Total Leads */}
             <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.1s' }}>
               <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Total Leads</p>
@@ -602,6 +602,36 @@ const CampaignDetail = () => {
                 <div 
                   className="h-full bg-error dark:bg-molten-error opacity-80 transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1)" 
                   style={{ width: `${failedPercent}%` }}
+                ></div>
+              </div>
+            </div>
+
+            {/* Budget Allocated */}
+            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.5s' }}>
+              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Total Credits</p>
+              <div className="flex items-baseline gap-2 mb-4">
+                <span className="text-headline-md font-bold tabular-nums">{(campaign.budget_credits || 0).toLocaleString()}</span>
+                <span className="text-label-sm text-secondary">Allocated</span>
+              </div>
+              <div className="h-1.5 w-full bg-surface-container-highest dark:bg-[#1f2937] rounded-full overflow-hidden">
+                <div 
+                  className="h-full transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1) bg-blue-500" 
+                  style={{ width: '100%' }}
+                ></div>
+              </div>
+            </div>
+
+            {/* Budget Spent */}
+            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.6s' }}>
+              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Credits Used</p>
+              <div className="flex items-baseline gap-2 mb-4">
+                <span className="text-headline-md font-bold tabular-nums text-error">{(campaign.budget_used_credits || 0).toLocaleString()}</span>
+                <span className="text-label-sm text-error">Spent</span>
+              </div>
+              <div className="h-1.5 w-full bg-surface-container-highest dark:bg-[#1f2937] rounded-full overflow-hidden">
+                <div 
+                  className="h-full transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1) bg-error" 
+                  style={{ width: `${campaign.budget_credits > 0 ? ((campaign.budget_used_credits || 0) / campaign.budget_credits) * 100 : 0}%` }}
                 ></div>
               </div>
             </div>
@@ -869,6 +899,20 @@ const CampaignDetail = () => {
                                       <rect className="waveform-bar" height="12" rx="1" style={{ animationDelay: '0.15s' }} width="2" x="20" y="2"></rect>
                                     </svg>
                                     Busy
+                                  </span>
+                                );
+                              } else if (lead.status === 'callback_scheduled') {
+                                statusElement = (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs font-semibold border border-blue-500/20">
+                                    <span className="material-symbols-outlined text-[14px]">calendar_clock</span>
+                                    {lead.scheduled_callback_at ? `Callback at ${new Date(lead.scheduled_callback_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : 'Callback Scheduled'}
+                                  </span>
+                                );
+                              } else if (lead.status === 'pending') {
+                                statusElement = (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted text-xs font-semibold border border-outline-variant/30">
+                                    <span className="material-symbols-outlined text-[14px]">hourglass_top</span>
+                                    Pending
                                   </span>
                                 );
                               } else {

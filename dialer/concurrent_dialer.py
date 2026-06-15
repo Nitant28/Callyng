@@ -13,7 +13,7 @@ from uuid import UUID
 import aiohttp
 from loguru import logger
 
-from compliance import is_call_allowed
+from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from dialer.cost_guard import check_campaign_budget
 from telephony import build_hangup_url, make_plivo_call
@@ -35,19 +35,34 @@ async def _release_lead_to_pending(
     lead: dict,
     campaign_id: UUID,
     client_id: UUID,
+    *,
+    defer_until: datetime | None = None,
 ) -> None:
     """Return a claimed lead to pending when compliance blocks the dial."""
     lead_id = UUID(str(lead["id"]))
-    await pool.execute(
-        """
-        UPDATE leads
-        SET status = 'pending',
-            next_attempt_at = NOW()
-        WHERE id = $1 AND client_id = $2 AND status = 'calling'
-        """,
-        lead_id,
-        client_id,
-    )
+    if defer_until:
+        await pool.execute(
+            """
+            UPDATE leads
+            SET status = 'pending',
+                next_attempt_at = $3
+            WHERE id = $1 AND client_id = $2 AND status = 'calling'
+            """,
+            lead_id,
+            client_id,
+            defer_until,
+        )
+    else:
+        await pool.execute(
+            """
+            UPDATE leads
+            SET status = 'pending',
+                next_attempt_at = NOW()
+            WHERE id = $1 AND client_id = $2 AND status = 'calling'
+            """,
+            lead_id,
+            client_id,
+        )
     await pg_db.increment_campaign_counters(
         pool,
         campaign_id,
@@ -409,8 +424,12 @@ async def run_campaign_dialer(
                         lead.get("phone"),
                         reason,
                     )
+                    defer_until = None
+                    if "outside 9am-9pm" in reason:
+                        defer_until = next_compliant_time()
+                    
                     await _release_lead_to_pending(
-                        pool, lead, campaign_id, client_id
+                        pool, lead, campaign_id, client_id, defer_until=defer_until
                     )
                     continue
                 tasks.append(

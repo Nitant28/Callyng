@@ -83,6 +83,10 @@ async def campaign_stats(
     camp = await pg_db.get_campaign(pool, campaign_id, cid)
     if camp is None:
         raise HTTPException(404, "Campaign not found")
+        
+    bot = await pg_db.get_bot_config(pool, UUID(str(camp["bot_config_id"])), cid)
+    camp["bot_config"] = bot
+    
     return {"stats": camp}
 
 

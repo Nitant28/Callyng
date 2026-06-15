@@ -63,7 +63,14 @@ const CallLogs = () => {
     try {
       const response = await clientApi.get(`/api/calls/${call.session_call_id}`);
       if (response.data && response.data.calls && response.data.calls.length > 0) {
-        setCallData(response.data.calls[0]);
+        const call = response.data.calls[0];
+        if (typeof call.transcript === 'string') {
+          try { call.transcript = JSON.parse(call.transcript); } catch { call.transcript = []; }
+        }
+        if (typeof call.extraction_json === 'string') {
+          try { call.extraction_json = JSON.parse(call.extraction_json); } catch { call.extraction_json = null; }
+        }
+        setCallData(call);
       } else {
         throw new Error('Call details not returned');
       }
@@ -273,7 +280,7 @@ const CallLogs = () => {
 
                       {/* Chat Bubbles */}
                       <div className="p-4 space-y-6 flex-1" id="chatContainer">
-                        {callData.transcript && callData.transcript.map((msg, idx) => {
+                        {Array.isArray(callData.transcript) && callData.transcript.map((msg, idx) => {
                           const isAi = msg.role === 'assistant' || msg.role === 'bot';
                           const delayClass = `delay-${idx > 3 ? 3 : idx}`;
                           return isAi ? (

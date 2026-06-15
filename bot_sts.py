@@ -68,8 +68,8 @@ _STS_SCRIPT_ATTRS = (
 )
 
 
-def _load_sts_script() -> ModuleType:
-    raw = (os.getenv("STS_SCRIPT") or "pyramid_mr").strip()
+def _load_sts_script(script_id_override: str | None = None) -> ModuleType:
+    raw = (script_id_override or os.getenv("STS_SCRIPT") or "pyramid_mr").strip()
     if not re.fullmatch(r"[a-z][a-z0-9_]*", raw):
         raise ValueError(
             f"Invalid STS_SCRIPT={raw!r}; use a snake_case module name under sts_scripts/"
@@ -116,7 +116,12 @@ async def run_bot(
 
     body = getattr(runner_args, "body", {}) or {}
     ctx = LeadContext.from_body(body)
-    sts = _load_sts_script()
+    
+    # 3-tier resolution order step 2: read script_id from _pg
+    pg = body.get("_pg") or {}
+    script_id_override = pg.get("script_id")
+    
+    sts = _load_sts_script(script_id_override)
     sid = getattr(sts, "SCRIPT_ID", os.getenv("STS_SCRIPT", "pyramid_mr"))
     logger.info("STS script active: {} ({})", sid, sts.__name__)
 

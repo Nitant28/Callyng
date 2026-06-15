@@ -216,6 +216,22 @@ def database_url() -> str | None:
     return url or None
 
 
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    """Register JSON codec so JSONB columns are auto-parsed to Python objects."""
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=json.dumps,
+        decoder=json.loads,
+        schema="pg_catalog",
+    )
+    await conn.set_type_codec(
+        "json",
+        encoder=json.dumps,
+        decoder=json.loads,
+        schema="pg_catalog",
+    )
+
+
 async def create_db_pool(dsn: str) -> asyncpg.Pool:
     global _pool
     import os
@@ -230,6 +246,7 @@ async def create_db_pool(dsn: str) -> asyncpg.Pool:
         min_size=min_size,
         max_size=max_size,
         command_timeout=30,
+        init=_init_connection,
     )
     return _pool
 
@@ -2061,19 +2078,19 @@ async def list_call_logs(
     offset: int = 0,
     search: str | None = None,
 ) -> tuple[list[dict], int]:
-    base_query = "FROM call_logs"
+    base_query = "FROM call_logs cl LEFT JOIN leads l ON cl.lead_id = l.id"
     conditions = []
     args = []
     idx = 1
     
     if client_id is not None:
-        conditions.append(f"client_id = ${idx}")
+        conditions.append(f"cl.client_id = ${idx}")
         args.append(client_id)
         idx += 1
         
     if search:
         search_pattern = f"%{search}%"
-        conditions.append(f"(session_call_id ILIKE ${idx} OR outcome ILIKE ${idx})")
+        conditions.append(f"(cl.session_call_id ILIKE ${idx} OR cl.outcome ILIKE ${idx} OR l.name ILIKE ${idx} OR l.phone ILIKE ${idx})")
         args.append(search_pattern)
         idx += 1
         
@@ -2083,7 +2100,7 @@ async def list_call_logs(
     
     args.extend([limit, offset])
     rows = await pool.fetch(
-        f"SELECT * {base_query} {where_clause} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+        f"SELECT cl.*, l.name, l.phone {base_query} {where_clause} ORDER BY cl.created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
         *args
     )
     
