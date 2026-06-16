@@ -21,6 +21,7 @@ import AdminCalls from './pages/admin/AdminCalls';
 import AdminCampaigns from './pages/admin/AdminCampaigns';
 import AdminDiagnostics from './pages/admin/AdminDiagnostics';
 import AdminWebhooks from './pages/admin/AdminWebhooks';
+import AdminScriptConfigs from './pages/admin/AdminScriptConfigs';
 
 import { ToastProvider } from './contexts/ToastContext';
 import { AdminAuthProvider } from './contexts/AdminAuthContext';
@@ -154,6 +155,16 @@ function App() {
             <AdminGuard>
               <AdminLayout>
                 <AdminWebhooks />
+              </AdminLayout>
+            </AdminGuard>
+          }
+        />
+        <Route
+          path="/admin/script-configs"
+          element={
+            <AdminGuard>
+              <AdminLayout>
+                <AdminScriptConfigs />
               </AdminLayout>
             </AdminGuard>
           }

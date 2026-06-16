@@ -1,0 +1,93 @@
+.script-config-card {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.script-config-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 30px rgba(22, 71, 232, 0.08);
+}
+
+.dark .script-config-card:hover {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  border-color: #4D75FA;
+}
+
+/* Tabs Styling */
+.tabs-header {
+  display: flex;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-outline-variant);
+  scrollbar-width: none; /* Firefox */
+}
+
+.dark .tabs-header {
+  border-color: #2A345E;
+}
+
+.tabs-header::-webkit-scrollbar {
+  display: none; /* Safari and Chrome */
+}
+
+.tab-btn {
+  padding: 0.75rem 1.5rem;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--color-on-surface-variant);
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.dark .tab-btn {
+  color: var(--color-molten-text-muted);
+}
+
+.tab-btn:hover {
+  color: var(--color-primary);
+  background: var(--color-surface-container-low);
+}
+
+.dark .tab-btn:hover {
+  color: var(--color-molten-primary);
+  background: var(--color-surface-container-highest);
+}
+
+.tab-btn.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.dark .tab-btn.active {
+  color: var(--color-molten-primary);
+  border-bottom-color: var(--color-molten-primary);
+}
+
+/* JSON Textarea formatting */
+.json-editor {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+  resize: vertical;
+}
+
+.code-block {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  background-color: var(--color-surface-container-lowest);
+  padding: 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.dark .code-block {
+  background-color: #141210;
+  border: 1px solid #2A345E;
+}

@@ -13,6 +13,7 @@ from loguru import logger
 
 from db import postgres as pg_db
 from n8n_webhook import fire_event_webhook, outcome_to_event
+from script_runtime import outcome_buckets
 
 _IST = timezone.utc  # callback parsing uses UTC; compliance uses IST separately
 
@@ -36,22 +37,25 @@ def _lead_transition(
     max_attempts: int,
     retry_delay_minutes: int,
     extraction: dict,
+    *,
+    post_call_snapshot: dict | None = None,
 ) -> tuple[str, datetime | None, datetime | None, bool]:
     """Returns (new_status, next_attempt_at, scheduled_callback_at, fire_webhook)."""
     now = datetime.now(timezone.utc)
+    terminal_set, retry_set, callback_set = outcome_buckets(post_call_snapshot)
 
     if outcome == "dnc":
         return "dnc", None, None, False
 
-    if outcome in ("Interested", "Not_Interested"):
+    if outcome in terminal_set:
         return "completed", None, None, True
 
-    if outcome == "Callback_Requested":
+    if outcome in callback_set:
         cb = _parse_callback_time(extraction.get("callback_time"))
         next_at = cb or (now + timedelta(hours=4))
         return "callback_scheduled", next_at, next_at, True
 
-    if outcome in ("Busy", "Unknown", "Wrong_Requirement"):
+    if outcome in retry_set:
         if attempts < max_attempts:
             return (
                 "pending",
@@ -82,9 +86,11 @@ def resolve_post_call_transition(
     lead_next_attempt_at: datetime | None,
     lead_scheduled_callback_at: datetime | None,
     callee_hangup: bool,
+    post_call_snapshot: dict | None = None,
 ) -> tuple[str, datetime | None, datetime | None, bool]:
     """Apply post-call state machine using locked lead status as source of truth."""
-    terminal_outcome = outcome in ("Interested", "Not_Interested", "dnc")
+    terminal_set, _, _ = outcome_buckets(post_call_snapshot)
+    terminal_outcome = outcome in terminal_set or outcome == "dnc"
 
     new_status, next_at, sched_cb, fire_webhook = _lead_transition(
         outcome,
@@ -92,6 +98,7 @@ def resolve_post_call_transition(
         max_attempts,
         retry_delay_minutes,
         extraction,
+        post_call_snapshot=post_call_snapshot,
     )
 
     if from_status == "callback_scheduled" and not terminal_outcome:
@@ -122,6 +129,7 @@ async def process_post_call(
     usage: dict | None = None,
     extraction_model: str | None = None,
     extraction_error: str | None = None,
+    post_call_snapshot: dict | None = None,
 ) -> None:
     """
     Atomic DB transaction for lead + call_log + billing + counters.
@@ -147,6 +155,11 @@ async def process_post_call(
     retry_delay = int(campaign.get("retry_delay_minutes") or 120)
 
     call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
+    if post_call_snapshot is None and call_log:
+        from script_runtime import parse_post_call_snapshot
+
+        post_call_snapshot = parse_post_call_snapshot(call_log.get("call_data"))
+    _, retry_set, _ = outcome_buckets(post_call_snapshot)
     hangup_json: dict = {}
     if call_log:
         raw_hangup = call_log.get("plivo_hangup_json") or {}
@@ -199,12 +212,13 @@ async def process_post_call(
                     lead_next_attempt_at=active.get("next_attempt_at"),
                     lead_scheduled_callback_at=active.get("scheduled_callback_at"),
                     callee_hangup=callee_hangup,
+                    post_call_snapshot=post_call_snapshot,
                 )
                 if (
                     new_status == "pending"
                     and next_at is not None
                     and duration_seconds < 90
-                    and outcome in ("Busy", "Unknown", "Wrong_Requirement")
+                    and outcome in retry_set
                 ):
                     cap_at = datetime.now(timezone.utc) + timedelta(minutes=1)
                     if next_at > cap_at:
@@ -273,7 +287,12 @@ async def process_post_call(
         await fire_campaign_completed_webhook(pool, client_id, campaign)
 
     if applied and fire_webhook:
-        event = outcome_to_event(outcome)
+        event_map = (
+            post_call_snapshot.get("outcome_event_map")
+            if post_call_snapshot
+            else None
+        )
+        event = outcome_to_event(outcome, event_map=event_map)
         if event:
             await fire_event_webhook(
                 pool,

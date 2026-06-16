@@ -9,6 +9,7 @@ import asyncpg
 from loguru import logger
 
 from db import postgres as pg_db
+from script_prefetch import sweep_stale_prefetched_configs
 
 
 def stale_call_log_sweep_enabled() -> bool:
@@ -37,7 +38,9 @@ async def run_stale_call_log_sweep(pool: asyncpg.Pool) -> int:
     transitioned = await pg_db.transition_all_pausing_to_paused(pool)
     if transitioned:
         logger.info("Global sweep transitioned {} pausing campaign(s) to paused", transitioned)
-        
+
+    await sweep_stale_prefetched_configs(pool)
+
     return n
 
 

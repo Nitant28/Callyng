@@ -8,12 +8,9 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import os
-import re
 import time
 from datetime import datetime, timezone
-from types import ModuleType
 
 from dotenv import load_dotenv
 from google.genai.types import HttpOptions
@@ -52,38 +49,9 @@ from call_limits import (
 from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 from lead_context import LeadContext
+from script_runtime import resolve_sts_runtime, schedule_post_call_snapshot_write
 
 load_dotenv(override=True)
-
-_STS_SCRIPT_ATTRS = (
-    "build_system_instruction",
-    "build_bootstrap_messages",
-    "GOODBYE_HANGUP_MARKERS",
-    "GEMINI_MODEL",
-    "GEMINI_VOICE",
-    "GEMINI_LANGUAGE",
-    "GEMINI_VAD",
-    "GEMINI_TEMPERATURE",
-    "EXTRACTION_SCHEMA",
-)
-
-
-def _load_sts_script(script_id_override: str | None = None) -> ModuleType:
-    raw = (script_id_override or os.getenv("STS_SCRIPT") or "pyramid_mr").strip()
-    if not re.fullmatch(r"[a-z][a-z0-9_]*", raw):
-        raise ValueError(
-            f"Invalid STS_SCRIPT={raw!r}; use a snake_case module name under sts_scripts/"
-        )
-    mod_name = f"sts_scripts.{raw}"
-    try:
-        mod = importlib.import_module(mod_name)
-    except ImportError as exc:
-        logger.error("Failed to import STS script {}: {}", mod_name, exc)
-        raise
-    missing = [a for a in _STS_SCRIPT_ATTRS if not hasattr(mod, a)]
-    if missing:
-        raise ValueError(f"STS script {mod_name} missing: {', '.join(missing)}")
-    return mod
 
 
 def _context_window_compression_settings() -> dict[str, int | bool] | None:
@@ -116,23 +84,18 @@ async def run_bot(
 
     body = getattr(runner_args, "body", {}) or {}
     ctx = LeadContext.from_body(body)
-    
-    # 3-tier resolution order step 2: read script_id from _pg
+    runtime = resolve_sts_runtime(body)
     pg = body.get("_pg") or {}
-    script_id_override = pg.get("script_id")
-    
-    sts = _load_sts_script(script_id_override)
-    sid = getattr(sts, "SCRIPT_ID", os.getenv("STS_SCRIPT", "pyramid_mr"))
-    logger.info("STS script active: {} ({})", sid, sts.__name__)
+    schedule_post_call_snapshot_write(body.get("_session_call_id"), runtime, pg)
 
     end_tools = ToolsSchema(standard_tools=[end_call_function_schema()])
-    _affective = getattr(sts, "GEMINI_ENABLE_AFFECTIVE_DIALOG", False)
-    if _affective and "gemini-3" in (getattr(sts, "GEMINI_MODEL", "") or ""):
+    _affective = runtime.gemini_enable_affective_dialog
+    if _affective and "gemini-3" in (runtime.gemini_model or ""):
         logger.warning(
             "GEMINI_ENABLE_AFFECTIVE_DIALOG ignored: {} does not support affective dialog "
             "(use a Gemini 2.5 Live model, e.g. "
             "models/gemini-2.5-flash-native-audio-preview-12-2025)",
-            sts.GEMINI_MODEL,
+            runtime.gemini_model,
         )
         _affective = False
     elif _affective:
@@ -140,11 +103,11 @@ async def run_bot(
 
     cwc = _context_window_compression_settings()
     llm_settings_kw: dict = {
-        "model": sts.GEMINI_MODEL,
-        "voice": sts.GEMINI_VOICE,
-        "language": sts.GEMINI_LANGUAGE,
-        "vad": sts.GEMINI_VAD,
-        "temperature": sts.GEMINI_TEMPERATURE,
+        "model": runtime.gemini_model,
+        "voice": runtime.gemini_voice,
+        "language": runtime.gemini_language,
+        "vad": runtime.gemini_vad,
+        "temperature": runtime.gemini_temperature,
     }
     if cwc is not None:
         llm_settings_kw["context_window_compression"] = cwc
@@ -154,7 +117,7 @@ async def run_bot(
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
         http_options=HttpOptions(api_version="v1alpha") if _affective else None,
-        system_instruction=sts.build_system_instruction(ctx),
+        system_instruction=runtime.system_instruction,
         tools=end_tools,
         settings=GeminiLiveLLMService.Settings(**llm_settings_kw),
     )
@@ -164,8 +127,7 @@ async def run_bot(
     usage_accumulator = UsageMetricsAccumulator()
     usage_tap = UsageMetricsTap(usage_accumulator)
 
-    bootstrap_messages = sts.build_bootstrap_messages(ctx)
-    context = LLMContext(bootstrap_messages, tools=end_tools)
+    context = LLMContext(runtime.bootstrap_messages, tools=end_tools)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -210,13 +172,12 @@ async def run_bot(
         user_aggregator,
         assistant_aggregator,
         coordinator,
-        markers=tuple(sts.GOODBYE_HANGUP_MARKERS),
+        markers=runtime.goodbye_markers,
         enabled=parse_goodbye_hangup_enabled(),
         delay_s=parse_goodbye_hangup_delay_s(),
     )
-    pg = body.get("_pg") or {}
-    extraction_schema = pg.get("extraction_schema_override") or sts.EXTRACTION_SCHEMA
-    
+    extraction_schema = pg.get("extraction_schema_override") or runtime.extraction_schema
+
     session_call_id = body.get("_session_call_id")
     attach_pipeline_finalize(
         task,

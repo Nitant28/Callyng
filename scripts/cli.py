@@ -803,12 +803,27 @@ async def cmd_rerun_extraction(args):
             print(f"{_RED}Transcript is empty{_RESET}", file=sys.stderr)
             sys.exit(1)
 
-        # Resolve extraction schema from bot config
+        # Resolve extraction schema: snapshot first, then campaign override, then bot module
         bot_config_id = call.get("bot_config_id")
         campaign_id = call.get("campaign_id")
         extraction_schema = None
+        norm_rules: list | None = None
 
-        if campaign_id:
+        call_data = call.get("call_data")
+        if call_data:
+            if isinstance(call_data, str):
+                try:
+                    call_data = json.loads(call_data)
+                except json.JSONDecodeError:
+                    call_data = None
+            if isinstance(call_data, dict):
+                snap = call_data.get("post_call_snapshot")
+                if isinstance(snap, dict) and snap.get("extraction_schema"):
+                    extraction_schema = snap["extraction_schema"]
+                    rules = snap.get("normalization_rules")
+                    norm_rules = rules if rules else None
+
+        if extraction_schema is None and campaign_id:
             camp_row = await pool.fetchrow(
                 "SELECT extraction_schema_override FROM campaigns WHERE id = $1", campaign_id,
             )
@@ -850,7 +865,9 @@ async def cmd_rerun_extraction(args):
         )
 
         if parsed is not None and err is None:
-            extraction = normalize_post_call_extraction(parsed)
+            extraction = normalize_post_call_extraction(
+                parsed, normalization_rules=norm_rules
+            )
             ext_json = json.dumps(extraction, ensure_ascii=False)
             outcome = extraction.get("intent_status", "Unknown")
 

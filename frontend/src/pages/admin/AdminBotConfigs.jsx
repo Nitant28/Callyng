@@ -17,9 +17,11 @@ export default function AdminBotConfigs() {
   const [newBotName, setNewBotName] = useState('');
   const [newBotRoute, setNewBotRoute] = useState('sts');
   const [newBotScriptId, setNewBotScriptId] = useState('');
+  const [newBotScriptConfigId, setNewBotScriptConfigId] = useState('');
   const [newBotTelephonyNumber, setNewBotTelephonyNumber] = useState('');
   const [newBotCreditsPerMinute, setNewBotCreditsPerMinute] = useState('');
   const [createError, setCreateError] = useState('');
+  const [scriptConfigs, setScriptConfigs] = useState([]);
 
   useEffect(() => {
     fetchBots();
@@ -58,8 +60,11 @@ export default function AdminBotConfigs() {
     try {
       const res = await adminApi.get('/internal/clients');
       setClients(res.data.clients || res.data || []);
+      
+      const scRes = await adminApi.get('/internal/script-configs');
+      setScriptConfigs(scRes.data.script_configs || []);
     } catch (error) {
-      console.error("Failed to fetch clients", error);
+      console.error("Failed to fetch clients or script configs", error);
     }
   };
 
@@ -109,6 +114,7 @@ export default function AdminBotConfigs() {
       setNewBotName('');
       setNewBotRoute('sts');
       setNewBotScriptId('');
+      setNewBotScriptConfigId('');
       setNewBotTelephonyNumber('');
       setNewBotCreditsPerMinute('');
       setCreateError('');
@@ -137,6 +143,7 @@ export default function AdminBotConfigs() {
         name: newBotName,
         route: newBotRoute,
         script_id: newBotScriptId,
+        script_config_id: newBotScriptConfigId || null,
         telephony_number: newBotTelephonyNumber,
         credits_per_minute: parseFloat(newBotCreditsPerMinute)
       });
@@ -319,29 +326,28 @@ export default function AdminBotConfigs() {
               </div>
               
               <div>
-                <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">Route</label>
+                <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">Script Template</label>
                 <select 
                   className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
-                  value={newBotRoute}
-                  onChange={(e) => setNewBotRoute(e.target.value)}
+                  value={newBotScriptConfigId}
+                  onChange={(e) => {
+                    setNewBotScriptConfigId(e.target.value);
+                    const selectedConfig = scriptConfigs.find(sc => sc.id === e.target.value);
+                    if (selectedConfig) {
+                      setNewBotScriptId(selectedConfig.script_id);
+                      setNewBotRoute(selectedConfig.route);
+                    } else {
+                      setNewBotScriptId('');
+                      setNewBotRoute('');
+                    }
+                  }}
                   required
                 >
-                  <option value="sts">sts (Single Threaded Synthesizer)</option>
-                  <option value="cascaded">cascaded</option>
+                  <option value="">Select a Template</option>
+                  {scriptConfigs.filter(sc => !newBotClientId || sc.client_id === newBotClientId).map(sc => (
+                    <option key={sc.id} value={sc.id}>{sc.script_id} (v{sc.version}) - {sc.route}</option>
+                  ))}
                 </select>
-              </div>
-              
-              <div>
-                <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">Script ID</label>
-                <input 
-                  className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
-                  placeholder="e.g. outbound_sales"
-                  type="text"
-                  value={newBotScriptId}
-                  onChange={(e) => setNewBotScriptId(e.target.value)}
-                  required
-                />
-                <p className="mt-1 font-body-sm text-[11px] text-arctic-text-muted dark:text-molten-text-muted">Must match format `^[a-z][a-z0-9_]*$`</p>
               </div>
               
               <div>

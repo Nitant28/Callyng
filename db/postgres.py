@@ -453,6 +453,476 @@ async def get_bot_config(
     return record_to_dict(row)
 
 
+async def get_script_config(
+    pool: asyncpg.Pool,
+    script_config_id: UUID,
+    client_id: UUID,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM script_configs
+        WHERE id = $1 AND client_id = $2 AND active = TRUE
+        """,
+        script_config_id,
+        client_id,
+    )
+    return record_to_dict(row)
+
+
+async def get_script_config_admin(
+    pool: asyncpg.Pool,
+    script_config_id: UUID,
+    client_id: UUID,
+    *,
+    active_only: bool = False,
+) -> dict | None:
+    if active_only:
+        return await get_script_config(pool, script_config_id, client_id)
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM script_configs
+        WHERE id = $1 AND client_id = $2
+        """,
+        script_config_id,
+        client_id,
+    )
+    return record_to_dict(row)
+
+
+async def list_script_configs(
+    pool: asyncpg.Pool,
+    client_id: UUID | None = None,
+    *,
+    active_only: bool = True,
+) -> list[dict]:
+    if client_id is not None:
+        if active_only:
+            rows = await pool.fetch(
+                """
+                SELECT * FROM script_configs
+                WHERE client_id = $1 AND active = TRUE
+                ORDER BY updated_at DESC
+                """,
+                client_id,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT * FROM script_configs
+                WHERE client_id = $1
+                ORDER BY updated_at DESC
+                """,
+                client_id,
+            )
+    else:
+        if active_only:
+            rows = await pool.fetch(
+                """
+                SELECT * FROM script_configs
+                WHERE active = TRUE
+                ORDER BY updated_at DESC
+                """
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT * FROM script_configs
+                ORDER BY updated_at DESC
+                """
+            )
+    return records_to_dicts(rows)
+
+
+def _script_config_json(value: Any) -> Any:
+    return value
+
+
+async def _insert_script_config_revision(
+    conn: asyncpg.Connection,
+    script_config_id: UUID,
+    version: int,
+    snapshot: dict[str, Any],
+) -> None:
+    await conn.execute(
+        """
+        INSERT INTO script_config_revisions (
+            script_config_id, version, config_snapshot
+        )
+        VALUES ($1, $2, $3::jsonb)
+        """,
+        script_config_id,
+        version,
+        _script_config_json(snapshot),
+    )
+    await conn.execute(
+        """
+        DELETE FROM script_config_revisions
+        WHERE script_config_id = $1
+          AND id NOT IN (
+              SELECT id
+              FROM script_config_revisions
+              WHERE script_config_id = $1
+              ORDER BY version DESC
+              LIMIT 5
+          )
+        """,
+        script_config_id,
+    )
+
+
+async def create_script_config(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    data: dict[str, Any],
+) -> dict:
+    from api.script_config_validation import build_config_snapshot
+
+    version = 1
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO script_configs (
+                        client_id, script_id, route,
+                        gemini_model, gemini_voice, gemini_language, gemini_temperature,
+                        vad_start_sensitivity, vad_end_sensitivity,
+                        vad_silence_duration_ms, vad_prefix_padding_ms,
+                        system_instruction_template, bootstrap_messages_json,
+                        goodbye_markers,
+                        cascade_stt_provider, cascade_stt_model,
+                        cascade_llm_provider, cascade_llm_model,
+                        cascade_tts_provider, cascade_tts_voice, cascade_live_tools,
+                        extraction_schema, lead_schema,
+                        normalization_rules, outcome_event_map,
+                        outcome_terminal, outcome_retry, outcome_callback,
+                        active, version
+                    )
+                    VALUES (
+                        $1, $2, $3,
+                        $4, $5, $6, $7,
+                        $8, $9, $10, $11,
+                        $12, $13::jsonb, $14::jsonb,
+                        $15, $16, $17, $18, $19, $20, $21::jsonb,
+                        $22::jsonb, $23::jsonb,
+                        $24::jsonb, $25::jsonb,
+                        $26::jsonb, $27::jsonb, $28::jsonb,
+                        $29, $30
+                    )
+                    RETURNING *
+                    """,
+                    client_id,
+                    data["script_id"],
+                    data["route"],
+                    data.get("gemini_model", "models/gemini-3.1-flash-live-preview"),
+                    data.get("gemini_voice", "Aoede"),
+                    data.get("gemini_language", "hi-IN"),
+                    float(data.get("gemini_temperature", 0.5)),
+                    data.get("vad_start_sensitivity", "HIGH"),
+                    data.get("vad_end_sensitivity", "LOW"),
+                    int(data.get("vad_silence_duration_ms", 800)),
+                    int(data.get("vad_prefix_padding_ms", 300)),
+                    data["system_instruction_template"],
+                    _script_config_json(data.get("bootstrap_messages_json") or []),
+                    _script_config_json(data.get("goodbye_markers") or []),
+                    data.get("cascade_stt_provider", "sarvam"),
+                    data.get("cascade_stt_model", "saarika:v2.5"),
+                    data.get("cascade_llm_provider", "groq"),
+                    data.get("cascade_llm_model", "llama-3.3-70b-versatile"),
+                    data.get("cascade_tts_provider", "cartesia"),
+                    data.get("cascade_tts_voice", "sonic-3"),
+                    _script_config_json(data.get("cascade_live_tools") or []),
+                    _script_config_json(data["extraction_schema"]),
+                    _script_config_json(data.get("lead_schema") or {"fields": []}),
+                    _script_config_json(data.get("normalization_rules") or []),
+                    _script_config_json(data.get("outcome_event_map") or {}),
+                    _script_config_json(
+                        data.get("outcome_terminal")
+                        or ["Interested", "Not_Interested"]
+                    ),
+                    _script_config_json(
+                        data.get("outcome_retry")
+                        or ["Busy", "Unknown", "Wrong_Requirement"]
+                    ),
+                    _script_config_json(
+                        data.get("outcome_callback") or ["Callback_Requested"]
+                    ),
+                    bool(data.get("active", True)),
+                    version,
+                )
+            except asyncpg.UniqueViolationError as exc:
+                raise ValueError(
+                    f"script_id {data['script_id']!r} already exists for this client"
+                ) from exc
+
+            result = record_to_dict(row)
+            assert result is not None
+            await _insert_script_config_revision(
+                conn,
+                UUID(str(result["id"])),
+                version,
+                build_config_snapshot(result),
+            )
+            return result
+
+
+_SCRIPT_CONFIG_PATCHABLE = frozenset(
+    {
+        "script_id",
+        "route",
+        "gemini_model",
+        "gemini_voice",
+        "gemini_language",
+        "gemini_temperature",
+        "vad_start_sensitivity",
+        "vad_end_sensitivity",
+        "vad_silence_duration_ms",
+        "vad_prefix_padding_ms",
+        "system_instruction_template",
+        "bootstrap_messages_json",
+        "goodbye_markers",
+        "cascade_stt_provider",
+        "cascade_stt_model",
+        "cascade_llm_provider",
+        "cascade_llm_model",
+        "cascade_tts_provider",
+        "cascade_tts_voice",
+        "cascade_live_tools",
+        "extraction_schema",
+        "lead_schema",
+        "normalization_rules",
+        "outcome_event_map",
+        "outcome_terminal",
+        "outcome_retry",
+        "outcome_callback",
+        "active",
+    }
+)
+
+_SCRIPT_CONFIG_JSONB = frozenset(
+    {
+        "bootstrap_messages_json",
+        "goodbye_markers",
+        "cascade_live_tools",
+        "extraction_schema",
+        "lead_schema",
+        "normalization_rules",
+        "outcome_event_map",
+        "outcome_terminal",
+        "outcome_retry",
+        "outcome_callback",
+    }
+)
+
+
+async def update_script_config(
+    pool: asyncpg.Pool,
+    script_config_id: UUID,
+    client_id: UUID,
+    patch: dict[str, Any],
+) -> dict:
+    from api.script_config_validation import build_config_snapshot
+
+    if not patch:
+        raise ValueError("empty patch")
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM script_configs
+                WHERE id = $1 AND client_id = $2
+                FOR UPDATE
+                """,
+                script_config_id,
+                client_id,
+            )
+            if row is None:
+                raise ValueError("script_config not found")
+
+            current = record_to_dict(row)
+            assert current is not None
+            merged = dict(current)
+            for key, val in patch.items():
+                if key in _SCRIPT_CONFIG_PATCHABLE:
+                    merged[key] = val
+
+            new_version = int(current.get("version") or 1) + 1
+            sets: list[str] = ["version = $1", "updated_at = NOW()"]
+            args: list[Any] = [new_version]
+            idx = 2
+
+            for key in sorted(_SCRIPT_CONFIG_PATCHABLE):
+                if key not in patch:
+                    continue
+                val = merged[key]
+                if key in _SCRIPT_CONFIG_JSONB:
+                    sets.append(f"{key} = ${idx}::jsonb")
+                    args.append(_script_config_json(val))
+                elif key == "gemini_temperature":
+                    sets.append(f"{key} = ${idx}")
+                    args.append(float(val))
+                elif key in (
+                    "vad_silence_duration_ms",
+                    "vad_prefix_padding_ms",
+                ):
+                    sets.append(f"{key} = ${idx}")
+                    args.append(int(val))
+                else:
+                    sets.append(f"{key} = ${idx}")
+                    args.append(val)
+                idx += 1
+
+            args.extend([script_config_id, client_id])
+            try:
+                updated = await conn.fetchrow(
+                    f"""
+                    UPDATE script_configs
+                    SET {", ".join(sets)}
+                    WHERE id = ${idx} AND client_id = ${idx + 1}
+                    RETURNING *
+                    """,
+                    *args,
+                )
+            except asyncpg.UniqueViolationError as exc:
+                raise ValueError(
+                    f"script_id {patch.get('script_id')!r} already exists for this client"
+                ) from exc
+
+            result = record_to_dict(updated)
+            assert result is not None
+            await _insert_script_config_revision(
+                conn,
+                script_config_id,
+                new_version,
+                build_config_snapshot(result),
+            )
+            return result
+
+
+async def list_script_config_revisions(
+    pool: asyncpg.Pool,
+    script_config_id: UUID,
+    client_id: UUID,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT r.id, r.version, r.created_at
+        FROM script_config_revisions r
+        JOIN script_configs sc ON sc.id = r.script_config_id
+        WHERE r.script_config_id = $1 AND sc.client_id = $2
+        ORDER BY r.version DESC
+        """,
+        script_config_id,
+        client_id,
+    )
+    return records_to_dicts(rows)
+
+
+async def get_script_config_revision(
+    pool: asyncpg.Pool,
+    script_config_id: UUID,
+    client_id: UUID,
+    version: int,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT r.*
+        FROM script_config_revisions r
+        JOIN script_configs sc ON sc.id = r.script_config_id
+        WHERE r.script_config_id = $1 AND sc.client_id = $2 AND r.version = $3
+        """,
+        script_config_id,
+        client_id,
+        version,
+    )
+    return record_to_dict(row)
+
+
+async def rollback_script_config(
+    pool: asyncpg.Pool,
+    script_config_id: UUID,
+    client_id: UUID,
+    target_version: int,
+) -> dict:
+    from api.script_config_validation import build_config_snapshot
+
+    rev = await get_script_config_revision(
+        pool, script_config_id, client_id, target_version
+    )
+    if rev is None:
+        raise ValueError(f"revision version {target_version} not found")
+
+    snapshot = rev.get("config_snapshot")
+    if isinstance(snapshot, str):
+        snapshot = json.loads(snapshot)
+    if not isinstance(snapshot, dict):
+        raise ValueError("revision config_snapshot is invalid")
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM script_configs
+                WHERE id = $1 AND client_id = $2
+                FOR UPDATE
+                """,
+                script_config_id,
+                client_id,
+            )
+            if row is None:
+                raise ValueError("script_config not found")
+
+            current = record_to_dict(row)
+            assert current is not None
+            new_version = int(current.get("version") or 1) + 1
+
+            sets: list[str] = ["version = $1", "updated_at = NOW()"]
+            args: list[Any] = [new_version]
+            idx = 2
+
+            for key in sorted(_SCRIPT_CONFIG_PATCHABLE):
+                if key not in snapshot:
+                    continue
+                val = snapshot[key]
+                if key in _SCRIPT_CONFIG_JSONB:
+                    sets.append(f"{key} = ${idx}::jsonb")
+                    args.append(_script_config_json(val))
+                elif key == "gemini_temperature":
+                    sets.append(f"{key} = ${idx}")
+                    args.append(float(val))
+                elif key in (
+                    "vad_silence_duration_ms",
+                    "vad_prefix_padding_ms",
+                ):
+                    sets.append(f"{key} = ${idx}")
+                    args.append(int(val))
+                else:
+                    sets.append(f"{key} = ${idx}")
+                    args.append(val)
+                idx += 1
+
+            args.extend([script_config_id, client_id])
+            updated = await conn.fetchrow(
+                f"""
+                UPDATE script_configs
+                SET {", ".join(sets)}
+                WHERE id = ${idx} AND client_id = ${idx + 1}
+                RETURNING *
+                """,
+                *args,
+            )
+            result = record_to_dict(updated)
+            assert result is not None
+            await _insert_script_config_revision(
+                conn,
+                script_config_id,
+                new_version,
+                build_config_snapshot(result),
+            )
+            return result
+
+
 async def list_bot_configs(
     pool: asyncpg.Pool,
     client_id: UUID | None = None,
@@ -1596,6 +2066,7 @@ async def insert_call_log_start(
     bot_config_id: UUID | None,
     route: str,
     started_at: datetime,
+    call_data: dict | None = None,
 ) -> UUID:
     grace = live_call_grace_minutes()
     wrap = post_call_wrap_grace_minutes()
@@ -1638,9 +2109,10 @@ async def insert_call_log_start(
                 """
                 INSERT INTO call_logs (
                     session_call_id, client_id, campaign_id, lead_id,
-                    bot_config_id, route, started_at, in_progress, transcript
+                    bot_config_id, route, started_at, in_progress, transcript,
+                    call_data
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, '[]'::jsonb)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, '[]'::jsonb, $8::jsonb)
                 RETURNING id
                 """,
                 session_call_id,
@@ -1650,8 +2122,31 @@ async def insert_call_log_start(
                 bot_config_id,
                 route,
                 started_at,
+                json.dumps(call_data or {}, ensure_ascii=False),
             )
             return row["id"]
+
+
+async def patch_call_log_post_call_snapshot(
+    pool: asyncpg.Pool,
+    session_call_id: str,
+    snapshot_wrapper: dict,
+) -> bool:
+    """Merge post_call_snapshot into call_data if not already set (idempotent)."""
+    if not session_call_id or not snapshot_wrapper:
+        return False
+    row = await pool.fetchrow(
+        """
+        UPDATE call_logs
+        SET call_data = call_data || $2::jsonb
+        WHERE session_call_id = $1
+          AND (call_data->'post_call_snapshot') IS NULL
+        RETURNING id
+        """,
+        session_call_id,
+        json.dumps(snapshot_wrapper, ensure_ascii=False),
+    )
+    return row is not None
 
 
 async def mark_call_log_not_in_progress(

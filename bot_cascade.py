@@ -7,13 +7,10 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import os
-import re
 import time
 from datetime import datetime, timezone
-from types import ModuleType
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -52,48 +49,18 @@ from call_limits import (
 from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 from lead_context import LeadContext
+from script_runtime import resolve_cascade_runtime, schedule_post_call_snapshot_write
 
 load_dotenv(override=True)
 
-_CASCADE_SCRIPT_ATTRS = (
-    "build_system_prompt",
-    "EXTRACTION_SCHEMA",
-)
 
-
-def _load_cascade_script(script_id_override: str | None = None) -> ModuleType:
-    raw = (script_id_override or os.getenv("CASCADE_SCRIPT") or "prowave").strip()
-    if not re.fullmatch(r"[a-z][a-z0-9_]*", raw):
-        raise ValueError(
-            f"Invalid CASCADE_SCRIPT={raw!r}; use a snake_case module under cascade_scripts/"
-        )
-    mod_name = f"cascade_scripts.{raw}"
-    mod = importlib.import_module(mod_name)
-    missing = [a for a in _CASCADE_SCRIPT_ATTRS if not hasattr(mod, a)]
-    if missing:
-        raise ValueError(f"Cascade script {mod_name} missing: {', '.join(missing)}")
-    return mod
-
-
-async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_call_id: str):
-    body = getattr(runner_args, "body", {}) or {}
-    ctx = LeadContext.from_body(body, default_lead_name="Sir")
-    
-    # 3-tier resolution order step 2: read script_id from _pg
-    pg = body.get("_pg") or {}
-    script_id_override = pg.get("script_id")
-    
-    casc = _load_cascade_script(script_id_override)
-    sid = getattr(casc, "SCRIPT_ID", os.getenv("CASCADE_SCRIPT", "prowave"))
-    logger.info("Cascade script active: {} ({})", sid, casc.__name__)
-
-    logger.info("Starting cascaded bot — Diya (script %s)", sid)
-
-    dynamic_prompt = casc.build_system_prompt(ctx)
-
-    push_lead_data_fn = FunctionSchema(
+def _default_push_lead_data_schema() -> FunctionSchema:
+    return FunctionSchema(
         name="push_lead_data",
-        description="Call this before ending every call to save lead qualification data. Always call this regardless of outcome.",
+        description=(
+            "Call this before ending every call to save lead qualification data. "
+            "Always call this regardless of outcome."
+        ),
         properties={
             "intent_status": {
                 "type": "string",
@@ -119,13 +86,24 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         required=["intent_status", "bhk_preference", "location_preference"],
     )
 
+
+async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_call_id: str):
+    body = getattr(runner_args, "body", {}) or {}
+    ctx = LeadContext.from_body(body, default_lead_name="Sir")
+    runtime = resolve_cascade_runtime(body)
+    pg = body.get("_pg") or {}
+    schedule_post_call_snapshot_write(body.get("_session_call_id"), runtime, pg)
+
+    logger.info("Starting cascaded bot — Diya (script %s)", runtime.script_id)
+
+    push_lead_data_fn = runtime.push_lead_data_schema or _default_push_lead_data_schema()
     end_call_fn = end_call_function_schema()
     tools = ToolsSchema(standard_tools=[push_lead_data_fn, end_call_fn])
 
     stt = SarvamSTTService(
         api_key=os.getenv("SARVAM_API_KEY"),
         settings=SarvamSTTService.Settings(
-            model="saarika:v2.5",
+            model=runtime.stt_model,
             language="unknown",
         ),
     )
@@ -133,8 +111,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     llm = GroqLLMService(
         api_key=os.getenv("GROQ_API_KEY"),
         settings=GroqLLMService.Settings(
-            model="llama-3.3-70b-versatile",
-            system_instruction=dynamic_prompt,
+            model=runtime.llm_model,
+            system_instruction=runtime.system_prompt,
             temperature=0.2,
         ),
     )
@@ -142,7 +120,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
         settings=CartesiaTTSService.Settings(
-            voice=os.getenv("CARTESIA_VOICE_ID"),
+            voice=runtime.tts_voice or os.getenv("CARTESIA_VOICE_ID"),
             model="sonic-3",
             language="hi",
         ),
@@ -207,8 +185,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
 
     started_at_iso = datetime.now(timezone.utc).isoformat()
     perf_pipeline = time.perf_counter()
-    pg = body.get("_pg") or {}
-    extraction_schema = pg.get("extraction_schema_override") or casc.EXTRACTION_SCHEMA
+    extraction_schema = pg.get("extraction_schema_override") or runtime.extraction_schema
 
     attach_pipeline_finalize(
         task,
@@ -259,11 +236,6 @@ async def bot(runner_args: RunnerArguments):
         call_id=call_data["call_id"],
         auth_id=os.getenv("PLIVO_AUTH_ID", ""),
         auth_token=os.getenv("PLIVO_AUTH_TOKEN", ""),
-    )
-
-    from_number = (
-        bot_config.get("telephony_number")
-        or os.getenv("PLIVO_PHONE_NUMBER", "")
     )
 
     transport = FastAPIWebsocketTransport(

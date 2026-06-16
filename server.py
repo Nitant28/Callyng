@@ -448,9 +448,10 @@ async def health():
 
 
 def _register_api_routes() -> None:
-    from api.routes import calls, campaigns, credits, internal, leads
+    from api.routes import calls, campaigns, credits, internal, internal_script_configs, leads
 
     app.include_router(internal.router)
+    app.include_router(internal_script_configs.router)
     app.include_router(campaigns.router)
     app.include_router(leads.router)
     app.include_router(calls.router)

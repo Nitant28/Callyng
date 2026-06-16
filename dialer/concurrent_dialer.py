@@ -17,6 +17,13 @@ from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from dialer.cost_guard import check_campaign_budget
 from telephony import build_hangup_url, make_plivo_call
+from script_prefetch import (
+    build_lead_dict,
+    pop_prefetched_config,
+    register_prefetched_config,
+    render_script_config,
+)
+from script_runtime import build_post_call_snapshot_from_prefetch
 from dialer.plivo_balance import (
     check_plivo_balance,
     exception_is_plivo_balance_exhausted,
@@ -114,10 +121,11 @@ async def fire_call(
     pool=None,
     client_id: UUID | None = None,
     campaign_id: UUID | None = None,
-) -> None:
-    """Place outbound call via Plivo."""
+    dial_phone: str | None = None,
+) -> str | None:
+    """Place outbound call via Plivo. Returns session_call_id or None if skipped."""
     call_id = str(uuid.uuid4())
-    phone = lead["phone"]
+    phone = dial_phone or lead["phone"]
     cid = client_id or UUID(str(campaign["client_id"]))
     camp_id = campaign_id or UUID(str(campaign["id"]))
     lead_uuid = UUID(str(lead["id"]))
@@ -185,18 +193,52 @@ async def fire_call(
         },
     }
 
-    started_at = datetime.now(timezone.utc)
-    await pg_db.insert_call_log_start(
-        pool,
-        session_call_id=call_id,
-        client_id=cid,
-        campaign_id=camp_id,
-        lead_id=lead_uuid,
-        bot_config_id=UUID(str(bot_config["id"])),
-        route=bot_config["route"],
-        started_at=started_at,
-    )
+    script_config_id = bot_config.get("script_config_id")
+    prefetch_registered = False
+    call_data_for_insert = None
+    if script_config_id:
+        row = await pg_db.get_script_config(
+            pool, UUID(str(script_config_id)), cid
+        )
+        if row is None:
+            logger.error(
+                "script_config {} missing or inactive for bot_config {}",
+                script_config_id,
+                bot_config.get("id"),
+            )
+            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            return
+        if row.get("route") != bot_config["route"]:
+            logger.error(
+                "script_config {} route {} != bot_config route {}",
+                script_config_id,
+                row.get("route"),
+                bot_config["route"],
+            )
+            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            return
+        lead_dict = build_lead_dict(lead, meta)
+        try:
+            config = render_script_config(
+                row, lead_dict, expected_route=bot_config["route"]
+            )
+        except ValueError as exc:
+            logger.error(
+                "Failed to render script_config {} for call {}: {}",
+                script_config_id,
+                call_id,
+                exc,
+            )
+            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            return
+        register_prefetched_config(call_id, config)
+        prefetch_registered = True
+        call_data_for_insert = build_post_call_snapshot_from_prefetch(
+            config,
+            extraction_override=campaign.get("extraction_schema_override"),
+        )
 
+    started_at = datetime.now(timezone.utc)
     base = _public_base_url(host)
     encoded = urllib.parse.quote(json.dumps(body_data))
     answer_url = f"{base}/answer?call_id={call_id}&body_data={encoded}"
@@ -207,6 +249,17 @@ async def fire_call(
         or os.getenv("PLIVO_PHONE_NUMBER", "")
     )
     try:
+        await pg_db.insert_call_log_start(
+            pool,
+            session_call_id=call_id,
+            client_id=cid,
+            campaign_id=camp_id,
+            lead_id=lead_uuid,
+            bot_config_id=UUID(str(bot_config["id"])),
+            route=bot_config["route"],
+            started_at=started_at,
+            call_data=call_data_for_insert,
+        )
         await make_plivo_call(
             session,
             phone,
@@ -221,7 +274,10 @@ async def fire_call(
             camp_id,
             answer_url,
         )
+        return call_id
     except Exception as exc:
+        if prefetch_registered:
+            pop_prefetched_config(call_id)
         logger.error(
             "Plivo dial failed for lead {} (call_id={}): {}",
             lead_uuid,

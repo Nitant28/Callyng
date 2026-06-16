@@ -84,6 +84,13 @@ export default function AdminLayout({ children }) {
               <span className="font-label-md text-label-md">Bot Configuration</span>
             </NavLink>
             <NavLink 
+              to="/admin/script-configs"
+              className={({ isActive }) => `flex items-center rounded-lg px-4 py-3 transition-transform hover:translate-x-1 ${isActive ? 'bg-primary-container dark:bg-secondary-container text-on-primary dark:text-on-secondary-container' : 'text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-low dark:hover:bg-surface-container-highest'}`}
+            >
+              <span className="material-symbols-outlined mr-3">integration_instructions</span>
+              <span className="font-label-md text-label-md">Script Templates</span>
+            </NavLink>
+            <NavLink 
               to="/admin/webhooks"
               className={({ isActive }) => `flex items-center rounded-lg px-4 py-3 transition-transform hover:translate-x-1 ${isActive ? 'bg-primary-container dark:bg-secondary-container text-on-primary dark:text-on-secondary-container' : 'text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-low dark:hover:bg-surface-container-highest'}`}
             >

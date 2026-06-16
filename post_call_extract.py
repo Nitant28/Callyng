@@ -96,43 +96,115 @@ def build_extraction_system_prompt(schema: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
-def normalize_post_call_extraction(parsed: dict[str, Any]) -> dict[str, Any]:
-    """Deterministic patch after Groq parse — known inconsistency patterns."""
+def apply_normalization_rules(
+    parsed: dict[str, Any],
+    rules: list[Any],
+) -> dict[str, Any]:
+    """
+    Apply declarative post-call normalization rules.
+
+    Rule shape::
+
+        {
+          "when": {"field": "site_visit_agreed", "truthy": true},
+          "and_intent_in": ["", "Unknown"],
+          "set": {"intent_status": "Interested"}
+        }
+
+    ``when`` supports ``field`` + ``truthy`` (bool) or ``eq`` (any value).
+    """
     out = dict(parsed)
-    raw_intent = out.get("intent_status")
-    intent = (
-        raw_intent.strip()
-        if isinstance(raw_intent, str)
-        else (str(raw_intent).strip() if raw_intent is not None else "")
-    )
-    weak = intent == "" or intent.casefold() == "unknown"
+    if not rules:
+        return out
 
-    svn = out.get("site_visit_agreed")
-    truthy_svn = svn is True or (
-        isinstance(svn, str) and svn.strip().casefold() in ("true", "1", "yes")
-    )
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        when = rule.get("when")
+        if not isinstance(when, dict):
+            continue
+        field = when.get("field")
+        if not field:
+            continue
+        val = out.get(field)
+        matched = False
+        if "truthy" in when:
+            truthy = when["truthy"]
+            is_truthy = val is True or (
+                isinstance(val, str) and val.strip().casefold() in ("true", "1", "yes")
+            )
+            matched = is_truthy if truthy else not is_truthy
+        elif "eq" in when:
+            matched = val == when["eq"]
+        else:
+            matched = bool(val)
 
-    if truthy_svn and weak:
-        logger.info(
-            "normalize_post_call_extraction: site_visit_agreed=true with weak intent_status={!r} -> Interested",
-            raw_intent,
+        if not matched:
+            continue
+
+        and_intent = rule.get("and_intent_in")
+        if isinstance(and_intent, list):
+            raw_intent = out.get("intent_status")
+            intent = (
+                raw_intent.strip()
+                if isinstance(raw_intent, str)
+                else (str(raw_intent).strip() if raw_intent is not None else "")
+            )
+            allowed = {str(x) for x in and_intent}
+            if intent not in allowed:
+                continue
+
+        to_set = rule.get("set")
+        if isinstance(to_set, dict):
+            out.update(to_set)
+
+    return out
+
+
+def normalize_post_call_extraction(
+    parsed: dict[str, Any],
+    *,
+    normalization_rules: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Deterministic patch after Groq parse — known inconsistency patterns."""
+    if normalization_rules:
+        out = apply_normalization_rules(parsed, normalization_rules)
+    else:
+        out = dict(parsed)
+        raw_intent = out.get("intent_status")
+        intent = (
+            raw_intent.strip()
+            if isinstance(raw_intent, str)
+            else (str(raw_intent).strip() if raw_intent is not None else "")
         )
-        out["intent_status"] = "Interested"
+        weak = intent == "" or intent.casefold() == "unknown"
 
-    callback_time = out.get("callback_time")
-    has_callback = (
-        callback_time is not None
-        and str(callback_time).strip().lower() not in ("", "null", "none")
-    )
-    if has_callback and out.get("intent_status") not in (
-        "Callback_Requested",
-        "Interested",
-    ):
-        logger.info(
-            "normalize_post_call_extraction: callback_time set with intent_status={!r} -> Callback_Requested",
-            out.get("intent_status"),
+        svn = out.get("site_visit_agreed")
+        truthy_svn = svn is True or (
+            isinstance(svn, str) and svn.strip().casefold() in ("true", "1", "yes")
         )
-        out["intent_status"] = "Callback_Requested"
+
+        if truthy_svn and weak:
+            logger.info(
+                "normalize_post_call_extraction: site_visit_agreed=true with weak intent_status={!r} -> Interested",
+                raw_intent,
+            )
+            out["intent_status"] = "Interested"
+
+        callback_time = out.get("callback_time")
+        has_callback = (
+            callback_time is not None
+            and str(callback_time).strip().lower() not in ("", "null", "none")
+        )
+        if has_callback and out.get("intent_status") not in (
+            "Callback_Requested",
+            "Interested",
+        ):
+            logger.info(
+                "normalize_post_call_extraction: callback_time set with intent_status={!r} -> Callback_Requested",
+                out.get("intent_status"),
+            )
+            out["intent_status"] = "Callback_Requested"
 
     if "intent_status" not in out or not str(out.get("intent_status", "")).strip():
         out["intent_status"] = "Unknown"

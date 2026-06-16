@@ -160,3 +160,158 @@ Implemented layout refinements, currency calculations, compliance guards, and da
 - **Sidebar Naming:** Changed **"Settings"** to **"Bot Configuration"** to align with backend functionality.
 - **Footer Updates:** Changed copyright year string to **2026** and removed placeholder support sections.
 - **Header Updates:** Cleared duplicate user settings and profile symbols from the nav block.
+
+## Addendum: Dynamic Script & Post-Call Config Planning (2026-06-15)
+
+Planned a comprehensive database-driven CMS for bot scripts and post-call processing to replace the hardcoded Python files (`sts_scripts/`, `cascade_scripts/`). The plan is stored in `guides/plan.md`.
+
+**Key Architectural Decisions:**
+- **Zero Latency Hot-Path:** `bot_sts.py` and `bot_cascade.py` will NOT query the DB. Instead, `concurrent_dialer.py` will prefetch the config, render the prompts using `string.Template.safe_substitute`, and store it in an in-memory dictionary `PREFETCHED_CONFIGS[call_id]`.
+- **Snapshotting:** To guarantee consistency during mid-call edits, the post-call extraction rules are snapshotted into `call_logs.call_data` at call start.
+- **Rollback:** `script_config_revisions` table will support append-only rollback for safety.
+- **Phase 0 Hotfix (Completed):** Fixed a massive bug where `bot_sts.py` and `bot_cascade.py` ignored `_pg.script_id` entirely. They now explicitly read `pg.get("script_id")` before falling back to env vars, enabling multi-tenant script routing on a single server immediately.
+
+## Addendum: Dialer Prefetch (Step 3 — 2026-06-15)
+
+Implemented database-driven script prefetch in the dialer hot path per `guides/plan.md` build order step 3.
+
+**Files added/changed:**
+- `script_prefetch.py` — `PREFETCHED_CONFIGS` registry, `build_lead_dict`, `render_script_config`, `sweep_stale_prefetched_configs`
+- `db/postgres.py` — `get_script_config(pool, script_config_id, client_id)`
+- `dialer/concurrent_dialer.py` — prefetch register in `fire_call` when `bot_config.script_config_id` is set; `pop` on dial/insert failure
+- `dialer/maintenance.py` — stale prefetch sweep piggybacks on `run_stale_call_log_sweep`
+- `tests/test_script_prefetch.py` — unit tests for lead dict filtering, template render, sweep
+
+**Runtime behavior:**
+- `script_config_id` **null** (current dev seed): unchanged — no prefetch, bots still use `.py` modules via `_pg.script_id`
+- `script_config_id` **set**: dialer fetches `script_configs`, renders `$lead_name` templates, stores in `PREFETCHED_CONFIGS[call_id]` before Plivo dial (Step 4 will consume via `pop()` in bots)
+
+## Addendum: Bot Loaders (Step 4 — 2026-06-15)
+
+Wired tier-1 prefetch consumption into both Pipecat bots. Full 3-tier resolution is now live end-to-end.
+
+**Files added/changed:**
+- `script_runtime.py` — `StsRuntime` / `CascadeRuntime`, `resolve_sts_runtime`, `resolve_cascade_runtime`, gemini/vad/tool helpers
+- `bot_sts.py` — uses `resolve_sts_runtime()` instead of direct importlib
+- `bot_cascade.py` — uses `resolve_cascade_runtime()`; removed dead `bot_config` reference in `bot()`
+- `tests/test_script_runtime.py` — prefetch hit/miss, route guard, helper unit tests
+
+**Resolution order at `/ws` connect:**
+1. `pop_prefetched_config(_session_call_id)` when dialer registered a CMS config
+2. `_pg.script_id` → `importlib` (campaign calls without `script_config_id`)
+3. `STS_SCRIPT` / `CASCADE_SCRIPT` env fallback (Phase 0 `/start` dev path)
+
+## Addendum: Post-Call Snapshot (Step 5 — 2026-06-15)
+
+Persists a compact post-call config freeze in `call_logs.call_data.post_call_snapshot` at call start.
+
+**Files changed:**
+- `script_runtime.py` — `build_post_call_snapshot*`, `maybe_write_post_call_snapshot`, `schedule_post_call_snapshot_write`
+- `db/postgres.py` — `insert_call_log_start(..., call_data=)`, `patch_call_log_post_call_snapshot`
+- `dialer/concurrent_dialer.py` — CMS path writes snapshot at dial time
+- `bot_sts.py` / `bot_cascade.py` — module path schedules async snapshot patch at WS connect
+- `tests/test_script_runtime.py`, `tests/test_post_call_snapshot.py`
+
+**Write paths:**
+- **CMS (`script_config_id` set):** dialer passes snapshot into `insert_call_log_start`
+- **Module path:** bot patches snapshot idempotently after `resolve_*_runtime` if missing
+
+**Note:** Post-call extraction still reads live `extraction_schema` from runtime until Step 6.
+
+## Addendum: Post-Call Engine (Step 6 — 2026-06-15)
+
+At hangup, post-call processing now reads the frozen `call_logs.call_data.post_call_snapshot` when present.
+
+**Files changed:**
+- `script_runtime.py` — `parse_post_call_snapshot`, `PostCallSnapshot`, `get_default_post_call_snapshot`, `outcome_buckets`
+- `post_call_extract.py` — `apply_normalization_rules`, `normalize_post_call_extraction(..., normalization_rules=)`
+- `post_call_processor.py` — snapshot-driven outcome buckets; `process_post_call(..., post_call_snapshot=)`
+- `n8n_webhook.py` — `outcome_to_event(outcome, event_map=None)`
+- `call_transcript.py` — loads snapshot at hangup for extract + processor
+- `scripts/cli.py` — `rerun-extraction` prefers snapshot schema
+- `tests/test_post_call_engine.py`
+
+**Fallback paths (unchanged behavior when snapshot absent):**
+- Extraction uses bot closure `extraction_schema` and legacy Pyramid normalization patches
+- Lead transitions and webhooks use hardcoded outcome sets / event map
+- Applies to Phase 0 SQLite-only calls, module-path race before snapshot patch, and legacy rows
+
+## Addendum: CLI test_call (Step 7 — 2026-06-15)
+
+End-to-end CMS test dial without campaign dialer or admin UI.
+
+**Files added/changed:**
+- `test_call.py` — root CLI: resolve script_config, throwaway lead, `fire_call`, poll loop
+- `db/seed/dev_tenant.sql` — sandbox bots (`...0004` STS, `...0005` cascaded) + campaign (`...0006`, 500 credits)
+- `dialer/concurrent_dialer.py` — `fire_call(..., dial_phone=)` returns `session_call_id`
+- `justfile` — `just cms-call <script-config-id> <phone> [route]`
+- `tests/test_test_call.py`
+
+**Sandbox UUIDs (dev seed):**
+- STS bot: `00000000-0000-4000-8000-000000000004`
+- Cascaded bot: `00000000-0000-4000-8000-000000000005`
+- Campaign: `00000000-0000-4000-8000-000000000006`
+
+**Usage:**
+```bash
+just dev          # server must be running (holds PREFETCHED_CONFIGS)
+just cms-call <script-config-uuid> +919... sts
+```
+
+**vs `just call`:** Phase 0 `POST /start` uses env module scripts, no `lead_id` FK, no CMS prefetch/snapshot. `test_call.py` exercises the full production dial path.
+
+**Prerequisites:** `DATABASE_URL`, Plivo creds, `NGROK_URL`, a `script_configs` row for the given UUID.
+
+## Addendum: Admin API (Step 8 — 2026-06-15)
+
+CRUD + validation + rollback for `script_configs` under `/internal/script-configs/*`.
+
+**Files added/changed:**
+- `api/script_config_validation.py` — schema/outcome validation, `default_template()`, `build_config_snapshot()`
+- `api/routes/internal_script_configs.py` — all admin endpoints
+- `db/postgres.py` — `create_script_config`, `update_script_config`, `list_script_config_revisions`, `rollback_script_config`, `list_script_configs`
+- `server.py` — router registration
+- `tests/test_script_config_validation.py`, `tests/test_script_config_api.py`
+
+**Example:**
+```bash
+curl -sS -H "X-Admin-Key: $ADMIN_API_KEY" \
+  "http://localhost:7860/internal/script-configs/template?route=sts" | jq .
+
+curl -sS -X POST -H "X-Admin-Key: $ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"client_id":"00000000-0000-4000-8000-000000000001", ...}' \
+  http://localhost:7860/internal/script-configs
+```
+
+**Validation:** Non-summary configs require `intent_status` enum values to map bijectively to `outcome_terminal` / `outcome_retry` / `outcome_callback` with no overlap.
+
+## Addendum: Data Migration (Step 9 — 2026-06-16)
+
+Migrated module-based scripts (`sts_scripts/*`, `cascade_scripts/*`) to DB-backed `script_configs` via a new idempotent CLI.
+
+**Files added/changed:**
+- `script_module_export.py` — exports module scripts into `script_configs` payload shape
+- `scripts/migrate_script_configs.py` — discovers active `bot_configs`, creates/updates `script_configs`, links `script_config_id`
+- `tests/test_script_module_export.py`, `tests/test_migrate_script_configs.py`
+- `justfile` — `just migrate-scripts`
+
+**Migration command:**
+```bash
+uv run python scripts/migrate_script_configs.py
+```
+
+**Modes:**
+- `--dry-run`: export + validate only
+- `--verify-only`: validate all discovered module exports only
+- `--force-update`: update existing `script_configs` rows from module export
+
+**Scope and behavior:**
+- Targets all active `bot_configs` rows (`DISTINCT client_id, route, script_id`)
+- Creates missing `script_configs` rows and links `bot_configs.script_config_id`
+- Re-runs are idempotent by default (skip existing rows, still ensure links)
+- Keeps `.py` scripts as fallback path; no file deprecation in Step 9
+
+**Verification path:**
+1. `uv run python scripts/migrate_script_configs.py --dry-run`
+2. `uv run python scripts/migrate_script_configs.py`
+3. `just cms-call <script-config-uuid> +91... sts`

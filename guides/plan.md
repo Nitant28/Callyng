@@ -2,6 +2,8 @@
 
 > **Goal:** Decouple bot scripts and post-call processing from the repo filesystem. Give admin complete control to create, edit, and deploy bot configurations + post-call extraction via API — zero git pushes, zero redeploys, zero disruption to running clients.
 
+> **Context for Next Agent:** Steps 1–9 are complete (see §10). CMS migration is done: module scripts are exported to `script_configs` and linked to `bot_configs.script_config_id`. `.py` scripts remain as tier-2 fallback.
+
 ---
 
 ## Table of Contents
@@ -147,47 +149,118 @@ To prevent call data from being bloated by multi-KB prompt strings, while still 
 
 ## 7. Admin API Endpoints & Validation
 
+**Status: implemented (Step 8).**
+
 | Method | Path | Description |
 |---|---|---|
+| `GET` | `/internal/script-configs` | List configs (`?client_id=`) |
+| `GET` | `/internal/script-configs/{id}` | Get one (`?client_id=`) |
 | `POST` | `/internal/script-configs` | Create config. Validates outcome mapping & creates Revision row. |
-| `PATCH`| `/internal/script-configs/:id` | Update config. Bumps version, creates Revision row. |
-| `POST` | `/internal/script-configs/:id/test` | Dry-run extraction with a transcript. |
+| `PATCH`| `/internal/script-configs/{id}` | Update config. Bumps version, creates Revision row. |
+| `POST` | `/internal/script-configs/{id}/test` | Dry-run extraction with a transcript. |
 | `GET`  | `/internal/script-configs/template`| Returns default template JSON (`?route=sts` or `?route=cascaded`). |
-| `GET`  | `/internal/script-configs/:id/revisions` | List historical versions. |
-| `POST` | `/internal/script-configs/:id/rollback` | Revert. Body: `{"version": N}`. Reads revision N, applies it as the live config, bumps to version N+1, and writes revision N+1 with that same content so history remains faithfully append-only. |
+| `GET`  | `/internal/script-configs/{id}/revisions` | List historical versions. |
+| `POST` | `/internal/script-configs/{id}/rollback` | Revert. Body: `{"version": N}`. Append-only: applies revision N, bumps live version, writes new revision row. |
+
+Auth: `X-Admin-Key` header.
+
+**Files:** `api/script_config_validation.py`, `api/routes/internal_script_configs.py`, `db/postgres.py` (CRUD + revisions).
 
 **Revision Snapshot Timing:** Every successful create/PATCH/rollback writes the *resulting* full config as a new `script_config_revisions` row at the new version number.
 
-**Strict API Validation:** On `POST`/`PATCH` (if not `summary` mode), the API must validate that *every* value in `extraction_schema.fields[intent_status].values` is covered exactly once by `outcome_terminal`, `outcome_retry`, or `outcome_callback` (or implicitly `dnc`).
+**Strict API Validation:** On `POST`/`PATCH` (if not `summary` mode), the API validates that *every* value in `extraction_schema.fields[intent_status].values` is covered exactly once by `outcome_terminal`, `outcome_retry`, or `outcome_callback` (or implicitly `dnc`).
 
 ---
 
 ## 8. CLI Testing Tools
 
-To verify that the entire database-driven pipeline works without Admin UI, we will build:
-**`python test_call.py --script-config-id <UUID> --phone <PHONE> --route <sts|cascaded>`**
+**Status: implemented (Step 7).**
 
-**Duplicate Guard Fix:** To bypass the 5-12 minute duplicate-dial DB locks, and to satisfy the `call_logs.lead_id` Foreign Key constraint downstream, the CLI must automatically insert a throwaway `leads` row into a dedicated sandbox campaign on *every* invocation. It will use this fresh `lead_id` to safely dial the developer's phone and trigger the post-call pipeline in a 30-second loop.
+Root CLI to verify the full database-driven pipeline without Admin UI or campaign dialer:
+
+```bash
+uv run python test_call.py --script-config-id <UUID> --phone <PHONE> --route <sts|cascaded>
+# or:
+just cms-call <script-config-uuid> +919... sts
+```
+
+### What it exercises
+
+Same path as production `fire_call`: prefetch → `insert_call_log_start` with snapshot → Plivo → `/ws` → Step 6 post-call engine. **Not** the Phase 0 `POST /start` shortcut (`just call` / `just test-call`).
+
+### Duplicate guard fix
+
+To bypass 5–12 minute duplicate-dial DB locks and satisfy the `call_logs.lead_id` FK, the CLI inserts a **fresh throwaway lead** on every invocation into a dedicated sandbox campaign. The lead row uses a unique synthetic phone (`+cli{uuid}`); the real `--phone` is dialed via `fire_call(..., dial_phone=)`.
+
+### Sandbox seed (`just db-seed`)
+
+| Entity | UUID |
+|--------|------|
+| Sandbox bot (STS) | `00000000-0000-4000-8000-000000000004` |
+| Sandbox bot (cascaded) | `00000000-0000-4000-8000-000000000005` |
+| Sandbox campaign (`CLI Test Sandbox`, 500 credits) | `00000000-0000-4000-8000-000000000006` |
+
+The CLI auto-links `bot_configs.script_config_id` on the sandbox bot for the requested `--route` if no dedicated bot exists yet (dev convenience until Step 8 linking UI).
+
+### Prerequisites
+
+- `server.py` running (`just dev`) — holds `PREFETCHED_CONFIGS` (single-worker)
+- `NGROK_URL` or public `DIALER_CALLBACK_HOST` for Plivo `/answer` + `/hangup`
+- `DATABASE_URL`, `PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN`, `PLIVO_PHONE_NUMBER`
+- A `script_configs` row for the given `--script-config-id`
+
+### Files
+
+- `test_call.py` — CLI entry
+- `dialer/concurrent_dialer.py` — `fire_call(..., dial_phone=)` returns `session_call_id`
+- `db/seed/dev_tenant.sql` — sandbox bots + campaign
+- `tests/test_test_call.py` — unit tests for helpers
 
 ---
 
 ## 9. Migration Strategy (Pre-Launch)
 
+**Status: implemented (Step 9).**
+
 1. **Phase 0 Hotfix:** Fix the `_pg.script_id` lookup via explicit resolution order.
-2. **Schema & API:** Add DB schema and build Admin CRUD API. 
-3. **Data Migration:** Use API/script to convert existing `.py` scripts into DB rows.
-4. **Test Calls:** Admins use `test_call.py` (and later the UI) to verify the DB scripts work perfectly.
+2. **Schema & API:** Add DB schema and build Admin CRUD API.
+3. **Data Migration:** `scripts/migrate_script_configs.py` converts module scripts into `script_configs` rows for all active clients and links `bot_configs.script_config_id`.
+4. **Test Calls:** Admins use `test_call.py` / `just cms-call` to verify migrated scripts through the full CMS path.
+
+Migration CLI:
+
+```bash
+uv run python scripts/migrate_script_configs.py [--dry-run] [--force-update] [--verify-only]
+```
 
 ---
 
 ## 10. Build Order
 
-1. **Immediate Phase 0:** Implement explicit 3-tier Script Resolution order (`_pg.script_id` hotfix).
-2. **Database:** Alembic migration for `script_configs` and `script_config_revisions`.
-3. **Dialer Prefetch & Cleanup:** Implement DB prefetch, template `safe_substitute` filtering, `PREFETCHED_CONFIGS[call_id]` registration, and explicit exception/stale-loop cleanup.
-4. **Bot Loaders:** Update bots to execute step 1 of the resolution order (`PREFETCHED_CONFIGS.pop()`).
-5. **Snapshotting:** Write the targeted post-call config subset to `call_logs.call_data`.
-6. **Post-Call Engine:** Refactor `post_call_extract.py` and `post_call_processor.py` to use the snapshot data.
-7. **CLI Tool:** Build `test_call.py` (with throwaway lead generation) to verify the pipeline end-to-end.
-8. **Admin API:** Build CRUD endpoints, append-only rollback (`{"version": N}`), validation logic, and template generator.
-9. **Data Migration:** Migrate `.py` files to DB rows and verify using the CLI tool.
+1. **[x] Immediate Phase 0:** Implement explicit 3-tier Script Resolution order (`_pg.script_id` hotfix).
+2. **[x] Database:** Alembic migration for `script_configs` and `script_config_revisions`.
+3. **[x] Dialer Prefetch & Cleanup:** Implement DB prefetch, template `safe_substitute` filtering, `PREFETCHED_CONFIGS[call_id]` registration, and explicit exception/stale-loop cleanup.
+4. **[x] Bot Loaders:** Update bots to execute step 1 of the resolution order (`PREFETCHED_CONFIGS.pop()`).
+5. **[x] Snapshotting:** Write the targeted post-call config subset to `call_logs.call_data`.
+6. **[x] Post-Call Engine:** Refactor `post_call_extract.py` and `post_call_processor.py` to use the snapshot data.
+7. **[x] CLI Tool:** Build `test_call.py` (with throwaway lead generation) to verify the pipeline end-to-end.
+8. **[x] Admin API:** Build CRUD endpoints, append-only rollback (`{"version": N}`), validation logic, and template generator.
+9. **[x] Data Migration:** Migrate `.py` files to DB rows and verify using the CLI tool.
+
+---
+
+## Verification Log (2026-06-16)
+
+I have performed a thorough codebase audit to verify the implementation of Steps 1 through 8. 
+
+**Result: PASS.** All 8 steps have been correctly implemented without any architectural discrepancies.
+- **Step 1 & 4 (Resolution Order / Bot Loaders):** Confirmed `bot_sts.py` and `bot_cascade.py` have been refactored to use `script_runtime.py`, executing the strict 3-tier fallback starting with `pop_prefetched_config`.
+- **Step 2 (Database Schema):** Confirmed `db/schema/006_script_configs.sql` precisely maps to the planned schema, including `cascade_live_tools` and `UNIQUE (client_id, script_id)`.
+- **Step 3 (Dialer Prefetch & Cleanup):** Confirmed `concurrent_dialer.py` uses `register_prefetched_config` and reliably clears it via `pop_prefetched_config` inside its exception handlers. The required `sweep_stale_prefetched_configs` is wired into `maintenance.py`.
+- **Step 5 & 6 (Snapshotting & Post-Call Engine):** Confirmed `build_post_call_snapshot_from_prefetch` saves the subset to `call_logs.call_data`, which `post_call_processor.py` successfully parses.
+- **Step 7 (CLI Tool):** Confirmed `test_call.py` safely creates synthetic leads (`+cli{uuid}`) for test loops, sidestepping duplicate locks.
+- **Step 8 (Admin API):** Confirmed the presence of `/internal/script-configs` endpoints and `api/script_config_validation.py`.
+- **Step 9 (Data Migration):** Confirmed `scripts/migrate_script_configs.py` correctly parses Python modules and exports them to the DB. Verified end-to-end routing with the migrated `script_config_id` via `test_call.py`.
+
+### Discrepancy Found and Fixed
+During Step 9 verification, `test_call.py` crashed with a `dictionary update sequence element #0 has length 1; 2 is required` error. This was traced to a **double-encoding bug** in `db/postgres.py`: `_script_config_json` was redundantly calling `json.dumps()` on `jsonb` fields, while `asyncpg`'s type codec automatically applies `json.dumps()` during inserts. As a result, JSON objects were persisted as JSON strings. I removed the redundant `json.dumps()` from `_script_config_json`, cleared the corrupted `script_configs`, re-ran the migration script, and successfully fired a Plivo test call.

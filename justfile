@@ -185,6 +185,14 @@ test-call phone name="Test Lead" city="Pune":
     BOT_ROUTE={{env_var_or_default("BOT_ROUTE","sts")}} \
     bash scripts/call.sh {{phone}} "{{name}}" "{{city}}"
 
+# CMS pipeline test (script_configs + prefetch + post-call). Usage: just cms-call <uuid> +91... sts
+cms-call script_config_id phone route="sts":
+    uv run python test_call.py --script-config-id {{script_config_id}} --phone {{phone}} --route {{route}}
+
+# Migrate module scripts into script_configs rows for all clients
+migrate-scripts:
+    uv run python scripts/migrate_script_configs.py
+
 sqlite-calls n="5":
     uv run python scripts/sqlite_calls.py {{n}}
 

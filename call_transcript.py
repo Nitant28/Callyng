@@ -367,13 +367,42 @@ def attach_pipeline_finalize(
                 extraction: dict[str, Any] | None = None
                 extraction_error: str | None = None
                 extraction_model: str | None = None
+                snapshot: dict[str, Any] | None = None
+                schema = extraction_schema
+                norm_rules: list[Any] | None = None
+
+                pool = _pg_pool()
+                if pool is not None and session_call_id:
+                    try:
+                        from db import postgres as pg_db
+                        from script_runtime import parse_post_call_snapshot
+
+                        call_log = await pg_db.get_call_log_by_session(
+                            pool, session_call_id
+                        )
+                        snapshot = parse_post_call_snapshot(
+                            call_log.get("call_data") if call_log else None
+                        )
+                        if snapshot:
+                            schema = snapshot.get("extraction_schema") or schema
+                            rules = snapshot.get("normalization_rules")
+                            norm_rules = rules if rules else None
+                    except Exception as exc:
+                        logger.warning(
+                            "post_call snapshot load failed, using closure fallback: {}",
+                            exc,
+                        )
+
                 try:
                     parsed, err, model_used = await extract_post_call(
-                        transcript, extraction_schema=extraction_schema
+                        transcript, extraction_schema=schema
                     )
                     extraction_model = model_used
                     if parsed is not None and err is None:
-                        extraction = normalize_post_call_extraction(parsed)
+                        extraction = normalize_post_call_extraction(
+                            parsed,
+                            normalization_rules=norm_rules,
+                        )
                         update_call_log_extraction(
                             row_id,
                             extraction_json=json.dumps(extraction, ensure_ascii=False),
@@ -431,6 +460,7 @@ def attach_pipeline_finalize(
                                 usage=usage_dict,
                                 extraction_model=extraction_model,
                                 extraction_error=extraction_error,
+                                post_call_snapshot=snapshot,
                             )
                     except Exception as exc:
                         logger.exception("post_call_processor failed: {}", exc)

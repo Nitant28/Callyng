@@ -21,7 +21,9 @@ def sign_payload(payload: dict, secret: str) -> str:
     return f"sha256={digest}"
 
 
-def outcome_to_event(outcome: str) -> str | None:
+def outcome_to_event(outcome: str, event_map: dict[str, str] | None = None) -> str | None:
+    if event_map and outcome in event_map:
+        return event_map[outcome]
     mapping = {
         "Interested": "lead_qualified",
         "Not_Interested": "lead_not_interested",
