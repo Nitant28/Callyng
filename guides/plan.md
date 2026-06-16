@@ -246,6 +246,7 @@ uv run python scripts/migrate_script_configs.py [--dry-run] [--force-update] [--
 7. **[x] CLI Tool:** Build `test_call.py` (with throwaway lead generation) to verify the pipeline end-to-end.
 8. **[x] Admin API:** Build CRUD endpoints, append-only rollback (`{"version": N}`), validation logic, and template generator.
 9. **[x] Data Migration:** Migrate `.py` files to DB rows and verify using the CLI tool.
+10. **[x] Frontend CMS:** Build `AdminScriptConfigs.jsx` and refactor `AdminBotConfigs.jsx` to enforce the new workflow.
 
 ---
 
@@ -264,3 +265,10 @@ I have performed a thorough codebase audit to verify the implementation of Steps
 
 ### Discrepancy Found and Fixed
 During Step 9 verification, `test_call.py` crashed with a `dictionary update sequence element #0 has length 1; 2 is required` error. This was traced to a **double-encoding bug** in `db/postgres.py`: `_script_config_json` was redundantly calling `json.dumps()` on `jsonb` fields, while `asyncpg`'s type codec automatically applies `json.dumps()` during inserts. As a result, JSON objects were persisted as JSON strings. I removed the redundant `json.dumps()` from `_script_config_json`, cleared the corrupted `script_configs`, re-ran the migration script, and successfully fired a Plivo test call.
+
+### Frontend Verification (Step 10)
+**Result: PASS.** Frontend successfully implemented.
+- **Admin Script Configs:** React UI built correctly with Molten styling. Tabs separate core configuration, prompts, VAD, and schemas.
+- **Revision Pruning:** `db/postgres.py` enforces a max revision limit of 5.
+- **Admin Bot Configs:** Admin is now strictly forced to select from the existing Script Templates pool. All legacy input fields successfully stripped from the bot config creation and edit forms.
+- **Dynamic Template:** "Create Template" correctly fetches live variables from the Python codebase (`sts_scripts/pyramid_bilingual.py`) to generate boilerplate. React JSON spread bug and uncontrolled component bugs fixed.

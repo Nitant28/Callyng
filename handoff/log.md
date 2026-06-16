@@ -315,3 +315,26 @@ uv run python scripts/migrate_script_configs.py
 1. `uv run python scripts/migrate_script_configs.py --dry-run`
 2. `uv run python scripts/migrate_script_configs.py`
 3. `just cms-call <script-config-uuid> +91... sts`
+
+## Addendum: Frontend Script Configs CMS & Bot Config Changes (2026-06-16)
+
+Implemented the full frontend for the Script Configs CMS and updated the Bot Configs UI to consume the new system.
+
+**Admin Script Configs (`AdminScriptConfigs.jsx`):**
+- Built a comprehensive CMS interface with Tabbed Navigation (Core, Prompts, Cascade, Post-Call, Advanced).
+- Supported creating and editing `script_configs`.
+- Implemented "Create Template" to dynamically pull reference defaults (`default_template` from `sts_scripts/pyramid_bilingual.py` and `sts_scripts/pyramid_extraction.py`).
+- Added a full Revision History sliding drawer with the ability to view JSON diffs and instantly "Rollback" to any prior version.
+- Added a "Deploy Bot" workflow directly from the Script Templates list, which creates a `bot_configs` entry natively linked to the script template.
+- Fixed React uncontrolled input warnings by strictly binding text/number inputs and textareas.
+- Fixed an `Objects are not valid as a React child` crash by correctly unpacking FastAPI 422 validation arrays into string messages using an `extractError` utility.
+
+**Admin Bot Configs (`AdminBotConfigs.jsx`):**
+- Removed all legacy manual override inputs (Model, Voice, Temperature, VAD settings, Webhook Overrides, Scripts).
+- Admin is now *forced* to select an existing Script Template from a dropdown. All configuration flows through the `script_config_id`.
+- Bot Configuration UI now correctly sends only `client_id`, `name`, `route`, `script_id`, `script_config_id`, `telephony_number`, and `credits_per_minute` to the backend.
+
+**Backend adjustments (`db/postgres.py`, `api/routes/internal_script_configs.py`):**
+- Made `client_id` optional on `GET /internal/script-configs` for global admin views.
+- Modified the dynamic `default_template` endpoint to natively extract boilerplate text from Python scripts (`pyramid_bilingual.py`) using `LeadContext` injection to preserve accurate parameterization.
+- Added pruning logic to limit script config revisions to 5 per script template, preventing runaway database bloat from excessive edits.

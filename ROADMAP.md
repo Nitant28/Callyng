@@ -482,51 +482,31 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 **Explicitly out of scope for Phase 1:** React analytics charts, bot config UI, Razorpay, call recordings, multi-tenant Postgres, white-label domains.
 
 ### Phase 2 — Multi-tenant + billing
-**Status:** in progress (current focus)  
-**Timeline:** ~3–4 weeks, starting May 2026
+**Status:** mostly done (Phase 2A Backend is done, Phase 2B Frontend is in progress)  
+**Timeline:** ~3–4 weeks, started May 2026
 
 **Goal:** Onboard client #2 without code changes.
 
 **Phase 2 prep (done):**
-
 - `EXTRACTION_SCHEMA` in all active script modules
 - Schema-driven `post_call_extract.py`
-- README + ROADMAP aligned with [guides/aakash_arch.md](guides/aakash_arch.md)
-- `env.example` rewritten with full Phase 2 variable documentation
-- justfile extended with admin, client API, DB, testing, and operator CLI recipes
-- Docs layout: `guides/` (CLI, testing, architecture), `handoff/` (session notes), `fixtures/` (sample CSVs)
-- Operator CLI: [guides/CLI_GUIDE.md](guides/CLI_GUIDE.md) + [scripts/cli.py](scripts/cli.py) (Postgres inspection, post-call debug, lead reset)
+- Operator CLI: [guides/CLI_GUIDE.md](guides/CLI_GUIDE.md) + [scripts/cli.py](scripts/cli.py)
 
 | Milestone | Status |
 | --------- | ------ |
 | Postgres migration + schema from [guides/aakash_arch.md §2](guides/aakash_arch.md) | done |
-| Alembic migrations (`just db-migrate`) | done |
 | `clients`, `bot_configs`, `campaigns`, `leads`, `webhook_configs` tables | done |
-| Docker Compose `postgres:16` + `just db-*` recipes | done |
-| `asyncpg` pool + full `db/postgres.py` query layer | done |
-| `client_id` on every query | done |
 | Credits + campaign budget pre-allocation + CostGuard | done |
 | `post_call_processor` (lead state machine, counters, webhooks) | done |
 | Concurrent dialer — Postgres `FOR UPDATE SKIP LOCKED` | done |
 | Admin `/internal/*` endpoints (Phase 2A) | done |
 | Client `/api/*` endpoints (Phase 2B) | done |
-| Live transcript polling (`in_progress`, per-turn writes) | done |
-| Parallel Postgres write path in `call_transcript.py` | done |
-| SQLite write path preserved for bot isolation testing (`just test-call`, `just sqlite-calls`) | done |
-| Dynamic `/ws` bot route from `bot_configs` (`_pg` context) | done |
-| Manual credit top-up (admin) | done |
-| Post-call active-lead guard + idempotent `call_logs` finalize | done |
-| `PATCH /api/campaigns/{id}/cancel` + idempotent budget settlement (`budget_returned_at`) | done |
-| Global stale `in_progress` call_log sweeper (startup + periodic) | done |
-| Operator CLI (`scripts/cli.py`, `just show-*`, `failed-extractions`, `rerun-extraction`, etc.) | done |
-| Repository docs: `guides/`, `handoff/`, `fixtures/` | done |
-| Client React SPA (Phase 2B) | planned |
-| Retire `BOT_ROUTE` entirely | planned |
+| Client React SPA (Phase 2B) | **in progress (current focus)** |
 | Subdomain routing: `client-a.aakashvani.in` via nginx | planned |
 
 **Pre-launch client workflow (priority order — build with Phase 2B SPA):**
 
-These four items are the highest-priority **client-facing** work after the Phase 2 backend. They form one coherent “configure → validate → test → launch” flow on a **draft** campaign. Full spec: [§10 Pre-launch client workflow priorities](#10-pre-launch-client-workflow-priorities).
+These four items are the highest-priority **client-facing** work. Full spec: [§10 Pre-launch client workflow priorities](#10-pre-launch-client-workflow-priorities).
 
 | Priority | Feature | Status |
 | -------- | ------- | ------ |
@@ -535,34 +515,29 @@ These four items are the highest-priority **client-facing** work after the Phase
 | 3 | Single test call (from draft screen) | planned |
 | 4 | Lock on Start (`PATCH .../start` only from `draft`) | planned |
 
-**Phase 2 hardening — deferred (not in last implementation pass):**
-
-- Snapshot `credits_per_minute` on campaign create or on `call_logs` at dial start (today: live read from `bot_configs` at post-call).
-- Document CostGuard as a soft guard under concurrent dialers (possible ~one-call budget overshoot).
-- `call_logs.attempt_kind` (`initial` | `callback` | `cold_retry`) for debugging attempt mix.
-- Per-client Plivo credentials (multi-account); today one `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` per server.
-- nginx `allow 127.0.0.1` for `/internal/` (ops handoff item).
-- Admin `PATCH /internal/campaigns/{id}` without `client_id` in JSON body (handoff item).
-- Auto-fail `callback_scheduled` leads on **pause** (`stop`); only **cancel** terminalizes non-terminal leads by design.
-
-Build order: [guides/aakash_arch.md §13](guides/aakash_arch.md) (admin-first).
+**Phase 2 hardening — deferred:**
+- Snapshot `credits_per_minute` on campaign create
+- Document CostGuard as a soft guard under concurrent dialers
+- `call_logs.attempt_kind` (`initial` | `callback` | `cold_retry`)
+- Per-client Plivo credentials (multi-account)
 
 ### Phase 3 — Bot config UI + analytics + call recordings
-**Status:** planned  
-**Timeline:** ~4–6 weeks
+**Status:** partially done (Ahead of schedule)  
 
 **Goal:** Clients configure bot personality within guardrails. Call recordings available in UI. Rich analytics.
 
 | Milestone | Status |
 | --------- | ------ |
+| Bot configuration UI (Admin CMS for `script_configs`) | **done (ahead of schedule)** |
+| Dynamic boilerplate extraction from Python to Database | **done (ahead of schedule)** |
+| Revision rollbacks for script configurations | **done (ahead of schedule)** |
 | Plivo call recording → Cloudflare R2 upload post-call | planned |
 | Signed URL generation for audio player (1 hr expiry) | planned |
-| Bot configuration UI: structured form → backend compiles prompt (no raw editor) | planned |
-| `/analytics` page: intent breakdown, duration distribution, cost/day, trends | planned |
+| `/analytics` page: intent breakdown, duration distribution, cost/day | planned |
 | Campaign scheduling (run at specific time / recurring) | planned |
 | Live call monitor (SSE stream; optional Redis pub/sub) | planned |
 
-**Bot configuration UI:** clients fill a **structured form**; backend compiles the real system prompt. **Never exposed:** route, model, extraction schema, Plivo number, TTS voice ID, temperature.
+**Bot configuration UI:** Admins now use the Molten UI React CMS (`AdminScriptConfigs.jsx`) to build dynamic templates. The system natively imports legacy python files to generate parameterized boilerplate. Clients will soon be able to fill structured forms linked directly to these controlled scripts.
 
 ### Phase 4 — Inbound Bot Integration + WhatsApp + local dev transport
 **Status:** planned
