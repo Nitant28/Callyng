@@ -13,26 +13,142 @@ from loguru import logger
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext, LLMSpecificMessage
 
+from background_tasks import spawn_background_task
 from call_log_db import insert_call_log, update_call_log_extraction
 from call_metrics import UsageMetricsAccumulator
 from n8n_webhook import send_call_completed_webhook
 from post_call_extract import extract_post_call, normalize_post_call_extraction
 from pricing_sts import compute_sts_cost_inr
 
-_PG_CONTEXT: dict[str, dict[str, Any]] = {}
-_DEV_CLIENT_ID = "00000000-0000-4000-8000-000000000001"
+from db.redis_client import get_redis
+from db import postgres as pg_db
+
+_PGCTX_KEY_PREFIX = "pgctx:"
 _PG_WRITE_TIMEOUT_S = 5.0
+_CAMPAIGN_PG_FIELDS = ("client_id", "campaign_id", "lead_id", "bot_config_id")
 
 
-def register_pg_context(session_call_id: str, pg: dict[str, Any]) -> None:
-    if session_call_id and pg:
-        _PG_CONTEXT[session_call_id] = pg
+def _pgctx_key(session_call_id: str) -> str:
+    return f"{_PGCTX_KEY_PREFIX}{session_call_id}"
 
 
-def pop_pg_context(session_call_id: str | None) -> dict[str, Any] | None:
+def _pgctx_ttl_seconds() -> int:
+    return pg_db.live_call_grace_minutes() * 60
+
+
+async def register_pg_context(session_call_id: str, pg: dict[str, Any]) -> None:
+    if not session_call_id or not pg:
+        return
+    redis = get_redis()
+    await redis.set(
+        _pgctx_key(session_call_id),
+        json.dumps(pg, ensure_ascii=False),
+        ex=_pgctx_ttl_seconds(),
+    )
+
+
+async def pop_pg_context(session_call_id: str | None) -> dict[str, Any] | None:
     if not session_call_id:
         return None
-    return _PG_CONTEXT.pop(session_call_id, None)
+    redis = get_redis()
+    raw = await redis.getdel(_pgctx_key(session_call_id))
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Invalid pgctx JSON for session {}", session_call_id)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _pg_context_has_campaign_fields(ctx: dict[str, Any] | None) -> bool:
+    if not ctx:
+        return False
+    return all(ctx.get(k) for k in _CAMPAIGN_PG_FIELDS)
+
+
+def _pg_context_from_call_log(row: dict[str, Any]) -> dict[str, Any] | None:
+    if not all(row.get(k) for k in _CAMPAIGN_PG_FIELDS):
+        return None
+    ctx: dict[str, Any] = {
+        "client_id": str(row["client_id"]),
+        "campaign_id": str(row["campaign_id"]),
+        "lead_id": str(row["lead_id"]),
+        "bot_config_id": str(row["bot_config_id"]),
+    }
+    if row.get("route"):
+        ctx["route"] = row["route"]
+    return ctx
+
+
+async def resolve_pg_context(
+    pool: Any,
+    session_call_id: str | None,
+    redis_ctx: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if _pg_context_has_campaign_fields(redis_ctx):
+        return redis_ctx
+    if not pool or not session_call_id:
+        return None
+    row = await pg_db.get_call_log_by_session(pool, session_call_id)
+    if not row:
+        return None
+    return _pg_context_from_call_log(row)
+
+
+async def _run_campaign_post_call(
+    *,
+    resolved_ctx: dict[str, Any] | None,
+    session_call_id: str | None,
+    duration_seconds: int,
+    transcript: list[dict],
+    extraction: dict | None,
+    usage_dict: dict,
+    extraction_model: str | None = None,
+    extraction_error: str | None = None,
+    post_call_snapshot: dict | None = None,
+) -> None:
+    if not session_call_id:
+        return
+    if not _pg_context_has_campaign_fields(resolved_ctx):
+        if resolved_ctx is None:
+            logger.warning(
+                "post_call skipped: no campaign context for session={}",
+                session_call_id,
+            )
+        else:
+            logger.error(
+                "call_log missing campaign fields for post_call session={} ctx={}",
+                session_call_id,
+                resolved_ctx,
+            )
+        return
+    try:
+        from post_call_processor import process_post_call
+        from uuid import UUID
+
+        pool = _pg_pool()
+        if pool is None:
+            return
+        assert resolved_ctx is not None
+        await process_post_call(
+            pool,
+            session_call_id,
+            UUID(resolved_ctx["lead_id"]),
+            UUID(resolved_ctx["campaign_id"]),
+            UUID(resolved_ctx["client_id"]),
+            UUID(resolved_ctx["bot_config_id"]),
+            duration_seconds,
+            transcript,
+            extraction or {},
+            usage=usage_dict,
+            extraction_model=extraction_model,
+            extraction_error=extraction_error,
+            post_call_snapshot=post_call_snapshot,
+        )
+    except Exception as exc:
+        logger.exception("post_call_processor failed: {}", exc)
 
 
 def _pg_pool():
@@ -330,23 +446,19 @@ def attach_pipeline_finalize(
             logger.error("call_log_db insert failed: {}", exc)
             row_id = -1
 
-        pg_ctx = pop_pg_context(session_call_id)
-        if pg_ctx and session_call_id:
+        pg_ctx = await pop_pg_context(session_call_id)
+        pool = _pg_pool()
+        resolved_ctx = await resolve_pg_context(pool, session_call_id, pg_ctx)
+        if session_call_id and pool is not None:
             try:
-                pool = _pg_pool()
-                if pool is not None:
-                    from db import postgres as pg_db
-
-                    cleared = await _pg_write(
-                        pg_db.mark_call_log_not_in_progress(
-                            pool, session_call_id
-                        )
+                cleared = await _pg_write(
+                    pg_db.mark_call_log_not_in_progress(pool, session_call_id)
+                )
+                if cleared:
+                    logger.debug(
+                        "call_log in_progress cleared at hangup session={}",
+                        session_call_id,
                     )
-                    if cleared:
-                        logger.debug(
-                            "call_log in_progress cleared at hangup session={}",
-                            session_call_id,
-                        )
             except Exception as exc:
                 logger.warning(
                     "Failed to clear in_progress for {}: {}",
@@ -432,51 +544,19 @@ def attach_pipeline_finalize(
                     except Exception:
                         logger.exception("call_log extraction update failed")
 
-                if pg_ctx and session_call_id:
-                    try:
-                        from post_call_processor import process_post_call
-                        from uuid import UUID
+                await _run_campaign_post_call(
+                    resolved_ctx=resolved_ctx,
+                    session_call_id=session_call_id,
+                    duration_seconds=duration_seconds,
+                    transcript=transcript,
+                    extraction=extraction,
+                    usage_dict=usage_dict,
+                    extraction_model=extraction_model,
+                    extraction_error=extraction_error,
+                    post_call_snapshot=snapshot,
+                )
 
-                        pool = _pg_pool()
-                        if pool is not None:
-                            lead_id_str = pg_ctx.get("lead_id")
-                            campaign_id_str = pg_ctx.get("campaign_id")
-                            client_id_str = pg_ctx.get("client_id")
-                            bot_config_id_str = pg_ctx.get("bot_config_id")
-                            
-                            if not all([lead_id_str, campaign_id_str, client_id_str, bot_config_id_str]):
-                                logger.error("Missing required pg_ctx fields for post_call_processor: {}", pg_ctx)
-                            else:
-                                await process_post_call(
-                                    pool,
-                                    session_call_id,
-                                    UUID(lead_id_str),
-                                    UUID(campaign_id_str),
-                                    UUID(client_id_str),
-                                    UUID(bot_config_id_str),
-                                duration_seconds,
-                                transcript,
-                                extraction or {},
-                                usage=usage_dict,
-                                extraction_model=extraction_model,
-                                extraction_error=extraction_error,
-                                post_call_snapshot=snapshot,
-                            )
-                    except Exception as exc:
-                        logger.exception("post_call_processor failed: {}", exc)
-                elif session_call_id:
-                    await _write_pg_dev_finalize(
-                        session_call_id=session_call_id,
-                        route=route,
-                        started_at_iso=started_at_iso,
-                        duration_seconds=duration_seconds,
-                        transcript=transcript,
-                        usage_dict=usage_dict,
-                        extraction=extraction,
-                        cost_inr=cost_inr,
-                    )
-
-                if not pg_ctx:
+                if not _pg_context_has_campaign_fields(resolved_ctx):
                     payload = _build_n8n_payload(
                         row_id=row_id,
                         session_call_id=session_call_id,
@@ -498,23 +578,21 @@ def attach_pipeline_finalize(
                     )
                     await send_call_completed_webhook(payload)
 
-            asyncio.create_task(_extract_patch_and_webhook())
+            spawn_background_task(_extract_patch_and_webhook())
         else:
             logger.debug("post_call_extract skipped: GROQ_API_KEY not set")
-            if session_call_id:
-                asyncio.create_task(
-                    _write_pg_dev_finalize(
+            if session_call_id and _pg_context_has_campaign_fields(resolved_ctx):
+                spawn_background_task(
+                    _run_campaign_post_call(
+                        resolved_ctx=resolved_ctx,
                         session_call_id=session_call_id,
-                        route=route,
-                        started_at_iso=started_at_iso,
                         duration_seconds=duration_seconds,
                         transcript=transcript,
-                        usage_dict=usage_dict,
                         extraction=None,
-                        cost_inr=cost_inr,
+                        usage_dict=usage_dict,
                     )
                 )
-            if not pg_ctx:
+            if not _pg_context_has_campaign_fields(resolved_ctx):
                 payload = _build_n8n_payload(
                     row_id=row_id,
                     session_call_id=session_call_id,
@@ -535,41 +613,3 @@ def attach_pipeline_finalize(
                     post_call_extraction_skipped=True,
                 )
                 await send_call_completed_webhook(payload)
-
-
-async def _write_pg_dev_finalize(
-    *,
-    session_call_id: str,
-    route: str,
-    started_at_iso: str,
-    duration_seconds: int,
-    transcript: list[dict],
-    usage_dict: dict,
-    extraction: dict | None,
-    cost_inr: float | None,
-) -> None:
-    pool = _pg_pool()
-    if pool is None:
-        return
-    from uuid import UUID
-
-    from db import postgres as pg_db
-
-    try:
-        started = datetime.fromisoformat(started_at_iso.replace("Z", "+00:00"))
-    except ValueError:
-        started = datetime.now(timezone.utc)
-    await _pg_write(
-        pg_db.finalize_call_log_dev(
-            pool,
-            session_call_id,
-            UUID(_DEV_CLIENT_ID),
-            route,
-            started,
-            duration_seconds,
-            transcript,
-            usage_dict,
-            extraction,
-            cost_inr,
-        )
-    )

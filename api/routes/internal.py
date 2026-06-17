@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.auth import get_pool, require_admin
+from api.script_config_validation import normalize_route, validate_route
 from db import postgres as pg_db
 from dialer.concurrent_dialer import start_dialer, stop_dialer
 from telephony import fetch_plivo_cash_credits
@@ -232,13 +233,16 @@ async def create_bot_config(
 ):
     if not _SCRIPT_ID_RE.fullmatch(body.script_id):
         raise HTTPException(422, "script_id validation failed")
-    if body.route not in ("sts", "cascaded"):
-        raise HTTPException(422, "route must be sts or cascaded")
+    route = normalize_route(body.route)
+    try:
+        validate_route(route)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     bot_id = await pg_db.create_bot_config(
         pool,
         body.client_id,
         body.name,
-        body.route,
+        route,
         body.script_id,
         body.telephony_number,
         body.credits_per_minute,
@@ -254,6 +258,8 @@ async def list_bot_configs(
     client_id: Optional[UUID] = Query(None),
 ):
     bots = await pg_db.list_bot_configs(pool, client_id)
+    # Hide seeded CLI sandboxes from the UI
+    bots = [b for b in bots if not b.get("name", "").startswith("CLI Sandbox")]
     if search:
         q = search.lower()
         bots = [b for b in bots if q in (b.get("name") or "").lower()
@@ -288,10 +294,13 @@ async def patch_bot_config(
         args.append(body.name)
         idx += 1
     if body.route is not None:
-        if body.route not in ("sts", "cascaded"):
-            raise HTTPException(422, "route must be sts or cascaded")
+        route = normalize_route(body.route)
+        try:
+            validate_route(route)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         sets.append(f"route = ${idx}")
-        args.append(body.route)
+        args.append(route)
         idx += 1
     if body.script_id is not None:
         if not _SCRIPT_ID_RE.fullmatch(body.script_id):
@@ -364,6 +373,8 @@ async def list_campaigns_admin(
             "SELECT * FROM campaigns ORDER BY created_at DESC LIMIT 200"
         )
         campaigns = pg_db.records_to_dicts(rows)
+    # Hide seeded CLI sandboxes from the UI
+    campaigns = [c for c in campaigns if not c.get("name", "").startswith("CLI Test Sandbox")]
     if search:
         q = search.lower()
         campaigns = [c for c in campaigns if q in (c.get("name") or "").lower()]
@@ -448,7 +459,7 @@ async def start_campaign_admin(
     host = (os.getenv("DIALER_CALLBACK_HOST") or os.getenv("NGROK_URL") or "").strip()
     if not host:
         host = request.headers.get("host", "localhost:7860")
-    start_dialer(request.app, campaign_id, client_id, host=host)
+    await start_dialer(request.app, campaign_id, client_id, host=host)
     return {
         "status": "running",
         "campaign_id": str(campaign_id),

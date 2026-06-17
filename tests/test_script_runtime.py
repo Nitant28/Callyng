@@ -8,15 +8,7 @@ import pytest
 from google.genai.types import EndSensitivity, StartSensitivity
 from pipecat.transcriptions.language import Language
 
-import script_prefetch as sp
 import script_runtime as sr
-
-
-@pytest.fixture(autouse=True)
-def _clear_prefetch_registry():
-    sp.PREFETCHED_CONFIGS.clear()
-    yield
-    sp.PREFETCHED_CONFIGS.clear()
 
 
 def _sts_prefetch(**overrides) -> dict:
@@ -81,14 +73,16 @@ def test_build_push_lead_data_schema():
 
 
 def test_resolve_sts_runtime_prefetch_hit():
-    sp.register_prefetched_config("call-1", _sts_prefetch(system_instruction="Hi Rama"))
-    body = {"_session_call_id": "call-1", "lead_name": "Rama"}
+    body = {
+        "_session_call_id": "call-1",
+        "_prefetched_config": _sts_prefetch(system_instruction="Hi Rama"),
+        "lead_name": "Rama",
+    }
     runtime = sr.resolve_sts_runtime(body)
     assert runtime.source == "script_config"
     assert runtime.script_id == "test_sts"
     assert runtime.system_instruction == "Hi Rama"
     assert runtime.gemini_language == Language.MR_IN
-    assert "call-1" not in sp.PREFETCHED_CONFIGS
 
 
 def test_resolve_sts_runtime_prefetch_miss_module_fallback():
@@ -105,12 +99,9 @@ def test_resolve_sts_runtime_prefetch_miss_module_fallback():
 
 
 def test_resolve_sts_runtime_wrong_route_falls_back_to_module():
-    sp.register_prefetched_config(
-        "call-2",
-        _sts_prefetch(route="cascaded", system_instruction="wrong"),
-    )
     body = {
         "_session_call_id": "call-2",
+        "_prefetched_config": _sts_prefetch(route="cascaded", system_instruction="wrong"),
         "_pg": {"script_id": "pyramid_mr"},
         "lead_name": "Test",
     }
@@ -119,20 +110,25 @@ def test_resolve_sts_runtime_wrong_route_falls_back_to_module():
     assert runtime.script_id == "pyramid_mr"
 
 
-def test_pop_is_one_shot():
-    sp.register_prefetched_config("call-3", _sts_prefetch(system_instruction="Once"))
-    body = {"_session_call_id": "call-3", "lead_name": "A"}
+def test_prefetched_config_is_one_shot_per_ws_body():
+    prefetch = _sts_prefetch(system_instruction="Once")
+    body = {
+        "_session_call_id": "call-3",
+        "_prefetched_config": prefetch,
+        "lead_name": "A",
+    }
     first = sr.resolve_sts_runtime(body)
     assert first.source == "script_config"
     body["_pg"] = {"script_id": "pyramid_mr"}
+    body.pop("_prefetched_config", None)
     second = sr.resolve_sts_runtime(body)
     assert second.source == "module"
 
 
 def test_resolve_cascade_runtime_prefetch_hit():
-    sp.register_prefetched_config(
-        "call-c",
-        {
+    body = {
+        "_session_call_id": "call-c",
+        "_prefetched_config": {
             "source": "script_config",
             "route": "cascaded",
             "script_id": "prowave_db",
@@ -144,8 +140,8 @@ def test_resolve_cascade_runtime_prefetch_hit():
             "cascade_live_tools": [],
             "extraction_schema": {"fields": {}},
         },
-    )
-    runtime = sr.resolve_cascade_runtime({"_session_call_id": "call-c"})
+    }
+    runtime = sr.resolve_cascade_runtime(body)
     assert runtime.source == "script_config"
     assert runtime.system_prompt == "Cascade hello"
     assert runtime.tts_voice == "voice-123"

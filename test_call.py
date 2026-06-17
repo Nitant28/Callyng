@@ -24,6 +24,8 @@ from uuid import UUID, uuid4
 import aiohttp
 from dotenv import load_dotenv
 
+from api.script_config_validation import normalize_route
+
 _ROOT = Path(__file__).resolve().parent
 load_dotenv(_ROOT / ".env")
 
@@ -235,6 +237,7 @@ async def run_test_call(args: argparse.Namespace) -> int:
     from db import postgres as pg_db
     from dialer.concurrent_dialer import _release_lead_to_pending, fire_call
 
+    args.route = normalize_route(args.route)
     if args.route not in _VALID_ROUTES:
         print(f"ERROR: --route must be one of {sorted(_VALID_ROUTES)}", file=sys.stderr)
         return 1
@@ -358,8 +361,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--route",
         required=True,
-        choices=sorted(_VALID_ROUTES),
-        help="Bot route (sts or cascaded)",
+        help="Bot route (sts or cascaded; legacy alias cascade)",
     )
     parser.add_argument(
         "--client-id",

@@ -19,12 +19,13 @@ from script_runtime import build_post_call_snapshot_from_prefetch
     not os.getenv("DATABASE_URL"),
     reason="DATABASE_URL not set",
 )
-def test_insert_call_log_start_with_snapshot():
+@pytest.mark.asyncio
+async def test_insert_call_log_start_with_snapshot():
     import asyncpg
 
     from db import postgres as pg_db
 
-    async def _run():
+    if True:
         try:
             pool = await pg_db.create_db_pool(os.environ["DATABASE_URL"])
         except (OSError, asyncpg.PostgresError) as exc:
@@ -73,21 +74,20 @@ def test_insert_call_log_start_with_snapshot():
                     "DELETE FROM call_logs WHERE session_call_id = $1", session_id
                 )
                 await pool.execute("DELETE FROM clients WHERE id = $1", client_id)
-            await pg_db.close_pool()
-
-    asyncio.run(_run())
+            await pool.close()
 
 
 @pytest.mark.skipif(
     not os.getenv("DATABASE_URL"),
     reason="DATABASE_URL not set",
 )
-def test_patch_call_log_post_call_snapshot_idempotent():
+@pytest.mark.asyncio
+async def test_patch_call_log_post_call_snapshot_idempotent():
     import asyncpg
 
     from db import postgres as pg_db
 
-    async def _run():
+    if True:
         try:
             pool = await pg_db.create_db_pool(os.environ["DATABASE_URL"])
         except (OSError, asyncpg.PostgresError) as exc:
@@ -129,6 +129,4 @@ def test_patch_call_log_post_call_snapshot_idempotent():
                     "DELETE FROM call_logs WHERE session_call_id = $1", session_id
                 )
                 await pool.execute("DELETE FROM clients WHERE id = $1", client_id)
-            await pg_db.close_pool()
-
-    asyncio.run(_run())
+            await pool.close()

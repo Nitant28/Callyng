@@ -18,7 +18,7 @@ dev-sts:
 
 # Force cascaded route for this run (overrides .env)
 dev-cascade:
-    BOT_ROUTE=cascade uv run uvicorn server:app --host 0.0.0.0 --port 7860 --reload
+    BOT_ROUTE=cascaded uv run uvicorn server:app --host 0.0.0.0 --port 7860 --reload
 
 # STS with Hindi script (pyramid_hi under sts_scripts/)
 dev-sts-hi:
@@ -51,7 +51,7 @@ sync:
 
 # Start Postgres 16 container (requires Docker Desktop WSL integration or Engine)
 db-up:
-    docker compose up -d postgres
+    docker compose up -d postgres redis
 
 db-down:
     docker compose down

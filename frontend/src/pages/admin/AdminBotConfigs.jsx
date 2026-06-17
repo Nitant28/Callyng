@@ -8,6 +8,7 @@ export default function AdminBotConfigs() {
   const [modalClosing, setModalClosing] = useState(false);
   const [editingBot, setEditingBot] = useState(null);
   const [editPrice, setEditPrice] = useState('');
+  const [search, setSearch] = useState('');
   
   // Create Bot Config states
   const [clients, setClients] = useState([]);
@@ -164,21 +165,25 @@ export default function AdminBotConfigs() {
           <p className="font-body-md text-body-md text-arctic-text-muted dark:text-molten-text-muted">Configure pricing and monitor neural output for deployed agents.</p>
         </div>
         <div className="flex gap-2">
+          <input 
+            type="text"
+            placeholder="Search bots"
+            className="px-4 py-2 bg-surface-container-lowest dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm text-on-surface dark:text-molten-text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
           <button 
             onClick={openCreateModal}
             className="px-4 py-2 rounded-lg bg-primary dark:bg-molten-primary text-white dark:text-molten-bg font-label-md text-label-md hover:brightness-110 hover:-translate-y-px active:translate-y-0 transition-all flex items-center gap-2"
           >
             <span className="material-symbols-outlined text-[18px]">add</span> Create Bot Config
           </button>
-          <button className="px-4 py-2 rounded-lg border border-outline-variant dark:border-[#2A345E] bg-surface dark:bg-molten-surface text-on-surface dark:text-molten-text font-label-md text-label-md hover:bg-surface-container-low dark:hover:bg-[#2A345E] transition-colors flex items-center gap-2">
-            <span className="material-symbols-outlined text-[18px]" data-icon="filter_list">filter_list</span> Filter
-          </button>
         </div>
       </div>
 
       {/* Grid of Audio Rack Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-gutter">
-        {bots.map((bot) => (
+        {bots.filter(b => b.name.toLowerCase().includes(search.toLowerCase()) || b.code.toLowerCase().includes(search.toLowerCase())).map((bot) => (
           <div key={bot.id} className="bot-card bg-arctic-surface dark:bg-molten-surface rounded-lg p-stack-md relative border border-outline-variant/30 dark:border-[#2A345E] flex flex-col min-h-[250px]">
             <div className="rack-screw top-2 left-2"></div>
             <div className="rack-screw top-2 right-2"></div>

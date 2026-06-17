@@ -4,14 +4,23 @@ import { setGlobalAdminKey, registerLogoutCallback } from '../api/admin';
 const AdminAuthContext = createContext(null);
 
 export function AdminAuthProvider({ children }) {
-  const [adminKey, setAdminKey] = useState(null);
+  const [adminKey, setAdminKey] = useState(() => {
+    const saved = localStorage.getItem('aakashvani_admin_key');
+    if (saved) {
+      setGlobalAdminKey(saved);
+      return saved;
+    }
+    return null;
+  });
 
   const login = (key) => {
+    localStorage.setItem('aakashvani_admin_key', key);
     setAdminKey(key);
     setGlobalAdminKey(key);
   };
 
   const logout = () => {
+    localStorage.removeItem('aakashvani_admin_key');
     setAdminKey(null);
     setGlobalAdminKey(null);
   };

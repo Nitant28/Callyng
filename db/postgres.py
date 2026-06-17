@@ -16,6 +16,9 @@ from loguru import logger
 
 _pool: asyncpg.Pool | None = None
 
+# Worst-case credits reserved per lead at dialer claim time (see dialer/cost_guard.py).
+RESERVE_CREDITS_PER_LEAD = Decimal("2.0")
+
 
 def live_call_grace_minutes() -> int:
     """How long an ``in_progress`` call_log still counts as a live dial."""
@@ -233,22 +236,19 @@ async def _init_connection(conn: asyncpg.Connection) -> None:
 
 
 async def create_db_pool(dsn: str) -> asyncpg.Pool:
-    global _pool
+    """Creates an asyncpg connection pool."""
     import os
-    if _pool is not None:
-        await _pool.close()
-        
     min_size = int(os.getenv("DB_POOL_MIN", "5"))
     max_size = int(os.getenv("DB_POOL_MAX", "50"))
     
-    _pool = await asyncpg.create_pool(
+    pool = await asyncpg.create_pool(
         dsn=dsn,
         min_size=min_size,
         max_size=max_size,
         command_timeout=30,
         init=_init_connection,
     )
-    return _pool
+    return pool
 
 
 async def init_pool() -> asyncpg.Pool | None:
@@ -259,7 +259,8 @@ async def init_pool() -> asyncpg.Pool | None:
     global _pool
     if _pool is not None:
         return _pool
-    return await create_db_pool(dsn)
+    _pool = await create_db_pool(dsn)
+    return _pool
 
 
 async def close_pool() -> None:
@@ -1152,13 +1153,13 @@ async def allocate_campaign_budget(
                 raise ValueError(f"Campaign not found: {campaign_id}")
 
 
-async def increment_budget_used(
+async def adjust_budget_used(
     conn: asyncpg.Connection,
     campaign_id: UUID | str,
     client_id: UUID | str,
-    credits_charged: Decimal | float,
+    delta: Decimal | float,
 ) -> None:
-    amount = Decimal(str(credits_charged))
+    amount = Decimal(str(delta))
     await conn.execute(
         """
         UPDATE campaigns
@@ -1169,6 +1170,72 @@ async def increment_budget_used(
         campaign_id,
         client_id,
     )
+
+
+async def increment_budget_used(
+    conn: asyncpg.Connection,
+    campaign_id: UUID | str,
+    client_id: UUID | str,
+    credits_charged: Decimal | float,
+) -> None:
+    await adjust_budget_used(conn, campaign_id, client_id, credits_charged)
+
+
+async def reserve_campaign_budget(
+    conn: asyncpg.Connection,
+    campaign_id: UUID | str,
+    client_id: UUID | str,
+    lead_count: int,
+) -> None:
+    if lead_count <= 0:
+        return
+    await adjust_budget_used(
+        conn,
+        campaign_id,
+        client_id,
+        RESERVE_CREDITS_PER_LEAD * lead_count,
+    )
+
+
+async def release_campaign_budget_reservation(
+    conn: asyncpg.Connection,
+    campaign_id: UUID | str,
+    client_id: UUID | str,
+    lead_count: int = 1,
+) -> None:
+    if lead_count <= 0:
+        return
+    await adjust_budget_used(
+        conn,
+        campaign_id,
+        client_id,
+        -RESERVE_CREDITS_PER_LEAD * lead_count,
+    )
+
+
+def budget_reserved_from_call_data(call_data: Any) -> Decimal:
+    if call_data is None:
+        return Decimal("0")
+    if isinstance(call_data, str):
+        try:
+            call_data = json.loads(call_data)
+        except json.JSONDecodeError:
+            return Decimal("0")
+    if not isinstance(call_data, dict):
+        return Decimal("0")
+    return Decimal(str(call_data.get("budget_reserved_credits") or 0))
+
+
+async def settle_call_budget(
+    conn: asyncpg.Connection,
+    campaign_id: UUID | str,
+    client_id: UUID | str,
+    credits_charged: Decimal | float,
+    budget_reserved_credits: Decimal | float,
+) -> None:
+    reserved = Decimal(str(budget_reserved_credits or 0))
+    delta = Decimal(str(credits_charged)) - reserved
+    await adjust_budget_used(conn, campaign_id, client_id, delta)
 
 
 async def try_settle_campaign_budget(
@@ -1465,6 +1532,27 @@ async def claim_leads_for_dialer(
         return []
     async with pool.acquire() as conn:
         async with conn.transaction():
+            camp = await conn.fetchrow(
+                """
+                SELECT budget_credits, budget_used_credits
+                FROM campaigns
+                WHERE id = $1 AND client_id = $2
+                FOR UPDATE
+                """,
+                campaign_id,
+                client_id,
+            )
+            if camp is None:
+                raise ValueError(f"Campaign not found: {campaign_id}")
+
+            remaining = Decimal(str(camp["budget_credits"])) - Decimal(
+                str(camp["budget_used_credits"])
+            )
+            budget_slots = int(remaining // RESERVE_CREDITS_PER_LEAD)
+            effective_slots = min(slots, budget_slots)
+            if effective_slots <= 0:
+                return []
+
             rows = await conn.fetch(
                 """
                 SELECT id, phone, name, metadata, lead_type, attempts, status
@@ -1490,7 +1578,7 @@ async def claim_leads_for_dialer(
                 """,
                 campaign_id,
                 client_id,
-                slots,
+                effective_slots,
                 live_call_grace_minutes(),
                 post_call_wrap_grace_minutes(),
             )
@@ -1512,6 +1600,7 @@ async def claim_leads_for_dialer(
                     from_status=r["status"],
                     to_status="calling",
                 )
+            await reserve_campaign_budget(conn, campaign_id, client_id, len(rows))
             return records_to_dicts(rows)
 
 
@@ -1603,6 +1692,9 @@ async def release_stuck_calling_leads(
                     from_status="calling",
                     to_status="pending",
                 )
+            await release_campaign_budget_reservation(
+                conn, campaign_id, client_id, len(rows)
+            )
             return len(rows)
 
 async def release_all_stuck_calling_leads(pool: asyncpg.Pool) -> int:
@@ -2064,6 +2156,7 @@ async def insert_call_log_start(
     started_at: datetime,
     call_data: dict | None = None,
     is_test_call: bool = False,
+    budget_reserved_credits: Decimal | float = 0,
 ) -> UUID:
     grace = live_call_grace_minutes()
     wrap = post_call_wrap_grace_minutes()
@@ -2105,6 +2198,9 @@ async def insert_call_log_start(
             data = dict(call_data) if call_data else {}
             if is_test_call:
                 data["is_test_call"] = True
+            reserved = Decimal(str(budget_reserved_credits or 0))
+            if reserved > 0:
+                data["budget_reserved_credits"] = float(reserved)
 
             row = await conn.fetchrow(
                 """
@@ -2446,82 +2542,6 @@ async def finalize_call_log(
         await pool_or_conn.execute(sql, *args)
     else:
         await pool_or_conn.execute(sql, *args)
-
-
-async def finalize_call_log_dev(
-    pool: asyncpg.Pool,
-    session_call_id: str,
-    client_id: UUID,
-    route: str,
-    started_at: datetime,
-    duration_seconds: int,
-    transcript: list[dict],
-    usage: dict,
-    extraction_json: dict | None,
-    cost_inr: float | None,
-) -> None:
-    """Upsert-style finalize for Phase 0 parallel path (dev client, no campaign)."""
-    ext = extraction_json or {}
-    trans = transcript
-    call_data = {"cost_inr": cost_inr}
-    existing = await pool.fetchrow(
-        "SELECT id FROM call_logs WHERE session_call_id = $1",
-        session_call_id,
-    )
-    if existing:
-        await pool.execute(
-            """
-            UPDATE call_logs SET
-                in_progress = FALSE,
-                ended_at = NOW(),
-                duration_seconds = $1,
-                route = $2,
-                transcript = $3::jsonb,
-                extraction_json = $4::jsonb,
-                usage_prompt_tokens = $5,
-                usage_completion_tokens = $6,
-                usage_total_tokens = $7,
-                usage_tts_characters = $8,
-                call_data = call_data || $9::jsonb
-            WHERE session_call_id = $10
-            """,
-            duration_seconds,
-            route if route == "cascaded" else route,
-            trans,
-            ext,
-            int(usage.get("llm_prompt_tokens") or 0),
-            int(usage.get("llm_completion_tokens") or 0),
-            int(usage.get("llm_total_tokens") or 0),
-            int(usage.get("tts_characters") or 0),
-            call_data,
-            session_call_id,
-        )
-    else:
-        pg_route = "cascaded" if route == "cascade" else route
-        await pool.execute(
-            """
-            INSERT INTO call_logs (
-                session_call_id, client_id, route, started_at, ended_at,
-                duration_seconds, in_progress, transcript, extraction_json,
-                usage_prompt_tokens, usage_completion_tokens,
-                usage_total_tokens, usage_tts_characters, call_data
-            )
-            VALUES ($1, $2, $3, $4, NOW(), $5, FALSE, $6::jsonb, $7::jsonb,
-                    $8, $9, $10, $11, $12::jsonb)
-            """,
-            session_call_id,
-            client_id,
-            pg_route,
-            started_at,
-            duration_seconds,
-            trans,
-            ext,
-            int(usage.get("llm_prompt_tokens") or 0),
-            int(usage.get("llm_completion_tokens") or 0),
-            int(usage.get("llm_total_tokens") or 0),
-            int(usage.get("tts_characters") or 0),
-            call_data,
-        )
 
 
 async def get_call_log(

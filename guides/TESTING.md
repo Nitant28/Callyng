@@ -1,8 +1,8 @@
 # Aakashvani — Phase 2 Testing Walkthrough
 
 ## Prerequisites
-- Postgres running: `just db-up` or `docker run -e POSTGRES_PASSWORD=devpassword -e POSTGRES_USER=aakashvani -e POSTGRES_DB=aakashvani -p 5432:5432 postgres:16`
-- `.env` filled in with `DATABASE_URL`, `ADMIN_API_KEY`, all AI provider keys, `PLIVO_*`, `NGROK_URL`
+- Postgres & Redis running: `just db-up`
+- `.env` filled in with `DATABASE_URL`, `REDIS_URL`, `ADMIN_API_KEY`, all AI provider keys, `PLIVO_*`, `NGROK_URL`
 - ngrok tunnel running: `just tunnel`
 - Server running: `just dev`
 

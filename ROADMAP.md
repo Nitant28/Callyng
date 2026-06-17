@@ -131,23 +131,23 @@ flowchart LR
 
 ### Infrastructure
 
-Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`docker-compose.yml`** with **`fastapi`** (backend, port **7860**), **`postgres`** (5432), **`redis`** (6379 — optional Phase 3 for SSE only), and **`n8n`** (5678 — **same server, internal only**, not exposed to clients). **nginx** terminates TLS (wildcard cert via **certbot**), routes **`*.aakashvani.in`** subdomains to FastAPI and the React SPA, and resolves tenant from the authenticated session (not separate server processes per client). **Cloudflare R2** stores call recordings (Phase 4). Local dev stays WSL2 + ngrok + uvicorn as today.
+Production target (**Hetzner CX32**: 4 vCPU / 8 GB RAM / ~€14/month) runs **`docker-compose.yml`** with **`fastapi`** (backend, port **7860**), **`postgres`** (5432), **`redis`** (6379 — core requirement for multi-worker state sync, rate limiting, and call locking), and **`n8n`** (5678 — **same server, internal only**, not exposed to clients). **nginx** terminates TLS (wildcard cert via **certbot**), routes **`*.aakashvani.in`** subdomains to FastAPI and the React SPA, and resolves tenant from the authenticated session (not separate server processes per client). **Cloudflare R2** stores call recordings (Phase 4). Local dev stays WSL2 + ngrok + uvicorn as today.
 
 | Component       | Tech                              | Status                                       |
 | --------------- | --------------------------------- | -------------------------------------------- |
 | Backend         | FastAPI + Python 3.12 + uv        | done                                         |
-| Persistence     | SQLite (Phase 0) → PostgreSQL 16  | SQLite done (Phase 0 calls); Postgres schema + pool done (Phase 2) |
-| Cache / pub-sub | Redis 7                           | maybe (Phase 3 SSE live monitor)             |
+| Persistence     | PostgreSQL 16 (Migrated from SQLite) | done                                         |
+| Cache / pub-sub | Redis 7                           | done                                         |
 | Vector DB       | ChromaDB                          | maybe — only if a client actually needs RAG  |
-| Frontend        | Operator CLI (`scripts/cli.py` + `just show-*`) + curl → React SPAs (monorepo `frontend/client/` and `frontend/admin/`) | CLI done; SPAs planned (Phase 2B) |
+| Frontend        | Operator CLI + React SPAs (Admin & Client dashboards via Vite/Vantage) | done                                         |
 | Reverse proxy   | nginx + wildcard TLS (`*.aakashvani.in`) | planned (deploy time)                 |
-| Containerization| Docker Compose (fastapi, postgres, n8n) | postgres service done locally; full stack at deploy |
+| Containerization| Docker Compose (fastapi, postgres, redis, n8n) | done                                         |
 | Server          | Hetzner CX32 (Germany)            | planned — consider AWS Mumbai if latency hurts |
 | Workflow        | n8n on localhost:5678, shared instance; **per-client workflows** built by us | planned |
 | Call recordings | Cloudflare R2 (signed URLs)       | planned (Phase 4)                            |
-| CRM integrations| via n8n (we design and maintain) | planned                                      |
+| CRM integrations| via n8n (we design and maintain) | planned |
 | Monitoring      | Uptime Kuma                       | planned                                      |
-| CI/CD           | GitHub Actions                    | planned                                      |
+| CI/CD           | GitHub Actions                    | planned |
 
 ### Dev environment (current)
 
@@ -482,7 +482,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 **Explicitly out of scope for Phase 1:** React analytics charts, bot config UI, Razorpay, call recordings, multi-tenant Postgres, white-label domains.
 
 ### Phase 2 — Multi-tenant + billing
-**Status:** mostly done (Phase 2A Backend is done, Phase 2B Frontend is in progress)  
+**Status:** done (June 2026)
 **Timeline:** ~3–4 weeks, started May 2026
 
 **Goal:** Onboard client #2 without code changes.
@@ -501,7 +501,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | Concurrent dialer — Postgres `FOR UPDATE SKIP LOCKED` | done |
 | Admin `/internal/*` endpoints (Phase 2A) | done |
 | Client `/api/*` endpoints (Phase 2B) | done |
-| Client React SPA (Phase 2B) | **in progress (current focus)** |
+| Client React SPA (Phase 2B) | done |
 | Subdomain routing: `client-a.aakashvani.in` via nginx | planned |
 
 **Pre-launch client workflow (priority order — build with Phase 2B SPA):**
@@ -510,10 +510,10 @@ These four items are the highest-priority **client-facing** work. Full spec: [§
 
 | Priority | Feature | Status |
 | -------- | ------- | ------ |
-| 1 | Data cleaning + pre-upload report | planned |
-| 2 | Draft-state lead management (edit, delete, manual add) | planned |
-| 3 | Single test call (from draft screen) | planned |
-| 4 | Lock on Start (`PATCH .../start` only from `draft`) | planned |
+| 1 | Data cleaning + pre-upload report | done |
+| 2 | Draft-state lead management (edit, delete, manual add) | done |
+| 3 | Single test call (from draft screen) | done |
+| 4 | Lock on Start (`PATCH .../start` only from `draft`) | done |
 
 **Phase 2 hardening — deferred:**
 - Snapshot `credits_per_minute` on campaign create
@@ -522,22 +522,22 @@ These four items are the highest-priority **client-facing** work. Full spec: [§
 - Per-client Plivo credentials (multi-account)
 
 ### Phase 3 — Bot config UI + analytics + call recordings
-**Status:** partially done (Ahead of schedule)  
+**Status:** done (June 2026)
 
 **Goal:** Clients configure bot personality within guardrails. Call recordings available in UI. Rich analytics.
 
 | Milestone | Status |
 | --------- | ------ |
-| Bot configuration UI (Admin CMS for `script_configs`) | **done (ahead of schedule)** |
-| Dynamic boilerplate extraction from Python to Database | **done (ahead of schedule)** |
-| Revision rollbacks for script configurations | **done (ahead of schedule)** |
+| Bot configuration UI (Admin CMS for `script_configs`) | done |
+| Dynamic boilerplate extraction from Python to Database | done |
+| Revision rollbacks for script configurations | done |
 | Plivo call recording → Cloudflare R2 upload post-call | planned |
 | Signed URL generation for audio player (1 hr expiry) | planned |
 | `/analytics` page: intent breakdown, duration distribution, cost/day | planned |
 | Campaign scheduling (run at specific time / recurring) | planned |
-| Live call monitor (SSE stream; optional Redis pub/sub) | planned |
+| Live call monitor (SSE stream; Redis pub/sub) | planned |
 
-**Bot configuration UI:** Admins now use the Molten UI React CMS (`AdminScriptConfigs.jsx`) to build dynamic templates. The system natively imports legacy python files to generate parameterized boilerplate. Clients will soon be able to fill structured forms linked directly to these controlled scripts.
+**Bot configuration UI:** Admins now use the Molten UI React CMS (`AdminScriptConfigs.jsx`) to build dynamic templates. The system natively imports legacy python files to generate parameterized boilerplate. Clients can now fill structured forms linked directly to these controlled scripts. We also added a campaigns management list and creation panel directly inside the client detail workspace to make campaign setup context-aware and smooth.
 
 ### Phase 4 — Inbound Bot Integration + WhatsApp + local dev transport
 **Status:** planned
@@ -638,7 +638,7 @@ If you (an LLM agent) are reading this to help build Aakashvani, here is the che
 9. Operator CLI — [guides/CLI_GUIDE.md](guides/CLI_GUIDE.md): inspect clients/campaigns/calls, debug extractions, reset leads; no HTTP server required.
 10. Docs: [guides/](guides/) (how-to), [handoff/](handoff/) (agent handoffs), root keeps only `README.md` + `ROADMAP.md`.
 
-**Not built yet:** Client React SPA, pre-launch workflow ([§10](#10-pre-launch-client-workflow-priorities)), Razorpay, campaign scheduling UI, SSE live monitor, recordings (Phase 3–4). See **Phase 2 hardening — deferred** above.
+**Not built yet:** Razorpay (Phase 5), campaign scheduling UI (Phase 3), SSE live monitor (Phase 3), Plivo call recordings (Phase 3). See **Phase 2 hardening — deferred** above.
 
 **Operator vs client API:** Clients use Bearer `/api/*` (`just upload-leads`, `watch-call`). Operators use `scripts/cli.py` or `just show-*` against Postgres directly.
 
@@ -708,16 +708,16 @@ Deprecated, do not use: `OpenAILLMContext`, `pipecat.transports.services.daily`,
 - `--reload` re-imports pipecat heavy modules on every save; don't use it when measuring latency.
 - After folder rename, `.venv` may have stale shebangs. Run `uv sync` to fix.
 
-### Next deliverables (Phase 2 — current)
+### Next deliverables (Phase 4 — current)
 
-Admin-first build order from [guides/aakash_arch.md §13](guides/aakash_arch.md):
+Next build order from the roadmap:
 
-1. ~~Postgres + full schema~~ (done — `docker-compose.yml`, `db/schema/001_initial.sql`, `just db-*`)
-2. `/internal/clients`, `/internal/bot-configs`, `/internal/campaigns`, credit top-up, webhook configs
-3. `post_call_processor`, lead upload (`LEAD_SCHEMA`), concurrent dialer
-4. Client React SPA (Phase 2B) + [pre-launch workflow priorities](#10-pre-launch-client-workflow-priorities) (data report → draft leads → test call → draft-only start)
+1. Plivo DID routing for inbound calls handled by Pipecat/Gemini bots.
+2. Inbound billing (direct credit deduction).
+3. WhatsApp Business API for post-call follow-ups.
+4. Browser testing path via WebRTC (`SmallWebRTCTransport`).
 
-**Phase 0** is complete. **`SmallWebRTCTransport`** is Phase 4.
+**Phases 0, 1, 2, and 3** are complete.
 
 ### Product model cheat sheet
 

@@ -1,11 +1,9 @@
-"""Process-local prefetch registry for database-driven script configs.
-
-Single-worker uvicorn only — same constraint as ``_PG_CONTEXT`` and ``_warmup_ready``.
-"""
+"""Redis-backed prefetch registry for database-driven script configs."""
 
 from __future__ import annotations
 
 import copy
+import json
 import re
 from string import Template
 from typing import Any
@@ -13,21 +11,41 @@ from typing import Any
 import asyncpg
 from loguru import logger
 
+from db.redis_client import get_redis
+
 _METADATA_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-
-# session_call_id -> rendered script config dict (see render_script_config output shape)
-PREFETCHED_CONFIGS: dict[str, dict[str, Any]] = {}
-
-
-def register_prefetched_config(session_call_id: str, config: dict[str, Any]) -> None:
-    if session_call_id and config:
-        PREFETCHED_CONFIGS[session_call_id] = config
+_PREFETCH_KEY_PREFIX = "prefetch:"
+PREFETCH_TTL_SECONDS = 300
 
 
-def pop_prefetched_config(session_call_id: str | None) -> dict[str, Any] | None:
+def _prefetch_key(session_call_id: str) -> str:
+    return f"{_PREFETCH_KEY_PREFIX}{session_call_id}"
+
+
+async def register_prefetched_config(session_call_id: str, config: dict[str, Any]) -> None:
+    if not session_call_id or not config:
+        return
+    redis = get_redis()
+    await redis.set(
+        _prefetch_key(session_call_id),
+        json.dumps(config, ensure_ascii=False),
+        ex=PREFETCH_TTL_SECONDS,
+    )
+
+
+async def pop_prefetched_config(session_call_id: str | None) -> dict[str, Any] | None:
     if not session_call_id:
         return None
-    return PREFETCHED_CONFIGS.pop(session_call_id, None)
+    redis = get_redis()
+    raw = await redis.getdel(_prefetch_key(session_call_id))
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Invalid prefetch JSON for session {}", session_call_id)
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def build_lead_dict(lead: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, str]:
@@ -127,20 +145,25 @@ def render_script_config(
 
 async def sweep_stale_prefetched_configs(pool: asyncpg.Pool) -> int:
     """Drop prefetch entries whose call_logs row is no longer in progress."""
-    keys = list(PREFETCHED_CONFIGS.keys())
-    if not keys:
+    redis = get_redis()
+    session_ids: list[str] = []
+    async for key in redis.scan_iter(match=f"{_PREFETCH_KEY_PREFIX}*"):
+        session_ids.append(key.removeprefix(_PREFETCH_KEY_PREFIX))
+    if not session_ids:
         return 0
+
     rows = await pool.fetch(
         """
         SELECT session_call_id FROM call_logs
         WHERE session_call_id = ANY($1::text[]) AND in_progress = FALSE
         """,
-        keys,
+        session_ids,
     )
     purged = 0
     for row in rows:
         sid = row["session_call_id"]
-        if PREFETCHED_CONFIGS.pop(sid, None) is not None:
+        deleted = await redis.delete(_prefetch_key(sid))
+        if deleted:
             purged += 1
     if purged:
         logger.info("Prefetch sweep purged {} stale config(s)", purged)

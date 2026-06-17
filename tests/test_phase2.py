@@ -18,8 +18,19 @@ def test_script_id_regex_rejects_traversal():
     assert not SCRIPT_RE.fullmatch("../secrets")
 
 
-def test_compliance_dnd_list():
+def test_compliance_dnd_list(monkeypatch):
     import compliance
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
+    _IST = ZoneInfo("Asia/Kolkata")
+    
+    class MockDatetime:
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 6, 1, 12, 0, tzinfo=_IST)
+            
+    monkeypatch.setattr(compliance, "datetime", MockDatetime)
 
     phone = "+919999999001"
     compliance.add_dnd(phone)
@@ -84,14 +95,15 @@ def test_resolve_post_call_preserves_callback_scheduled():
     not os.getenv("DATABASE_URL"),
     reason="DATABASE_URL not set",
 )
-def test_create_client_roundtrip():
+@pytest.mark.asyncio
+async def test_create_client_roundtrip():
     import asyncio
 
     import asyncpg
 
     from db import postgres as pg_db
 
-    async def _run():
+    if True:
         try:
             pool = await pg_db.create_db_pool(os.environ["DATABASE_URL"])
         except (OSError, asyncpg.PostgresError) as exc:
@@ -104,16 +116,16 @@ def test_create_client_roundtrip():
             assert found is not None
             assert str(found["id"]) == str(client_id)
         finally:
-            await pg_db.close_pool()
+            await pool.close()
 
-    asyncio.run(_run())
 
 
 @pytest.mark.skipif(
     not os.getenv("DATABASE_URL"),
     reason="DATABASE_URL not set",
 )
-def test_try_settle_campaign_budget_idempotent():
+@pytest.mark.asyncio
+async def test_try_settle_campaign_budget_idempotent():
     import asyncio
     from decimal import Decimal
     from uuid import uuid4
@@ -122,7 +134,7 @@ def test_try_settle_campaign_budget_idempotent():
 
     from db import postgres as pg_db
 
-    async def _run():
+    if True:
         try:
             pool = await pg_db.create_db_pool(os.environ["DATABASE_URL"])
         except (OSError, asyncpg.PostgresError) as exc:
@@ -137,7 +149,7 @@ def test_try_settle_campaign_budget_idempotent():
             """
         )
         if not has_col:
-            await pg_db.close_pool()
+            await pool.close()
             pytest.skip("Run just db-migrate for budget_returned_at column")
 
         try:
@@ -183,16 +195,16 @@ def test_try_settle_campaign_budget_idempotent():
             )
             assert returned_at is not None
         finally:
-            await pg_db.close_pool()
+            await pool.close()
 
-    asyncio.run(_run())
 
 
 @pytest.mark.skipif(
     not os.getenv("DATABASE_URL"),
     reason="DATABASE_URL not set",
 )
-def test_finalize_call_log_after_early_in_progress_clear():
+@pytest.mark.asyncio
+async def test_finalize_call_log_after_early_in_progress_clear():
     """Post-call must finalize even after mark_call_log_not_in_progress (dialer unblock)."""
     import asyncio
     import json
@@ -203,7 +215,7 @@ def test_finalize_call_log_after_early_in_progress_clear():
 
     from db import postgres as pg_db
 
-    async def _run():
+    if True:
         try:
             pool = await pg_db.create_db_pool(os.environ["DATABASE_URL"])
         except (OSError, asyncpg.PostgresError) as exc:
@@ -278,19 +290,19 @@ def test_finalize_call_log_after_early_in_progress_clear():
             assert row["turns"] == 1
             assert row["intent"] == "Not_Interested"
         finally:
-            await pg_db.close_pool()
-
-    asyncio.run(_run())
+            await pool.close()
 
 
-def test_auth_admin_rejects_client_token():
-    from fastapi.testclient import TestClient
+
+@pytest.mark.asyncio
+async def test_auth_admin_rejects_client_token(test_client):
+    
 
     import server
 
     os.environ.setdefault("ADMIN_API_KEY", "test-admin-key-for-pytest")
-    client = TestClient(server.app)
-    resp = client.get(
+    client = test_client
+    resp = await client.get(
         "/internal/clients",
         headers={"Authorization": "Bearer wrong-not-admin"},
     )

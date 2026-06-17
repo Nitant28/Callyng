@@ -338,3 +338,67 @@ Implemented the full frontend for the Script Configs CMS and updated the Bot Con
 - Made `client_id` optional on `GET /internal/script-configs` for global admin views.
 - Modified the dynamic `default_template` endpoint to natively extract boilerplate text from Python scripts (`pyramid_bilingual.py`) using `LeadContext` injection to preserve accurate parameterization.
 - Added pruning logic to limit script config revisions to 5 per script template, preventing runaway database bloat from excessive edits.
+
+## Addendum: E2E React UI, Test Cleanup & Auth Patches (2026-06-17)
+
+Implemented crucial frontend UX refinements, database test isolation patterns, and expanded admin client dashboard controls.
+
+### 1. Admin Authentication UX Patch
+- **Form State Normalization:** Fixed a UI refresh bug on [AdminLogin.jsx](file:///home/satyam/aakashvani/frontend/src/pages/admin/AdminLogin.jsx) where clicking "Retry Authentication" after a wrong password cleared the typed password.
+- **Typing Auto-Clear:** Typing a new character in the password field while in an `'error'` state now automatically resets the status to `'idle'`, clearing error states and restoring the "Authenticate" submit button.
+- **Enter Key Submission:** The form submission is now allowed in the `'error'` state, permitting immediate retry by pressing Enter.
+- **Improved Retry Button:** Clicking the "Retry Authentication" button now focuses and selects the existing typed key, allowing the operator to correct typos without starting from scratch.
+
+### 2. Automated Test Database Cleanup
+- **Post-run Cleanup Fixture:** Added an asynchronous PostgreSQL transaction cleanup block inside the session-scoped `setup_globals` fixture in [conftest.py](file:///home/satyam/aakashvani/tests/conftest.py).
+- **Exact Data Pruning:** At the end of every `pytest` run, the cleanup hook automatically prunes all test-generated clients, bot configurations, campaigns, leads, call logs, webhook configs, credit transactions, and script configs while preserving the default seeded test data (dev client `...0001`, sandbox campaigns, and bots).
+- **Constraint Order Enforcement:** Structured the cleanup sequence (`call_logs` -> `leads` -> `campaigns` -> `bot_configs` -> client child records -> `clients`) to completely prevent PostgreSQL foreign key constraint violations.
+
+### 3. Integrated Client-Level Campaigns & Creation Panel
+- **Client Ledger Campaigns Tab:** Added a dedicated **Campaigns** tab to the Admin Client Detail panel in [AdminClientDetail.jsx](file:///home/satyam/aakashvani/frontend/src/pages/admin/AdminClientDetail.jsx).
+- **Context-Aware Creation Modal:** Admins can now create campaigns directly inside a client's page. The modal automatically prefills and disables the client selection to prevent mistakes, showing only bot configs belonging to that specific client.
+- **Rich Analytics & Settings Drawer:** Built a sliding drawer panel to inspect campaign leads pipeline statistics and settings details directly.
+- **In-flight Action Handles:** Supported pausing (`stop`) and `cancel` actions on client-level campaigns, automatically refreshing the client's credit balances (deducting budgets or processing refunds) upon execution.
+- **Visual Grid Alignment:** Positioned the new tab content cleanly inside the React `<div className="relative min-h-[400px]">` Tabs Container, resolving a visual layout vertical gap.
+
+---
+
+## Addendum: Backend Hardening, Redis Integration & Multi-Worker State Sync (2026-06-17)
+
+Implemented robust state management, billing guarantees, validation sanitization, and background task safety to support high-concurrency production deployments across multiple workers.
+
+### 1. Atomic Budget Reservation (CostGuard Race Condition Fix)
+- **Problem:** Campaign budget validation was prone to race conditions. The dialer checked for $\ge 2.0$ credits before claiming $N$ leads, but since credits were only charged *after* calls hung up, a campaign with 2 credits could launch 10 parallel calls, resulting in massive overdrafts.
+- **Solution:** 
+  - Claiming leads now locks the campaign row via `FOR UPDATE`, checks the balance, and reserves a worst-case budget (2 credits per lead) by incrementing `campaigns.budget_used_credits` atomically inside the transaction.
+  - Dialer functions record the reservation in `call_logs.call_data`.
+  - On hangup, `post_call_processor.py` computes the final cost and executes `settle_call_budget` to refund the reservation and deduct the actual usage.
+  - Pre-dial failures immediately release the reservation.
+
+### 2. Redis Central State Store for Multi-Worker Support
+- **Problem:** Critical state like script prefetch maps, Plivo query-contexts, and startup warmup indicators were stored in local memory dictionaries. Under a multi-worker server setup (e.g. 4 uvicorn workers behind a load balancer), subsequent requests routed to a different worker would fail.
+- **Solution:** Added Redis image to `docker-compose.yml` and required `REDIS_URL` in `.env`.
+  - **Script Prefetch:** Moved to `prefetch:{session_call_id}` keys in Redis with a 5-minute TTL.
+  - **Plivo Context (`_PG_CONTEXT`):** Moved to `pgctx:{session_call_id}` keys in Redis.
+  - **Warmup Status:** `/answer` endpoint polls `redis.get("warmup_state")` up to 3 seconds, removing the in-memory asyncio Event.
+  - **Distributed Dialer Locking:** Implemented a Redis-based distributed lock (`dialer_lock:{campaign_id}`) with a token-based refresh mechanism so only one worker can process a campaign's dialer loop at a time.
+  - **Global Rate Limiting:** Configured `slowapi` to utilize `limits.aio.storage.RedisStorage`.
+
+### 3. Lifespan Teardown & Strong References for Background Tasks
+- **Problem:** Post-call extraction and webhooks were spawned via bare `asyncio.create_task()`. On server restart, these tasks would be killed mid-flight, losing customer data.
+- **Solution:**
+  - Created `background_tasks.py` to maintain strong references in a global set.
+  - Registered callbacks automatically remove tasks from the set upon completion.
+  - Wired `await drain_background_tasks()` in FastAPI's lifespan teardown to guarantee all active webhook and extraction tasks complete before database and redis connections close.
+
+### 4. PG Context Recovery Fallback
+- **Problem:** If Redis context was lost/expired, calls fell back to writing to a hardcoded developer client ID, losing the tenant context.
+- **Solution:** Deleted the developer client ID fallback. Replaced with database lookup `resolve_pg_context` querying `call_logs` directly to restore context dynamically.
+
+### 5. API Route Normalization and JSON Hardening
+- **Route Naming:** Standardized all route references from legacy `cascade` to `cascaded` across server configurations, CLI scripts, and tests (with backward-compatible mapping).
+- **JSON Sanitization:** Hardened `api/script_config_validation.py` to reject double-stringified JSON and automatically parse JSON string formats to prevent database serialization errors.
+
+### 6. Script Template Searching & Filtering
+- **Admin Search Bar:** Added template search functionality inside `AdminScriptConfigs.jsx` to filter template rows by script identifier or client name, ensuring fast navigation as the template library grows.
+

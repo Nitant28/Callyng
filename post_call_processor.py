@@ -115,6 +115,44 @@ def resolve_post_call_transition(
     return new_status, next_at, sched_cb, fire_webhook
 
 
+async def _finalize_call_log_and_settle_budget(
+    conn: asyncpg.Connection,
+    *,
+    session_call_id: str,
+    duration_seconds: int,
+    outcome: str,
+    extraction_json: dict,
+    billed_minutes: int,
+    credits_charged: float,
+    usage: dict,
+    transcript: list[dict],
+    extraction_model: str | None,
+    extraction_error: str | None,
+    campaign_id: UUID,
+    client_id: UUID,
+    call_log: dict | None,
+) -> None:
+    await pg_db.finalize_call_log(
+        conn,
+        session_call_id,
+        duration_seconds,
+        outcome,
+        extraction_json,
+        billed_minutes,
+        credits_charged,
+        usage,
+        transcript=transcript,
+        extraction_model=extraction_model,
+        extraction_error=extraction_error,
+    )
+    reserved = pg_db.budget_reserved_from_call_data(
+        call_log.get("call_data") if call_log else None
+    )
+    await pg_db.settle_call_budget(
+        conn, campaign_id, client_id, credits_charged, reserved
+    )
+
+
 async def process_post_call(
     pool: asyncpg.Pool,
     session_call_id: str,
@@ -182,18 +220,21 @@ async def process_post_call(
                 conn, lead_id, client_id
             )
             if active is None:
-                await pg_db.finalize_call_log(
+                await _finalize_call_log_and_settle_budget(
                     conn,
-                    session_call_id,
-                    duration_seconds,
-                    outcome,
-                    extraction_json or {},
-                    billed_minutes,
-                    credits_charged,
-                    usage,
+                    session_call_id=session_call_id,
+                    duration_seconds=duration_seconds,
+                    outcome=outcome,
+                    extraction_json=extraction_json or {},
+                    billed_minutes=billed_minutes,
+                    credits_charged=credits_charged,
+                    usage=usage,
                     transcript=transcript,
                     extraction_model=extraction_model,
                     extraction_error=extraction_error,
+                    campaign_id=campaign_id,
+                    client_id=client_id,
+                    call_log=call_log,
                 )
                 logger.debug(
                     "post_call skipped lead/counters (not active) lead={} call={}",
@@ -236,18 +277,21 @@ async def process_post_call(
                     sched_cb,
                 )
                 if not updated:
-                    await pg_db.finalize_call_log(
+                    await _finalize_call_log_and_settle_budget(
                         conn,
-                        session_call_id,
-                        duration_seconds,
-                        outcome,
-                        extraction_json or {},
-                        billed_minutes,
-                        credits_charged,
-                        usage,
+                        session_call_id=session_call_id,
+                        duration_seconds=duration_seconds,
+                        outcome=outcome,
+                        extraction_json=extraction_json or {},
+                        billed_minutes=billed_minutes,
+                        credits_charged=credits_charged,
+                        usage=usage,
                         transcript=transcript,
                         extraction_model=extraction_model,
                         extraction_error=extraction_error,
+                        campaign_id=campaign_id,
+                        client_id=client_id,
+                        call_log=call_log,
                     )
                     logger.debug(
                         "post_call lead status race lead={} call={}",
@@ -255,21 +299,21 @@ async def process_post_call(
                         session_call_id,
                     )
                 else:
-                    await pg_db.finalize_call_log(
+                    await _finalize_call_log_and_settle_budget(
                         conn,
-                        session_call_id,
-                        duration_seconds,
-                        outcome,
-                        extraction_json or {},
-                        billed_minutes,
-                        credits_charged,
-                        usage,
+                        session_call_id=session_call_id,
+                        duration_seconds=duration_seconds,
+                        outcome=outcome,
+                        extraction_json=extraction_json or {},
+                        billed_minutes=billed_minutes,
+                        credits_charged=credits_charged,
+                        usage=usage,
                         transcript=transcript,
                         extraction_model=extraction_model,
                         extraction_error=extraction_error,
-                    )
-                    await pg_db.increment_budget_used(
-                        conn, campaign_id, client_id, credits_charged
+                        campaign_id=campaign_id,
+                        client_id=client_id,
+                        call_log=call_log,
                     )
                     await pg_db.increment_campaign_counters(
                         conn, campaign_id, from_status=from_status, to_status=new_status

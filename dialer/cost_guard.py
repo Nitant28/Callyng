@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
 from uuid import UUID
 
 import asyncpg
 
 from db import postgres as pg_db
 
-MIN_REMAINING_CREDITS = Decimal("2.0")
+MIN_REMAINING_CREDITS = pg_db.RESERVE_CREDITS_PER_LEAD
 
 
 async def check_campaign_budget(

@@ -8,6 +8,7 @@ import os
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 
 import aiohttp
@@ -15,7 +16,7 @@ from loguru import logger
 
 from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
-from dialer.cost_guard import check_campaign_budget
+from dialer.cost_guard import MIN_REMAINING_CREDITS, check_campaign_budget
 from telephony import build_hangup_url, make_plivo_call
 from script_prefetch import (
     build_lead_dict,
@@ -24,6 +25,11 @@ from script_prefetch import (
     render_script_config,
 )
 from script_runtime import build_post_call_snapshot_from_prefetch
+from dialer.dialer_lock import (
+    acquire_dialer_lock,
+    refresh_dialer_lock,
+    release_dialer_lock,
+)
 from dialer.plivo_balance import (
     check_plivo_balance,
     exception_is_plivo_balance_exhausted,
@@ -47,6 +53,17 @@ async def _release_lead_to_pending(
 ) -> None:
     """Return a claimed lead to pending when compliance blocks the dial."""
     lead_id = UUID(str(lead["id"]))
+    grace = pg_db.live_call_grace_minutes()
+    has_live_call = await pool.fetchval(
+        """
+        SELECT 1 FROM call_logs
+        WHERE lead_id = $1 AND in_progress = TRUE
+          AND started_at > NOW() - ($2 * INTERVAL '1 minute')
+        LIMIT 1
+        """,
+        lead_id,
+        grace,
+    )
     if defer_until:
         await pool.execute(
             """
@@ -76,6 +93,12 @@ async def _release_lead_to_pending(
         from_status="calling",
         to_status="pending",
     )
+    if not has_live_call:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await pg_db.release_campaign_budget_reservation(
+                    conn, campaign_id, client_id, 1
+                )
 
 
 async def pause_campaign(
@@ -123,50 +146,56 @@ async def fire_call(
     campaign_id: UUID | None = None,
     dial_phone: str | None = None,
     is_test_call: bool = False,
+    budget_reserved_credits: Decimal | float = 0,
 ) -> str | None:
     """Place outbound call via Plivo. Returns session_call_id or None if skipped."""
     call_id = str(uuid.uuid4())
     phone = dial_phone or lead["phone"]
     cid = client_id or UUID(str(campaign["client_id"]))
-    camp_id = campaign_id or UUID(str(campaign["id"]))
-    lead_uuid = UUID(str(lead["id"]))
+    camp_id = campaign_id or (UUID(str(campaign["id"])) if campaign.get("id") else None)
+    lead_uuid = UUID(str(lead["id"])) if lead.get("id") else None
+    bot_config_id = UUID(str(bot_config["id"])) if bot_config.get("id") else None
+    
     if pool is None:
         pool = pg_db.get_pool()
+        
     grace = pg_db.live_call_grace_minutes()
     wrap = pg_db.post_call_wrap_grace_minutes()
-    live = await pool.fetchval(
-        """
-        SELECT 1 FROM call_logs
-        WHERE lead_id = $1 AND in_progress = TRUE
-          AND started_at > NOW() - ($2 * INTERVAL '1 minute')
-        LIMIT 1
-        """,
-        lead_uuid,
-        grace,
-    )
-    if live:
-        logger.warning(
-            "Skipping duplicate Plivo dial for lead {} — in_progress call_log exists",
+    
+    if lead_uuid:
+        live = await pool.fetchval(
+            """
+            SELECT 1 FROM call_logs
+            WHERE lead_id = $1 AND in_progress = TRUE
+              AND started_at > NOW() - ($2 * INTERVAL '1 minute')
+            LIMIT 1
+            """,
             lead_uuid,
+            grace,
         )
-        return
-    recent_end = await pool.fetchval(
-        """
-        SELECT 1 FROM call_logs
-        WHERE lead_id = $1
-          AND ended_at IS NOT NULL
-          AND ended_at > NOW() - ($2 * INTERVAL '1 minute')
-        LIMIT 1
-        """,
-        lead_uuid,
-        wrap,
-    )
-    if recent_end:
-        logger.warning(
-            "Skipping Plivo dial for lead {} — post_call wrap-up in progress",
+        if live:
+            logger.warning(
+                "Skipping duplicate Plivo dial for lead {} — in_progress call_log exists",
+                lead_uuid,
+            )
+            return
+        recent_end = await pool.fetchval(
+            """
+            SELECT 1 FROM call_logs
+            WHERE lead_id = $1
+              AND ended_at IS NOT NULL
+              AND ended_at > NOW() - ($2 * INTERVAL '1 minute')
+            LIMIT 1
+            """,
             lead_uuid,
+            wrap,
         )
-        return
+        if recent_end:
+            logger.warning(
+                "Skipping Plivo dial for lead {} — post_call wrap-up in progress",
+                lead_uuid,
+            )
+            return
 
     meta = lead.get("metadata") or {}
     if isinstance(meta, str):
@@ -183,10 +212,10 @@ async def fire_call(
         "city": meta.get("city", ""),
         "_session_call_id": call_id,
         "_pg": {
-            "client_id": str(campaign["client_id"]),
-            "campaign_id": str(campaign["id"]),
-            "lead_id": str(lead["id"]),
-            "bot_config_id": str(bot_config["id"]),
+            "client_id": str(cid),
+            "campaign_id": str(camp_id) if camp_id else "",
+            "lead_id": str(lead_uuid) if lead_uuid else "",
+            "bot_config_id": str(bot_config_id) if bot_config_id else "",
             "route": bot_config["route"],
             "script_id": bot_config["script_id"],
             "max_call_minutes": campaign.get("max_call_minutes"),
@@ -216,7 +245,8 @@ async def fire_call(
                 row.get("route"),
                 bot_config["route"],
             )
-            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            if lead_uuid:
+                await _release_lead_to_pending(pool, lead, camp_id, cid)
             return
         lead_dict = build_lead_dict(lead, meta)
         try:
@@ -230,9 +260,10 @@ async def fire_call(
                 call_id,
                 exc,
             )
-            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            if lead_uuid:
+                await _release_lead_to_pending(pool, lead, camp_id, cid)
             return
-        register_prefetched_config(call_id, config)
+        await register_prefetched_config(call_id, config)
         prefetch_registered = True
         call_data_for_insert = build_post_call_snapshot_from_prefetch(
             config,
@@ -256,11 +287,12 @@ async def fire_call(
             client_id=cid,
             campaign_id=camp_id,
             lead_id=lead_uuid,
-            bot_config_id=UUID(str(bot_config["id"])),
+            bot_config_id=bot_config_id,
             route=bot_config["route"],
             started_at=started_at,
             call_data=call_data_for_insert,
             is_test_call=is_test_call,
+            budget_reserved_credits=budget_reserved_credits,
         )
         await make_plivo_call(
             session,
@@ -279,14 +311,15 @@ async def fire_call(
         return call_id
     except Exception as exc:
         if prefetch_registered:
-            pop_prefetched_config(call_id)
+            await pop_prefetched_config(call_id)
         logger.error(
             "Plivo dial failed for lead {} (call_id={}): {}",
             lead_uuid,
             call_id,
             exc,
         )
-        await _release_lead_to_pending(pool, lead, camp_id, cid)
+        if lead_uuid:
+            await _release_lead_to_pending(pool, lead, camp_id, cid)
         raise
 
 
@@ -297,6 +330,7 @@ async def run_campaign_dialer(
     *,
     session: aiohttp.ClientSession,
     host: str = "localhost:7860",
+    lock_token: str,
 ) -> None:
     """Main dialer loop per guides/aakash_arch.md §7."""
     logger.info("Dialer started for campaign {}", campaign_id)
@@ -326,6 +360,13 @@ async def run_campaign_dialer(
     )
     try:
         while True:
+            if not await refresh_dialer_lock(campaign_id, lock_token):
+                logger.warning(
+                    "Dialer lock lost for campaign {}; stopping",
+                    campaign_id,
+                )
+                break
+
             campaign = await pg_db.get_campaign(pool, campaign_id, client_id)
             if campaign is None:
                 break
@@ -500,6 +541,7 @@ async def run_campaign_dialer(
                         pool=pool,
                         client_id=client_id,
                         campaign_id=campaign_id,
+                        budget_reserved_credits=MIN_REMAINING_CREDITS,
                     )
                 )
             if tasks:
@@ -525,9 +567,10 @@ async def run_campaign_dialer(
     finally:
         key = _campaign_key(campaign_id, client_id)
         _active_tasks.pop(key, None)
+        await release_dialer_lock(campaign_id, lock_token)
 
 
-def start_dialer(
+async def start_dialer(
     app,
     campaign_id: UUID,
     client_id: UUID,
@@ -541,9 +584,17 @@ def start_dialer(
     existing = _active_tasks.get(key)
     if existing and not existing.done():
         logger.warning(
-            "Dialer already running for campaign {} (key={})",
+            "Dialer already running locally for campaign {} (key={})",
             campaign_id,
             key,
+        )
+        return
+
+    lock_token = await acquire_dialer_lock(campaign_id)
+    if lock_token is None:
+        logger.warning(
+            "Dialer lock not acquired for campaign {} — another worker is active",
+            campaign_id,
         )
         return
 
@@ -556,6 +607,7 @@ def start_dialer(
             client_id,
             session=app.state.session,
             host=h,
+            lock_token=lock_token,
         )
 
     task = asyncio.create_task(_runner())

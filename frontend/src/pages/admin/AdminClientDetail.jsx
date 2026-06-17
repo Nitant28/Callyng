@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import adminApi from '../../api/admin';
 import './AdminClientDetail.css';
@@ -6,7 +6,7 @@ import './AdminClientDetail.css';
 export default function AdminClientDetail() {
   const { id } = useParams();
   
-  const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'ledger', 'webhooks'
+  const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'ledger', 'webhooks', 'campaigns'
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalClosing, setModalClosing] = useState(false);
   const [adjustAmount, setAdjustAmount] = useState('');
@@ -16,6 +16,34 @@ export default function AdminClientDetail() {
   const [client, setClient] = useState(null);
   const [ledger, setLedger] = useState([]);
   const [webhooks, setWebhooks] = useState([]);
+
+  // Campaigns-related state
+  const [campaigns, setCampaigns] = useState([]);
+  const [botConfigs, setBotConfigs] = useState([]);
+  const [isCampaignModalOpen, setIsCampaignModalOpen] = useState(false);
+  const [campaignModalClosing, setCampaignModalClosing] = useState(false);
+  const [createCampaignData, setCreateCampaignData] = useState({
+    bot_config_id: '',
+    name: '',
+    budget_credits: 0,
+    max_concurrent_calls: 5,
+    calls_per_minute: 10,
+    max_attempts: 3,
+    retry_delay_minutes: 120,
+    max_call_minutes: 10
+  });
+  const [selectedCampaign, setSelectedCampaign] = useState(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [copiedCampaignId, setCopiedCampaignId] = useState(null);
+
+  const fetchCampaigns = useCallback(async () => {
+    try {
+      const campaignsRes = await adminApi.get('/internal/campaigns', { params: { client_id: id } });
+      setCampaigns(campaignsRes.data.campaigns || []);
+    } catch (error) {
+      console.error("Failed to fetch campaigns", error);
+    }
+  }, [id]);
 
   useEffect(() => {
     const fetchDetails = async () => {
@@ -50,16 +78,20 @@ export default function AdminClientDetail() {
           status: wh.active ? 'Active' : 'Disabled'
         }));
 
+        const botsRes = await adminApi.get('/internal/bot-configs', { params: { client_id: id } });
+
         setClient(mappedClient);
         setLedger(txsMapped);
         setWebhooks(mappedWebhooks);
+        setBotConfigs((botsRes.data.bot_configs || []).filter(b => b.active));
+        await fetchCampaigns();
       } catch (error) {
         console.error("Failed to fetch client details", error);
       }
     };
     
     fetchDetails();
-  }, [id]);
+  }, [id, fetchCampaigns]);
 
   const openModal = () => {
     setIsModalOpen(true);
@@ -139,6 +171,104 @@ export default function AdminClientDetail() {
     }
   };
 
+  const openCampaignModal = () => {
+    setIsCampaignModalOpen(true);
+    setCampaignModalClosing(false);
+  };
+
+  const closeCampaignModal = () => {
+    setCampaignModalClosing(true);
+    setTimeout(() => {
+      setIsCampaignModalOpen(false);
+      setCampaignModalClosing(false);
+    }, 200);
+  };
+
+  const handleCreateCampaign = async (e) => {
+    e.preventDefault();
+    try {
+      await adminApi.post('/internal/campaigns', {
+        client_id: id,
+        bot_config_id: createCampaignData.bot_config_id,
+        name: createCampaignData.name,
+        budget_credits: Number(createCampaignData.budget_credits),
+        max_concurrent_calls: Number(createCampaignData.max_concurrent_calls),
+        calls_per_minute: Number(createCampaignData.calls_per_minute),
+        max_attempts: Number(createCampaignData.max_attempts),
+        retry_delay_minutes: Number(createCampaignData.retry_delay_minutes),
+        max_call_minutes: Number(createCampaignData.max_call_minutes) || null
+      });
+      closeCampaignModal();
+      setCreateCampaignData({
+        bot_config_id: '', name: '', budget_credits: 0,
+        max_concurrent_calls: 5, calls_per_minute: 10, max_attempts: 3, retry_delay_minutes: 120, max_call_minutes: 10
+      });
+      fetchCampaigns();
+      
+      // Update balance
+      const clientRes = await adminApi.get(`/internal/clients/${id}`);
+      const clientData = clientRes.data.client || clientRes.data;
+      setClient(prev => ({
+        ...prev,
+        balance_credits: clientData.balance_credits,
+        balance: clientData.balance_credits
+      }));
+    } catch (err) {
+      console.error("Failed to create campaign", err);
+      alert(err.customErrorMessage || "Failed to create campaign. Check client balance.");
+    }
+  };
+
+  const handleCampaignAction = async (action, campId) => {
+    if (action === 'stop') {
+      if (!window.confirm("Pause this campaign and release stuck leads?")) return;
+      try {
+        await adminApi.patch(`/internal/campaigns/${campId}/stop`);
+        fetchCampaigns();
+      } catch (err) {
+        alert(err.customErrorMessage || "Failed to stop campaign");
+      }
+    } else if (action === 'cancel') {
+      if (!window.confirm("Cancel this campaign, fail pending leads, and refund budget?")) return;
+      try {
+        const res = await adminApi.patch(`/internal/campaigns/${campId}/cancel`);
+        alert(`Cancelled! Refunded ₹${res.data.credits_returned?.toFixed(2)}`);
+        fetchCampaigns();
+        
+        // Re-fetch client details to reflect the refunded budget
+        const clientRes = await adminApi.get(`/internal/clients/${id}`);
+        const clientData = clientRes.data.client || clientRes.data;
+        setClient(prev => ({
+          ...prev,
+          balance_credits: clientData.balance_credits,
+          balance: clientData.balance_credits
+        }));
+      } catch (err) {
+        alert(err.customErrorMessage || "Failed to cancel campaign");
+      }
+    }
+  };
+
+  const handleCopyCampaignId = (e, campaignId) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(campaignId);
+    setCopiedCampaignId(campaignId);
+    setTimeout(() => setCopiedCampaignId(null), 2000);
+  };
+
+  const renderCampaignStatus = (status) => {
+    const colors = {
+      draft: 'bg-surface-container-high dark:bg-inverse-surface text-on-surface dark:text-molten-text',
+      running: 'bg-primary/20 dark:bg-molten-primary/20 text-primary dark:text-molten-primary border-primary/30 dark:border-molten-primary/30',
+      pausing: 'bg-arctic-warning/20 dark:bg-molten-warning/20 text-arctic-warning dark:text-molten-warning border-arctic-warning/30 dark:border-molten-warning/30',
+      paused: 'bg-arctic-warning/10 dark:bg-molten-warning/10 text-arctic-warning dark:text-molten-warning',
+      completed: 'bg-secondary/20 dark:bg-[#5cf7db]/20 text-secondary dark:text-[#5cf7db] border-secondary/30 dark:border-[#5cf7db]/30',
+      cancelled: 'bg-error-container dark:bg-molten-error/20 text-on-error-container dark:text-molten-error border-error/30 dark:border-molten-error/30'
+    };
+    const c = colors[status] || 'bg-surface-container dark:bg-inverse-surface text-on-surface dark:text-molten-text';
+    return <span className={`px-2 py-1 text-xs rounded-full border border-transparent capitalize ${c}`}>{status}</span>;
+  };
+
   if (!client) {
     return <div className="p-8 text-center">Loading...</div>;
   }
@@ -192,6 +322,12 @@ export default function AdminClientDetail() {
             onClick={() => setActiveTab('overview')}
           >
             Overview
+          </button>
+          <button 
+            className={`font-label-md text-label-md pb-3 px-1 transition-colors ${activeTab === 'campaigns' ? 'text-primary dark:text-molten-primary font-bold border-b-2 border-primary dark:border-molten-primary' : 'text-on-surface-variant dark:text-molten-text-muted hover:text-on-surface dark:hover:text-molten-text'}`}
+            onClick={() => setActiveTab('campaigns')}
+          >
+            Campaigns
           </button>
           <button 
             className={`font-label-md text-label-md pb-3 px-1 transition-colors ${activeTab === 'ledger' ? 'text-primary dark:text-molten-primary font-bold border-b-2 border-primary dark:border-molten-primary' : 'text-on-surface-variant dark:text-molten-text-muted hover:text-on-surface dark:hover:text-molten-text'}`}
@@ -318,7 +454,101 @@ export default function AdminClientDetail() {
               </table>
             </div>
           </div>
+
+          {/* Campaigns Tab */}
+          <div className={`tab-content ${activeTab === 'campaigns' ? 'active' : ''}`}>
+            <div className="flex flex-col gap-4">
+              <div className="flex justify-between items-center mb-2">
+                <div>
+                  <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface dark:text-molten-text">Campaigns</h3>
+                  <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted">Monitor and create campaigns for this client.</p>
+                </div>
+                <button 
+                  className="bg-primary text-on-primary dark:bg-molten-primary rounded-lg py-2 px-4 font-label-md flex items-center gap-2 hover:-translate-y-[1px] transition-transform active:scale-95 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]"
+                  onClick={openCampaignModal}
+                >
+                  <span className="material-symbols-outlined text-[18px]">add</span>
+                  Create Campaign
+                </button>
+              </div>
+              
+              <div className="bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-lg shadow-[0_4px_20px_rgba(22,71,232,0.05)] dark:shadow-none overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-[700px]">
+                    <thead>
+                      <tr className="border-b border-outline-variant dark:border-[#2A345E] bg-surface-container-lowest dark:bg-[#1A1E36]">
+                        <th className="py-3 px-4 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider">Name</th>
+                        <th className="py-3 px-4 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider text-right">Budget</th>
+                        <th className="py-3 px-4 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider text-right">Leads</th>
+                        <th className="py-3 px-4 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider">Status</th>
+                        <th className="py-3 px-4 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="font-body-md text-body-md text-on-surface dark:text-molten-text divide-y divide-outline-variant/50 dark:divide-[#2A345E]/50">
+                      {campaigns.map(camp => (
+                        <tr 
+                          key={camp.id} 
+                          onClick={() => { setSelectedCampaign(camp); setIsDrawerOpen(true); }}
+                          className="hover:bg-surface-container/30 dark:hover:bg-molten-bg/50 transition-colors cursor-pointer group"
+                        >
+                          <td className="py-3 px-4 font-medium">
+                            <div className="flex flex-col">
+                              <span>{camp.name}</span>
+                              <div className="flex items-center gap-1.5 mt-0.5 group/uuid" onClick={(e) => handleCopyCampaignId(e, camp.id)}>
+                                <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted font-mono select-all">
+                                  {camp.id.substring(0, 8)}...
+                                </span>
+                                <button 
+                                  className="opacity-0 group-hover/uuid:opacity-100 p-0.5 hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded text-on-surface-variant dark:text-molten-text transition-all"
+                                  title="Copy Full Campaign UUID"
+                                >
+                                  <span className="material-symbols-outlined text-[12px]">
+                                    {copiedCampaignId === camp.id ? 'check' : 'content_copy'}
+                                  </span>
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums">
+                            ₹{camp.budget_credits?.toFixed(2)}<br/>
+                            <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted">Used: ₹{camp.budget_used_credits?.toFixed(2)}</span>
+                          </td>
+                          <td className="py-3 px-4 text-right tabular-nums">
+                            {camp.total_leads}<br/>
+                            <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted">{camp.completed_leads} done</span>
+                          </td>
+                          <td className="py-3 px-4">{renderCampaignStatus(camp.status)}</td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              {(camp.status === 'running' || camp.status === 'pausing') && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); handleCampaignAction('stop', camp.id); }}
+                                  className="px-2 py-1 text-xs rounded bg-arctic-warning/20 dark:bg-molten-warning/20 text-arctic-warning dark:text-molten-warning hover:opacity-80"
+                                >Stop</button>
+                              )}
+                              {(camp.status !== 'completed' && camp.status !== 'cancelled') && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); handleCampaignAction('cancel', camp.id); }}
+                                  className="px-2 py-1 text-xs rounded bg-error-container dark:bg-molten-error/20 text-on-error-container dark:text-molten-error hover:opacity-80"
+                                >Cancel</button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {campaigns.length === 0 && (
+                        <tr>
+                          <td colSpan="5" className="p-8 text-center text-arctic-text-muted dark:text-molten-text-muted">No campaigns found for this client.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
+
       </div>
 
       {/* Adjust Balance Modal Overlay */}
@@ -380,6 +610,181 @@ export default function AdminClientDetail() {
               >
                 Save Adjustment
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+
+      {/* Create Campaign Modal Overlay */}
+      {isCampaignModalOpen && (
+        <div 
+          className="fixed inset-0 bg-[#0c1941]/40 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeCampaignModal();
+          }}
+        >
+          <div className={`bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col ${campaignModalClosing ? 'modal-exit-active' : 'modal-enter-active'}`}>
+            <div className="px-6 py-5 border-b border-outline-variant dark:border-[#2A345E] bg-surface-container-lowest dark:bg-[#1A1E36] flex justify-between items-center">
+              <h3 className="font-headline-sm font-bold text-on-surface dark:text-molten-text">Create Campaign</h3>
+              <button 
+                className="text-on-surface-variant dark:text-molten-text-muted hover:text-on-surface dark:hover:text-molten-text transition-colors"
+                onClick={closeCampaignModal}
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <form onSubmit={handleCreateCampaign} className="p-6 flex flex-col gap-4 max-h-[70vh] overflow-y-auto">
+              <div>
+                <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Client</label>
+                <input 
+                  disabled
+                  className="w-full bg-surface-container-high dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-4 py-2 font-body-md text-body-md text-arctic-text-muted dark:text-molten-text-muted opacity-60" 
+                  type="text" 
+                  value={client.name} 
+                />
+              </div>
+              <div>
+                <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Bot Config</label>
+                <select 
+                  required
+                  className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
+                  value={createCampaignData.bot_config_id}
+                  onChange={e => setCreateCampaignData({...createCampaignData, bot_config_id: e.target.value})}
+                >
+                  <option className="dark:bg-[#1A1C24]" value="">Select a bot config...</option>
+                  {botConfigs.map(b => (
+                    <option className="dark:bg-[#1A1C24]" key={b.id} value={b.id}>
+                      {b.name} ({b.route})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Campaign Name</label>
+                <input 
+                  required 
+                  className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" 
+                  type="text" 
+                  value={createCampaignData.name} 
+                  onChange={e => setCreateCampaignData({...createCampaignData, name: e.target.value})} 
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Budget (₹)</label>
+                  <input 
+                    required 
+                    className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" 
+                    type="number" 
+                    step="0.01" 
+                    min="0" 
+                    value={createCampaignData.budget_credits} 
+                    onChange={e => setCreateCampaignData({...createCampaignData, budget_credits: e.target.value})} 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Concurrent Calls</label>
+                  <input 
+                    required 
+                    className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" 
+                    type="number" 
+                    min="1" 
+                    value={createCampaignData.max_concurrent_calls} 
+                    onChange={e => setCreateCampaignData({...createCampaignData, max_concurrent_calls: e.target.value})} 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Calls / Min</label>
+                  <input 
+                    required 
+                    className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" 
+                    type="number" 
+                    min="1" 
+                    value={createCampaignData.calls_per_minute} 
+                    onChange={e => setCreateCampaignData({...createCampaignData, calls_per_minute: e.target.value})} 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Max Call Mins</label>
+                  <input 
+                    className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" 
+                    type="number" 
+                    min="1" 
+                    value={createCampaignData.max_call_minutes} 
+                    onChange={e => setCreateCampaignData({...createCampaignData, max_call_minutes: e.target.value})} 
+                  />
+                </div>
+              </div>
+              <div className="pt-4 flex justify-end gap-2 border-t border-outline-variant dark:border-[#2A345E] bg-surface-container-lowest dark:bg-[#1A1E36] mt-2">
+                <button 
+                  type="button" 
+                  onClick={closeCampaignModal} 
+                  className="px-4 py-2 rounded-lg text-on-surface-variant dark:text-molten-text border border-outline-variant dark:border-[#2A345E] hover:bg-surface-container dark:hover:bg-[#2A345E]/50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="px-5 py-2 bg-primary dark:bg-molten-primary text-on-primary rounded-lg hover:opacity-90 transition-opacity"
+                >
+                  Create
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Campaign Details Drawer */}
+      {isDrawerOpen && selectedCampaign && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setIsDrawerOpen(false)}></div>
+          <div className="relative w-full max-w-md bg-surface-container-lowest dark:bg-molten-surface h-full shadow-2xl flex flex-col">
+            <div className="p-6 border-b border-outline-variant dark:border-[#2A345E] flex justify-between items-center bg-surface-container-low dark:bg-[#1A1C24]">
+              <h3 className="font-headline-sm text-on-surface dark:text-molten-text">Campaign Details</h3>
+              <button onClick={() => setIsDrawerOpen(false)} className="p-2 rounded-full hover:bg-surface-container-highest dark:hover:bg-[#2A345E] text-on-surface dark:text-molten-text">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6 space-y-6 text-on-surface dark:text-molten-text">
+              <div>
+                <h4 className="text-lg font-bold dark:text-molten-text">{selectedCampaign.name}</h4>
+                <p className="text-sm text-on-surface-variant dark:text-molten-text-muted font-mono">{selectedCampaign.id}</p>
+                <div className="mt-2">{renderCampaignStatus(selectedCampaign.status)}</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-surface-container dark:bg-[#1A1C24] p-3 rounded-lg text-sm">
+                  <div className="text-on-surface-variant dark:text-molten-text-muted">Budget</div>
+                  <div className="font-bold dark:text-molten-text">₹{selectedCampaign.budget_credits?.toFixed(2)}</div>
+                </div>
+                <div className="bg-surface-container dark:bg-[#1A1C24] p-3 rounded-lg text-sm">
+                  <div className="text-on-surface-variant dark:text-molten-text-muted">Used</div>
+                  <div className="font-bold dark:text-molten-text">₹{selectedCampaign.budget_used_credits?.toFixed(2)}</div>
+                </div>
+              </div>
+
+              <h5 className="font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2 dark:text-molten-text">Leads Pipeline</h5>
+              <div className="grid grid-cols-2 gap-2 text-sm text-on-surface-variant dark:text-molten-text-muted">
+                <div className="flex justify-between"><span>Total:</span> <span className="dark:text-molten-text">{selectedCampaign.total_leads}</span></div>
+                <div className="flex justify-between"><span>Pending:</span> <span className="dark:text-molten-text">{selectedCampaign.pending_leads}</span></div>
+                <div className="flex justify-between"><span>Calling:</span> <span className="dark:text-molten-text">{selectedCampaign.calling_leads}</span></div>
+                <div className="flex justify-between"><span>Callback:</span> <span className="dark:text-molten-text">{selectedCampaign.callback_leads}</span></div>
+                <div className="flex justify-between"><span>Completed:</span> <span className="dark:text-molten-text">{selectedCampaign.completed_leads}</span></div>
+                <div className="flex justify-between"><span>Failed:</span> <span className="dark:text-molten-text">{selectedCampaign.failed_leads}</span></div>
+                <div className="flex justify-between"><span>DNC:</span> <span className="dark:text-molten-text">{selectedCampaign.dnc_leads}</span></div>
+              </div>
+
+              <h5 className="font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2 mt-4 dark:text-molten-text">Settings</h5>
+              <div className="grid grid-cols-2 gap-2 text-sm text-on-surface-variant dark:text-molten-text-muted">
+                <div className="flex justify-between"><span>Concurrency:</span> <span className="dark:text-molten-text">{selectedCampaign.max_concurrent_calls}</span></div>
+                <div className="flex justify-between"><span>Rate (CPM):</span> <span className="dark:text-molten-text">{selectedCampaign.calls_per_minute}</span></div>
+                <div className="flex justify-between"><span>Max Attempts:</span> <span className="dark:text-molten-text">{selectedCampaign.max_attempts}</span></div>
+                <div className="flex justify-between"><span>Retry Delay:</span> <span className="dark:text-molten-text">{selectedCampaign.retry_delay_minutes}m</span></div>
+                <div className="flex justify-between"><span>Max Call Length:</span> <span className="dark:text-molten-text">{selectedCampaign.max_call_minutes}m</span></div>
+              </div>
             </div>
           </div>
         </div>

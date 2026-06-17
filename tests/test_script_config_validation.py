@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from api.script_config_validation import (
     build_config_snapshot,
     default_template,
+    normalize_route,
+    normalize_script_config_payload,
     validate_outcome_mapping,
     validate_script_config_payload,
     validate_script_id,
@@ -94,3 +98,31 @@ def test_validate_script_config_payload_invalid_overlap():
     data["outcome_retry"] = []
     with pytest.raises(ValueError, match="not mapped|overlap"):
         validate_script_config_payload(data, partial=False)
+
+
+def test_normalize_route_maps_legacy_cascade():
+    assert normalize_route("cascade") == "cascaded"
+    assert normalize_route("CASCADE") == "cascaded"
+    assert normalize_route("sts") == "sts"
+
+
+def test_validate_script_config_rejects_double_stringified_extraction_schema():
+    data = default_template("sts")
+    inner = json.dumps({"mode": "summary", "summary_prompt": "Summarize"})
+    data["extraction_schema"] = json.dumps(inner)
+    with pytest.raises(ValueError, match="double-stringified"):
+        validate_script_config_payload(data, partial=False)
+
+
+def test_validate_script_config_parses_json_string_extraction_schema():
+    data = default_template("sts")
+    schema = data["extraction_schema"]
+    data["extraction_schema"] = json.dumps(schema)
+    validate_script_config_payload(data, partial=False)
+    assert isinstance(data["extraction_schema"], dict)
+    assert data["extraction_schema"]["mode"] == "fields"
+
+
+def test_normalize_script_config_payload_route_alias():
+    payload = normalize_script_config_payload({"route": "cascade"})
+    assert payload["route"] == "cascaded"

@@ -170,7 +170,10 @@ async def upload_leads(
     content = await file.read()
     import io
 
-    df = parse_upload(io.BytesIO(content), file.filename or "upload.csv")
+    try:
+        df = parse_upload(io.BytesIO(content), file.filename or "upload.csv")
+    except pd.errors.EmptyDataError:
+        raise HTTPException(400, "Uploaded file is empty or missing columns")
     errors = validate_dataframe(df, lead_schema)
     if errors:
         raise HTTPException(400, {"errors": errors})
@@ -271,7 +274,7 @@ async def start_campaign(
     host = (os.getenv("DIALER_CALLBACK_HOST") or os.getenv("NGROK_URL") or "").strip()
     if not host:
         host = request.headers.get("host", "localhost:7860")
-    start_dialer(request.app, campaign_id, cid, host=host)
+    await start_dialer(request.app, campaign_id, cid, host=host)
     return {
         "status": "running",
         "campaign_id": str(campaign_id),

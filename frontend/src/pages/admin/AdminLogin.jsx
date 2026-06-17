@@ -22,7 +22,7 @@ export default function AdminLogin() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (status !== 'idle' || !secretKey) return;
+    if ((status !== 'idle' && status !== 'error') || !secretKey) return;
     
     setStatus('authenticating');
 
@@ -49,11 +49,12 @@ export default function AdminLogin() {
     }
   };
 
-  const handleRetry = () => {
+  const handleRetry = (e) => {
+    if (e) e.preventDefault();
     setStatus('idle');
-    setSecretKey('');
     if (secretInputRef.current) {
       secretInputRef.current.focus();
+      secretInputRef.current.select();
     }
   };
 
@@ -111,7 +112,12 @@ export default function AdminLogin() {
                   id="secretKey" 
                   type="password" 
                   value={secretKey}
-                  onChange={(e) => setSecretKey(e.target.value)}
+                  onChange={(e) => {
+                    setSecretKey(e.target.value);
+                    if (status === 'error') {
+                      setStatus('idle');
+                    }
+                  }}
                   placeholder="Admin Secret Key" 
                   autoComplete="off" 
                   disabled={status === 'authenticating'}

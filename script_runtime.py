@@ -17,7 +17,7 @@ from pipecat.services.google.gemini_live.llm import GeminiVADParams
 from pipecat.transcriptions.language import Language
 
 from lead_context import LeadContext
-from script_prefetch import pop_prefetched_config
+from script_prefetch import build_lead_dict
 
 _STS_SCRIPT_ATTRS = (
     "build_system_instruction",
@@ -437,9 +437,9 @@ def _sts_from_module(mod: ModuleType, ctx: LeadContext) -> StsRuntime:
 
 
 def resolve_sts_runtime(body: dict[str, Any]) -> StsRuntime:
-    """Tier 1: prefetch pop. Tier 2/3: importlib module."""
-    prefetch = pop_prefetched_config(body.get("_session_call_id"))
-    if prefetch is not None:
+    """Tier 1: prefetched config from /ws. Tier 2/3: importlib module."""
+    prefetch = body.get("_prefetched_config")
+    if isinstance(prefetch, dict):
         if prefetch.get("source") == "script_config" and prefetch.get("route") == "sts":
             runtime = _sts_from_prefetch(prefetch)
             version = prefetch.get("version", "?")
@@ -497,9 +497,9 @@ def _cascade_from_module(mod: ModuleType, ctx: LeadContext) -> CascadeRuntime:
 
 
 def resolve_cascade_runtime(body: dict[str, Any]) -> CascadeRuntime:
-    """Tier 1: prefetch pop. Tier 2/3: importlib module."""
-    prefetch = pop_prefetched_config(body.get("_session_call_id"))
-    if prefetch is not None:
+    """Tier 1: prefetched config from /ws. Tier 2/3: importlib module."""
+    prefetch = body.get("_prefetched_config")
+    if isinstance(prefetch, dict):
         if (
             prefetch.get("source") == "script_config"
             and prefetch.get("route") == "cascaded"

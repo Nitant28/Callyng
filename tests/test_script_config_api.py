@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import asyncpg
 import pytest
 from dotenv import load_dotenv
-from fastapi.testclient import TestClient
+from httpx import AsyncClient
 
 load_dotenv(override=True)
 
@@ -18,10 +18,10 @@ from db import postgres as pg_db
 from server import app
 
 
-@pytest.fixture(scope="module")
-def client():
-    with TestClient(app) as c:
-        yield c
+
+@pytest.fixture
+def client(test_client):
+    yield test_client
 
 
 def _admin_headers() -> dict[str, str]:
@@ -41,8 +41,9 @@ async def _test_pool():
         pytest.skip(f"Postgres not reachable: {exc}")
 
 
-def test_get_template_sts(client):
-    res = client.get(
+@pytest.mark.asyncio
+async def test_get_template_sts(client):
+    res = await client.get(
         "/internal/script-configs/template",
         params={"route": "sts"},
         headers=_admin_headers(),
@@ -54,8 +55,9 @@ def test_get_template_sts(client):
     assert body["template"]["gemini_model"]
 
 
-def test_create_patch_revisions_rollback(client):
-    async def _run():
+@pytest.mark.asyncio
+async def test_create_patch_revisions_rollback(client):
+    if True:
         pool = await _test_pool()
         client_id, _ = await pg_db.create_client(
             pool,
@@ -64,18 +66,19 @@ def test_create_patch_revisions_rollback(client):
             "other",
         )
         try:
-            tpl = client.get(
+            res = await client.get(
                 "/internal/script-configs/template",
                 params={"route": "sts"},
                 headers=_admin_headers(),
-            ).json()["template"]
+            )
+            tpl = res.json()["template"]
 
             create_payload = {
                 "client_id": str(client_id),
                 **tpl,
                 "script_id": f"sc_{uuid.uuid4().hex[:8]}",
             }
-            res = client.post(
+            res = await client.post(
                 "/internal/script-configs",
                 json=create_payload,
                 headers=_admin_headers(),
@@ -85,7 +88,7 @@ def test_create_patch_revisions_rollback(client):
             assert sc["version"] == 1
             sc_id = sc["id"]
 
-            res = client.patch(
+            res = await client.patch(
                 f"/internal/script-configs/{sc_id}",
                 params={"client_id": str(client_id)},
                 json={"gemini_voice": "Puck"},
@@ -95,7 +98,7 @@ def test_create_patch_revisions_rollback(client):
             assert res.json()["script_config"]["version"] == 2
             assert res.json()["script_config"]["gemini_voice"] == "Puck"
 
-            res = client.get(
+            res = await client.get(
                 f"/internal/script-configs/{sc_id}/revisions",
                 params={"client_id": str(client_id)},
                 headers=_admin_headers(),
@@ -104,7 +107,7 @@ def test_create_patch_revisions_rollback(client):
             versions = [r["version"] for r in res.json()["revisions"]]
             assert 1 in versions and 2 in versions
 
-            res = client.post(
+            res = await client.post(
                 f"/internal/script-configs/{sc_id}/rollback",
                 params={"client_id": str(client_id)},
                 json={"version": 1},
@@ -113,9 +116,9 @@ def test_create_patch_revisions_rollback(client):
             assert res.status_code == 200, res.text
             rolled = res.json()["script_config"]
             assert rolled["version"] == 3
-            assert rolled["gemini_voice"] == "Aoede"
+            assert rolled["gemini_voice"] == tpl.get("gemini_voice", "Aoede")
 
-            res = client.get(
+            res = await client.get(
                 f"/internal/script-configs/{sc_id}/revisions",
                 params={"client_id": str(client_id)},
                 headers=_admin_headers(),
@@ -125,11 +128,10 @@ def test_create_patch_revisions_rollback(client):
             await pool.execute("DELETE FROM clients WHERE id = $1", client_id)
             await pool.close()
 
-    asyncio.run(_run())
 
-
-def test_create_invalid_outcome_mapping(client):
-    async def _run():
+@pytest.mark.asyncio
+async def test_create_invalid_outcome_mapping(client):
+    if True:
         pool = await _test_pool()
         client_id, _ = await pg_db.create_client(
             pool,
@@ -138,14 +140,15 @@ def test_create_invalid_outcome_mapping(client):
             "other",
         )
         try:
-            tpl = client.get(
+            res = await client.get(
                 "/internal/script-configs/template",
                 params={"route": "sts"},
                 headers=_admin_headers(),
-            ).json()["template"]
+            )
+            tpl = res.json()["template"]
             tpl["outcome_retry"] = ["Busy"]
             tpl["script_id"] = f"bad_{uuid.uuid4().hex[:8]}"
-            res = client.post(
+            res = await client.post(
                 "/internal/script-configs",
                 json={"client_id": str(client_id), **tpl},
                 headers=_admin_headers(),
@@ -155,11 +158,10 @@ def test_create_invalid_outcome_mapping(client):
             await pool.execute("DELETE FROM clients WHERE id = $1", client_id)
             await pool.close()
 
-    asyncio.run(_run())
 
-
-def test_test_endpoint_mocked(client):
-    async def _run():
+@pytest.mark.asyncio
+async def test_test_endpoint_mocked(client):
+    if True:
         pool = await _test_pool()
         client_id, _ = await pg_db.create_client(
             pool,
@@ -168,17 +170,19 @@ def test_test_endpoint_mocked(client):
             "other",
         )
         try:
-            tpl = client.get(
+            res = await client.get(
                 "/internal/script-configs/template",
                 params={"route": "sts"},
                 headers=_admin_headers(),
-            ).json()["template"]
+            )
+            tpl = res.json()["template"]
             tpl["script_id"] = f"tst_{uuid.uuid4().hex[:8]}"
-            sc = client.post(
+            res2 = await client.post(
                 "/internal/script-configs",
                 json={"client_id": str(client_id), **tpl},
                 headers=_admin_headers(),
-            ).json()["script_config"]
+            )
+            sc = res2.json()["script_config"]
             sc_id = sc["id"]
 
             with patch.dict(os.environ, {"GROQ_API_KEY": "test-key"}):
@@ -191,7 +195,7 @@ def test_test_endpoint_mocked(client):
                         None,
                         "llama-3.3-70b-versatile",
                     )
-                    res = client.post(
+                    res = await client.post(
                         f"/internal/script-configs/{sc_id}/test",
                         params={"client_id": str(client_id)},
                         json={
@@ -208,5 +212,3 @@ def test_test_endpoint_mocked(client):
         finally:
             await pool.execute("DELETE FROM clients WHERE id = $1", client_id)
             await pool.close()
-
-    asyncio.run(_run())

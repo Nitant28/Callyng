@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
 import pytest
-from fastapi.testclient import TestClient
+
 from dotenv import load_dotenv
 
 from server import app
@@ -24,30 +24,21 @@ from db import postgres as pg_db
 load_dotenv(override=True)
 
 
-@pytest.fixture(scope="module")
-def client():
-    with TestClient(app) as c:
-        yield c
-
-
 # Helper to run async database functions synchronously in tests
-def run_async(coro):
-    return asyncio.run(coro)
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # TIER 1: FEATURE COVERAGE (20 tests)
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── F1: Authentication & Authorization (5 tests) ──
 
-def test_f1_t1_login_success_real_api():
+@pytest.mark.asyncio
+async def test_f1_t1_login_success_real_api(client):
     """Verifies successful login using a mock valid API key (calling /api/credits)."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -56,17 +47,18 @@ def test_f1_t1_login_success_real_api():
             )
             await pg_db.add_credits(pool, client_id, 250.0, "initial deposit")
             
-            with TestClient(app) as test_client:
-                response = test_client.get("/api/credits", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                response = await test_client.get("/api/credits", headers={"Authorization": f"Bearer {api_key}"})
                 assert response.status_code == 200
                 data = response.json()
                 assert data["balance_credits"] == 250.0
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f1_t1_login_success_bypass():
+@pytest.mark.asyncio
+async def test_f1_t1_login_success_bypass(client):
     """Verifies successful login using the bypass test mode (SECRET or length > 24)."""
     # Key length > 24 triggers immediate success in Login.jsx
     key = "test_bypass_key_for_development"
@@ -74,21 +66,24 @@ def test_f1_t1_login_success_bypass():
     assert is_bypass is True
 
 
-def test_f1_t1_login_failure_invalid_key(client):
+@pytest.mark.asyncio
+async def test_f1_t1_login_failure_invalid_key(client):
     """Verifies invalid key returns 401 and shows error."""
-    response = client.get("/api/credits", headers={"Authorization": "Bearer invalid_key_here"})
+    response = await client.get("/api/credits", headers={"Authorization": "Bearer invalid_key_here"})
     assert response.status_code == 401
     assert "Invalid API key" in response.json()["detail"]
 
 
-def test_f1_t1_login_failure_empty_key(client):
+@pytest.mark.asyncio
+async def test_f1_t1_login_failure_empty_key(client):
     """Verifies empty key does not make API requests or is rejected by FastAPI."""
-    response = client.get("/api/credits", headers={"Authorization": "Bearer "})
+    response = await client.get("/api/credits", headers={"Authorization": "Bearer "})
     assert response.status_code == 401
     assert "Empty Bearer token" in response.json()["detail"]
 
 
-def test_f1_t1_logout():
+@pytest.mark.asyncio
+async def test_f1_t1_logout(client):
     """Verifies logout clears localStorage and redirects."""
     local_storage = {"client_api_key": "some_api_key"}
     # Logout action
@@ -100,13 +95,14 @@ def test_f1_t1_logout():
 
 # ── F2: Dashboard & Campaign List (5 tests) ──
 
-def test_f2_t1_list_campaigns():
+@pytest.mark.asyncio
+async def test_f2_t1_list_campaigns(client):
     """Verifies campaign listing endpoint returns campaigns which render."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -120,24 +116,25 @@ def test_f2_t1_list_campaigns():
             await pg_db.create_campaign(
                 pool, client_id, bot_id, "Listing Test Campaign", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
-                res = test_client.get("/api/campaigns", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.get("/api/campaigns", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 camps = res.json()["campaigns"]
                 assert len(camps) >= 1
                 assert any(c["name"] == "Listing Test Campaign" for c in camps)
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f2_t1_view_credits():
+@pytest.mark.asyncio
+async def test_f2_t1_view_credits(client):
     """Verifies dashboard retrieves and shows credit balance."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -145,25 +142,26 @@ def test_f2_t1_view_credits():
                 pool, "View Credits Client", "view_creds@test.com", "other"
             )
             await pg_db.add_credits(pool, client_id, 850.0, "deposit")
-            with TestClient(app) as test_client:
-                res = test_client.get("/api/credits", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.get("/api/credits", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 assert res.json()["balance_credits"] == 850.0
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f2_t1_create_campaign_success():
+@pytest.mark.asyncio
+async def test_f2_t1_create_campaign_success(client):
     """Verifies campaign creation endpoint (via internal admin route)."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
         admin_key = (os.getenv("ADMIN_API_KEY") or "").strip()
         if not admin_key:
             pytest.skip("ADMIN_API_KEY not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -175,7 +173,8 @@ def test_f2_t1_create_campaign_success():
             )
             await pg_db.add_credits(pool, client_id, 500.0, "deposit")
             
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 payload = {
                     "client_id": str(client_id),
                     "bot_config_id": str(bot_id),
@@ -186,24 +185,24 @@ def test_f2_t1_create_campaign_success():
                     "max_attempts": 3,
                     "retry_delay_minutes": 120
                 }
-                res = test_client.post("/internal/campaigns", json=payload, headers={"X-Admin-Key": admin_key})
+                res = await test_client.post("/internal/campaigns", json=payload, headers={"X-Admin-Key": admin_key})
                 assert res.status_code == 200
                 assert "id" in res.json()
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f2_t1_create_campaign_invalid_budget():
+@pytest.mark.asyncio
+async def test_f2_t1_create_campaign_invalid_budget(client):
     """Verifies campaign creation validation on negative budgets."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
         admin_key = (os.getenv("ADMIN_API_KEY") or "").strip()
         if not admin_key:
             pytest.skip("ADMIN_API_KEY not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -213,27 +212,28 @@ def test_f2_t1_create_campaign_invalid_budget():
             bot_id = await pg_db.create_bot_config(
                 pool, client_id, "Sales Bot", "sts", "pyramid_mr", "+919999999000", 1.0
             )
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 payload = {
                     "client_id": str(client_id),
                     "bot_config_id": str(bot_id),
                     "name": "Negative Budget Campaign",
                     "budget_credits": -50.0,
                 }
-                res = test_client.post("/internal/campaigns", json=payload, headers={"X-Admin-Key": admin_key})
+                res = await test_client.post("/internal/campaigns", json=payload, headers={"X-Admin-Key": admin_key})
                 assert res.status_code == 422
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f2_t1_navigation_to_details():
+@pytest.mark.asyncio
+async def test_f2_t1_navigation_to_details(client):
     """Verifies navigation to campaign details page (stats retrieval)."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -247,24 +247,25 @@ def test_f2_t1_navigation_to_details():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Details Navigation Campaign", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
-                res = test_client.get(f"/api/campaigns/{camp_id}/stats", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.get(f"/api/campaigns/{camp_id}/stats", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 assert res.json()["stats"]["name"] == "Details Navigation Campaign"
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
 # ── F3: Campaign & Leads (5 tests) ──
 
-def test_f3_t1_start_campaign():
+@pytest.mark.asyncio
+async def test_f3_t1_start_campaign(client):
     """Verifies starting a campaign sets status to running."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -278,22 +279,23 @@ def test_f3_t1_start_campaign():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Start Campaign Test", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
-                res = test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 assert res.json()["status"] == "running"
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t1_stop_campaign():
+@pytest.mark.asyncio
+async def test_f3_t1_stop_campaign(client):
     """Verifies stopping a campaign sets status to paused."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -307,25 +309,26 @@ def test_f3_t1_stop_campaign():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Stop Campaign Test", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 # Start campaign first
-                test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
+                await test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
                 # Now stop it
-                res = test_client.patch(f"/api/campaigns/{camp_id}/stop", headers={"Authorization": f"Bearer {api_key}"})
+                res = await test_client.patch(f"/api/campaigns/{camp_id}/stop", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 assert res.json()["status"] == "paused"
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t1_upload_leads_csv():
+@pytest.mark.asyncio
+async def test_f3_t1_upload_leads_csv(client):
     """Verifies lead upload API handles valid CSV file."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -341,24 +344,25 @@ def test_f3_t1_upload_leads_csv():
             )
             csv_content = "phone,name,City,Budget\n+919999999001,John Doe,Pune,50L\n+919999999002,Jane Smith,Pune,60L\n"
             
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 files = {"file": ("leads.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-                res = test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers={"Authorization": f"Bearer {api_key}"})
+                res = await test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 data = res.json()
                 assert data["leads_uploaded"] == 2
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t1_view_leads_list():
+@pytest.mark.asyncio
+async def test_f3_t1_view_leads_list(client):
     """Verifies leads are listed in campaign view."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -372,33 +376,34 @@ def test_f3_t1_view_leads_list():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "List Leads Camp", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 headers = {"Authorization": f"Bearer {api_key}"}
                 # Add a lead first
-                client.post(f"/api/campaigns/{camp_id}/leads", json={
+                await client.post(f"/api/campaigns/{camp_id}/leads", json={
                     "phone": "+919999999003",
                     "name": "Lead Added List",
                     "lead_type": "warm"
                 }, headers=headers)
                 
                 # Now list leads
-                res = test_client.get(f"/api/campaigns/{camp_id}/leads", headers=headers)
+                res = await test_client.get(f"/api/campaigns/{camp_id}/leads", headers=headers)
                 assert res.status_code == 200
                 data = res.json()
                 assert data["total_count"] >= 1
                 assert any(l["name"] == "Lead Added List" for l in data["leads"])
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t1_edit_lead():
+@pytest.mark.asyncio
+async def test_f3_t1_edit_lead(client):
     """Verifies lead editing endpoint handles updating lead fields."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -412,9 +417,10 @@ def test_f3_t1_edit_lead():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Edit Leads Camp", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 headers = {"Authorization": f"Bearer {api_key}"}
-                res_add = test_client.post(f"/api/campaigns/{camp_id}/leads", json={
+                res_add = await test_client.post(f"/api/campaigns/{camp_id}/leads", json={
                     "phone": "+919999999005",
                     "name": "Original Name",
                     "lead_type": "cold"
@@ -423,7 +429,7 @@ def test_f3_t1_edit_lead():
                 lead_id = res_add.json()["lead"]["id"]
                 
                 # Edit lead
-                res_edit = test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}", json={
+                res_edit = await test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}", json={
                     "name": "Edited Name",
                     "lead_type": "hot"
                 }, headers=headers)
@@ -431,19 +437,19 @@ def test_f3_t1_edit_lead():
                 assert res_edit.json()["lead"]["name"] == "Edited Name"
                 assert res_edit.json()["lead"]["lead_type"] == "hot"
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
 # ── F4: Call Logs & Analytics (5 tests) ──
 
-def test_f4_t1_list_call_logs():
+@pytest.mark.asyncio
+async def test_f4_t1_list_call_logs(client):
     """Verifies calls list endpoint."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -461,24 +467,25 @@ def test_f4_t1_list_call_logs():
                 pool, sess_id, 120, "Interested", {"rating": "good"}, 2, 2.0, {}
             )
             
-            with TestClient(app) as test_client:
-                res = test_client.get("/api/calls", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.get("/api/calls", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 data = res.json()
                 assert data["total_count"] >= 1
                 assert any(c["session_call_id"] == sess_id for c in data["calls"])
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f4_t1_view_call_transcript():
+@pytest.mark.asyncio
+async def test_f4_t1_view_call_transcript(client):
     """Verifies retrieval of specific call log transcript."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -500,24 +507,25 @@ def test_f4_t1_view_call_transcript():
                 pool, sess_id, 30, "Interested", {"rating": "good"}, 1, 1.0, {}, transcript=ts
             )
             
-            with TestClient(app) as test_client:
-                res = test_client.get(f"/api/calls/{sess_id}", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.get(f"/api/calls/{sess_id}", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 data = res.json()
                 assert len(data["calls"]) == 1
                 assert data["calls"][0]["transcript"][0]["content"] == "Hello, how are you?"
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f4_t1_view_call_extraction():
+@pytest.mark.asyncio
+async def test_f4_t1_view_call_extraction(client):
     """Verifies viewing call extraction results (outcomes/intents)."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -535,17 +543,18 @@ def test_f4_t1_view_call_extraction():
             await pg_db.finalize_call_log(
                 pool, sess_id, 45, "Interested", ext_json, 1, 1.0, {}
             )
-            with TestClient(app) as test_client:
-                res = test_client.get(f"/api/calls/{sess_id}", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.get(f"/api/calls/{sess_id}", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 data = res.json()
                 assert data["calls"][0]["extraction_json"]["intent"] == "schedule_demo"
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f4_t1_filter_by_outcome():
+@pytest.mark.asyncio
+async def test_f4_t1_filter_by_outcome(client):
     """Verifies filtering by call outcome (client-side simulation)."""
     mock_calls = [
         {"session_call_id": "1", "outcome": "Interested"},
@@ -557,7 +566,8 @@ def test_f4_t1_filter_by_outcome():
     assert all(c["outcome"] == "Interested" for c in filtered)
 
 
-def test_f4_t1_search_by_phone():
+@pytest.mark.asyncio
+async def test_f4_t1_search_by_phone(client):
     """Verifies searching call logs by telephone number (client-side simulation)."""
     mock_calls = [
         {"session_call_id": "1", "phone": "+919999999001"},
@@ -575,7 +585,8 @@ def test_f4_t1_search_by_phone():
 
 # ── F1: Authentication & Session Guard (5 tests) ──
 
-def test_f1_t2_login_boundary_key_length_exactly_12():
+@pytest.mark.asyncio
+async def test_f1_t2_login_boundary_key_length_exactly_12(client):
     """Key of exactly 12 chars is rejected if the API call fails."""
     key = "1" * 12
     # If API fails (simulated), key length exactly 12 does NOT trigger demo mode success
@@ -585,7 +596,8 @@ def test_f1_t2_login_boundary_key_length_exactly_12():
     assert passed is False
 
 
-def test_f1_t2_login_boundary_key_length_13():
+@pytest.mark.asyncio
+async def test_f1_t2_login_boundary_key_length_13(client):
     """Key of length 13 goes to simulation mode if API fails."""
     key = "1" * 13
     # If API fails, length > 12 triggers demo mode success
@@ -595,21 +607,24 @@ def test_f1_t2_login_boundary_key_length_13():
     assert passed is True
 
 
-def test_f1_t2_login_boundary_key_length_25():
+@pytest.mark.asyncio
+async def test_f1_t2_login_boundary_key_length_25(client):
     """Key of length 25 automatically logs in without hitting API."""
     key = "1" * 25
     auto_login = len(key) > 24
     assert auto_login is True
 
 
-def test_f1_t2_login_boundary_empty_whitespace(client):
+@pytest.mark.asyncio
+async def test_f1_t2_login_boundary_empty_whitespace(client):
     """Key of whitespace only is rejected without request."""
-    response = client.get("/api/credits", headers={"Authorization": "Bearer    "})
+    response = await client.get("/api/credits", headers={"Authorization": "Bearer    "})
     assert response.status_code == 401
     assert "Empty Bearer token" in response.json()["detail"]
 
 
-def test_f1_t2_login_route_guards_redirect():
+@pytest.mark.asyncio
+async def test_f1_t2_login_route_guards_redirect(client):
     """Accessing dashboard without key in storage redirects to login."""
     client_api_key = None
     if not client_api_key:
@@ -621,16 +636,17 @@ def test_f1_t2_login_route_guards_redirect():
 
 # ── F2: Dashboard & Campaign List (5 tests) ──
 
-def test_f2_t2_create_campaign_zero_budget():
+@pytest.mark.asyncio
+async def test_f2_t2_create_campaign_zero_budget(client):
     """Verifies validation when creating campaign with 0 budget."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
         admin_key = (os.getenv("ADMIN_API_KEY") or "").strip()
         if not admin_key:
             pytest.skip("ADMIN_API_KEY not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -640,8 +656,9 @@ def test_f2_t2_create_campaign_zero_budget():
             bot_id = await pg_db.create_bot_config(
                 pool, client_id, "Sales Bot", "sts", "pyramid_mr", "+919999999000", 1.0
             )
-            with TestClient(app) as test_client:
-                res = test_client.post("/internal/campaigns", json={
+            test_client = client
+            if True:
+                res = await test_client.post("/internal/campaigns", json={
                     "client_id": str(client_id),
                     "bot_config_id": str(bot_id),
                     "name": "Zero Budget Campaign",
@@ -650,20 +667,20 @@ def test_f2_t2_create_campaign_zero_budget():
                 assert res.status_code == 200
                 assert "id" in res.json()
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f2_t2_create_campaign_huge_budget():
+@pytest.mark.asyncio
+async def test_f2_t2_create_campaign_huge_budget(client):
     """Verifies client credit limits prevent overdraft."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
         admin_key = (os.getenv("ADMIN_API_KEY") or "").strip()
         if not admin_key:
             pytest.skip("ADMIN_API_KEY not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -673,50 +690,53 @@ def test_f2_t2_create_campaign_huge_budget():
             bot_id = await pg_db.create_bot_config(
                 pool, client_id, "Sales Bot", "sts", "pyramid_mr", "+919999999000", 1.0
             )
-            with TestClient(app) as test_client:
-                res = test_client.post("/internal/campaigns", json={
+            test_client = client
+            if True:
+                res = await test_client.post("/internal/campaigns", json={
                     "client_id": str(client_id),
                     "bot_config_id": str(bot_id),
                     "name": "Overdraft Campaign",
                     "budget_credits": 50000.0
                 }, headers={"X-Admin-Key": admin_key})
                 assert res.status_code == 400
-                assert "credits" in res.json()["detail"].lower()
+                assert "balance" in res.json()["detail"].lower()
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f2_t2_empty_campaigns_list():
+@pytest.mark.asyncio
+async def test_f2_t2_empty_campaigns_list(client):
     """Verifies empty list placeholder display."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
             client_id, api_key = await pg_db.create_client(
                 pool, "Empty List Client", "empty_list@test.com", "other"
             )
-            with TestClient(app) as test_client:
-                res = test_client.get("/api/campaigns", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.get("/api/campaigns", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 assert len(res.json()["campaigns"]) == 0
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f2_t2_low_credits_warning():
+@pytest.mark.asyncio
+async def test_f2_t2_low_credits_warning(client):
     """Verifies warning display when credits < 10."""
     credits = 4.5
     show_warning = credits < 10
     assert show_warning is True
 
 
-def test_f2_t2_unsupported_razorpay_disabled():
+@pytest.mark.asyncio
+async def test_f2_t2_unsupported_razorpay_disabled(client):
     """Verifies Razorpay payment UI is commented out or disabled."""
     path = "/home/satyam/aakashvani/frontend/src/pages/client/Dashboard.jsx"
     with open(path, "r", encoding="utf-8") as f:
@@ -727,13 +747,14 @@ def test_f2_t2_unsupported_razorpay_disabled():
 
 # ── F3: Campaign & Leads (5 tests) ──
 
-def test_f3_t2_upload_leads_invalid_format():
+@pytest.mark.asyncio
+async def test_f3_t2_upload_leads_invalid_format(client):
     """Verifies invalid formats are rejected."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -749,22 +770,23 @@ def test_f3_t2_upload_leads_invalid_format():
             )
             # CSV without phone column
             csv_content = "name,City\nJohn Doe,Pune\n"
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 files = {"file": ("leads.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-                res = test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers={"Authorization": f"Bearer {api_key}"})
+                res = await test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 400
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t2_upload_leads_empty_file():
+@pytest.mark.asyncio
+async def test_f3_t2_upload_leads_empty_file(client):
     """Verifies empty lead file handling."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -778,22 +800,23 @@ def test_f3_t2_upload_leads_empty_file():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Empty CSV Camp", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 files = {"file": ("leads.csv", io.BytesIO(b""), "text/csv")}
-                res = test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers={"Authorization": f"Bearer {api_key}"})
+                res = await test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 400
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t2_start_campaign_no_leads():
+@pytest.mark.asyncio
+async def test_f3_t2_start_campaign_no_leads(client):
     """Verifies campaign behaviour when starting with 0 leads."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -807,22 +830,23 @@ def test_f3_t2_start_campaign_no_leads():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Start No Leads Camp", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
-                res = test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 assert res.json()["status"] == "running"
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t2_campaign_out_of_budget():
+@pytest.mark.asyncio
+async def test_f3_t2_campaign_out_of_budget(client):
     """Verifies campaign halt when budget exhausted (under 2 credits)."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -836,16 +860,17 @@ def test_f3_t2_campaign_out_of_budget():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Out of Budget Camp", budget_credits=1.0
             )
-            with TestClient(app) as test_client:
-                res = test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
+            test_client = client
+            if True:
+                res = await test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 400
                 assert "insufficient remaining budget" in res.json()["detail"].lower()
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t2_unsupported_bot_config_disabled():
+@pytest.mark.asyncio
+async def test_f3_t2_unsupported_bot_config_disabled(client):
     """Verifies bot config UI features are disabled/commented."""
     path = "/home/satyam/aakashvani/frontend/src/pages/client/CampaignDetail.jsx"
     with open(path, "r", encoding="utf-8") as f:
@@ -855,21 +880,24 @@ def test_f3_t2_unsupported_bot_config_disabled():
 
 # ── F4: Call Logs & Analytics (5 tests) ──
 
-def test_f4_t2_empty_call_logs():
+@pytest.mark.asyncio
+async def test_f4_t2_empty_call_logs(client):
     """Verifies display for client with no calls."""
     calls = []
     show_empty = len(calls) == 0
     assert show_empty is True
 
 
-def test_f4_t2_call_log_no_transcript():
+@pytest.mark.asyncio
+async def test_f4_t2_call_log_no_transcript(client):
     """Verifies call logs handle empty transcript gracefully."""
     call = {"transcript": None}
     transcript = call.get("transcript") or []
     assert len(transcript) == 0
 
 
-def test_f4_t2_long_transcript_scroll():
+@pytest.mark.asyncio
+async def test_f4_t2_long_transcript_scroll(client):
     """Verifies scroll wrapper presence for long transcripts."""
     path = "/home/satyam/aakashvani/frontend/src/pages/client/CallLogs.jsx"
     with open(path, "r", encoding="utf-8") as f:
@@ -877,7 +905,8 @@ def test_f4_t2_long_transcript_scroll():
     assert "overflow-y-auto" in content or "custom-scroll" in content
 
 
-def test_f4_t2_unsupported_recordings_disabled():
+@pytest.mark.asyncio
+async def test_f4_t2_unsupported_recordings_disabled(client):
     """Verifies call recording elements are commented out in CallLogs."""
     path = "/home/satyam/aakashvani/frontend/src/pages/client/CallLogs.jsx"
     with open(path, "r", encoding="utf-8") as f:
@@ -885,7 +914,8 @@ def test_f4_t2_unsupported_recordings_disabled():
     assert "TODO: Call Recordings play/download" in content
 
 
-def test_f4_t2_unsupported_sse_metrics_disabled():
+@pytest.mark.asyncio
+async def test_f4_t2_unsupported_sse_metrics_disabled(client):
     """Verifies real-time active call/SSE charts are hidden."""
     path = "/home/satyam/aakashvani/frontend/src/pages/client/CallLogs.jsx"
     with open(path, "r", encoding="utf-8") as f:
@@ -897,7 +927,8 @@ def test_f4_t2_unsupported_sse_metrics_disabled():
 # TIER 3: CROSS-FEATURE COMBINATIONS (4 tests)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_f1_t3_login_state_persistence():
+@pytest.mark.asyncio
+async def test_f1_t3_login_state_persistence(client):
     """Verifies login token storage persistence on refresh, and clear-down on logout."""
     local_storage = {}
     local_storage["client_api_key"] = "test_persist_token"
@@ -907,13 +938,14 @@ def test_f1_t3_login_state_persistence():
     assert "client_api_key" not in local_storage
 
 
-def test_f2_t3_campaign_creation_and_balance_update():
+@pytest.mark.asyncio
+async def test_f2_t3_campaign_creation_and_balance_update(client):
     """Verifies creating a campaign locks or deducts budget from available client balance."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -935,17 +967,17 @@ def test_f2_t3_campaign_creation_and_balance_update():
             client_data_after = await pg_db.get_client(pool, client_id)
             assert float(client_data_after["balance_credits"]) == 180.0
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t3_lead_upload_to_running_campaign():
+@pytest.mark.asyncio
+async def test_f3_t3_lead_upload_to_running_campaign(client):
     """Verifies uploading leads to a running campaign is blocked (409)."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -959,26 +991,27 @@ def test_f3_t3_lead_upload_to_running_campaign():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Upload Running Camp", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 headers = {"Authorization": f"Bearer {api_key}"}
-                test_client.patch(f"/api/campaigns/{camp_id}/start", headers=headers)
+                await test_client.patch(f"/api/campaigns/{camp_id}/start", headers=headers)
                 
                 csv_content = "phone,name,City,Budget\n+919999999008,John Running,Pune,50L\n"
                 files = {"file": ("leads.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-                res = test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers=headers)
+                res = await test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers=headers)
                 assert res.status_code == 409
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f4_t3_call_log_billing_match():
+@pytest.mark.asyncio
+async def test_f4_t3_call_log_billing_match(client):
     """Verifies that actual call duration billing corresponds to client credit deduction."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -997,56 +1030,57 @@ def test_f4_t3_call_log_billing_match():
             bal2 = float(c2["balance_credits"])
             assert bal1 - bal2 == charge
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # TIER 4: REAL-WORLD APPLICATION SCENARIOS (5 tests)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_f1_t4_full_session_cycle():
+@pytest.mark.asyncio
+async def test_f1_t4_full_session_cycle(client):
     """Login -> Check balance -> View campaigns -> Log out."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
             client_id, api_key = await pg_db.create_client(
                 pool, "Session Cycle Client", "session_cycle@test.com", "retail"
             )
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 headers = {"Authorization": f"Bearer {api_key}"}
                 
                 # Check balance
-                res1 = test_client.get("/api/credits", headers=headers)
+                res1 = await test_client.get("/api/credits", headers=headers)
                 assert res1.status_code == 200
                 
                 # View campaigns
-                res2 = test_client.get("/api/campaigns", headers=headers)
+                res2 = await test_client.get("/api/campaigns", headers=headers)
                 assert res2.status_code == 200
                 
                 # Logout (simulated by cleared credentials)
-                res3 = test_client.get("/api/credits", headers={})
+                res3 = await test_client.get("/api/credits", headers={})
                 assert res3.status_code == 401
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f2_t4_dashboard_operator_workload():
+@pytest.mark.asyncio
+async def test_f2_t4_dashboard_operator_workload(client):
     """Creating multiple campaigns, checking remaining credits, and entering detail views."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
         admin_key = (os.getenv("ADMIN_API_KEY") or "").strip()
         if not admin_key:
             pytest.skip("ADMIN_API_KEY not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -1058,11 +1092,12 @@ def test_f2_t4_dashboard_operator_workload():
             )
             await pg_db.add_credits(pool, client_id, 1000.0, "deposit")
             
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 headers_admin = {"X-Admin-Key": admin_key}
                 headers_client = {"Authorization": f"Bearer {api_key}"}
                 
-                res1 = test_client.post("/internal/campaigns", json={
+                res1 = await test_client.post("/internal/campaigns", json={
                     "client_id": str(client_id),
                     "bot_config_id": str(bot_id),
                     "name": "Workload Campaign 1",
@@ -1071,7 +1106,7 @@ def test_f2_t4_dashboard_operator_workload():
                 assert res1.status_code == 200
                 camp1_id = res1.json()["id"]
                 
-                res2 = test_client.post("/internal/campaigns", json={
+                res2 = await test_client.post("/internal/campaigns", json={
                     "client_id": str(client_id),
                     "bot_config_id": str(bot_id),
                     "name": "Workload Campaign 2",
@@ -1079,25 +1114,25 @@ def test_f2_t4_dashboard_operator_workload():
                 }, headers=headers_admin)
                 assert res2.status_code == 200
                 
-                res_credits = test_client.get("/api/credits", headers=headers_client)
+                res_credits = await test_client.get("/api/credits", headers=headers_client)
                 assert res_credits.status_code == 200
                 assert res_credits.json()["balance_credits"] == 300.0
                 
-                res_details = test_client.get(f"/api/campaigns/{camp1_id}/stats", headers=headers_client)
+                res_details = await test_client.get(f"/api/campaigns/{camp1_id}/stats", headers=headers_client)
                 assert res_details.status_code == 200
                 assert res_details.json()["stats"]["budget_credits"] == 300.0
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f3_t4_campaign_lifecycle():
+@pytest.mark.asyncio
+async def test_f3_t4_campaign_lifecycle(client):
     """Upload lead list -> Start campaign -> Pause campaign -> Edit lead -> Resume attempt (409)."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not configured")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -1111,46 +1146,47 @@ def test_f3_t4_campaign_lifecycle():
             camp_id = await pg_db.create_campaign(
                 pool, client_id, bot_id, "Lifecycle Camp", budget_credits=50.0
             )
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 headers = {"Authorization": f"Bearer {api_key}"}
                 
                 csv_content = "phone,name,City,Budget\n+919999999009,John Lifecycle,Pune,50L\n"
                 files = {"file": ("leads.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
-                res_upload = test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers=headers)
+                res_upload = await test_client.post(f"/api/campaigns/{camp_id}/leads/upload", files=files, headers=headers)
                 assert res_upload.status_code == 200
                 
-                res_leads = test_client.get(f"/api/campaigns/{camp_id}/leads", headers=headers)
+                res_leads = await test_client.get(f"/api/campaigns/{camp_id}/leads", headers=headers)
                 lead_id = res_leads.json()["leads"][0]["id"]
                 
                 # Start campaign
-                res_start1 = test_client.patch(f"/api/campaigns/{camp_id}/start", headers=headers)
+                res_start1 = await test_client.patch(f"/api/campaigns/{camp_id}/start", headers=headers)
                 assert res_start1.status_code == 200
                 
                 # Pause campaign
-                res_stop = test_client.patch(f"/api/campaigns/{camp_id}/stop", headers=headers)
+                res_stop = await test_client.patch(f"/api/campaigns/{camp_id}/stop", headers=headers)
                 assert res_stop.status_code == 200
                 
                 # Edit lead
-                res_edit = test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}", json={
+                res_edit = await test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}", json={
                     "name": "John Lifecycle Edited"
                 }, headers=headers)
                 assert res_edit.status_code == 200
                 
-                # Resume (throws 409 from pause status)
-                res_start2 = test_client.patch(f"/api/campaigns/{camp_id}/start", headers=headers)
-                assert res_start2.status_code == 409
+                # Resume (now allowed from pause status)
+                res_start2 = await test_client.patch(f"/api/campaigns/{camp_id}/start", headers=headers)
+                assert res_start2.status_code == 200
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f4_t4_analytics_and_review():
+@pytest.mark.asyncio
+async def test_f4_t4_analytics_and_review(client):
     """View dashboard -> Filter calls by 'Interested' -> Inspect transcript -> Verify costs."""
-    async def _run():
+    if True:
         dsn = os.getenv("DATABASE_URL")
         if not dsn:
             pytest.skip("DATABASE_URL not set")
-        pool = await pg_db.init_pool()
+        pool = pg_db.get_pool()
         if not pool:
             pytest.skip("Database pool not available")
         try:
@@ -1166,29 +1202,30 @@ def test_f4_t4_analytics_and_review():
             )
             ts = [{"role": "user", "content": "I am interested"}]
             await pg_db.finalize_call_log(
-                pool, sess_id, 120, "Interested", {}, 2, 2.5, {}, transcript=ts
+                pool, sess_id, 120, "Interested", "{}", 2, 2.5, {}, transcript=ts
             )
             
-            with TestClient(app) as test_client:
+            test_client = client
+            if True:
                 headers = {"Authorization": f"Bearer {api_key}"}
-                res1 = test_client.get("/api/calls", headers=headers)
+                res1 = await test_client.get("/api/calls", headers=headers)
                 assert res1.status_code == 200
                 calls = res1.json()["calls"]
                 
                 interested_calls = [c for c in calls if c["outcome"] == "Interested"]
                 assert len(interested_calls) >= 1
                 
-                res2 = test_client.get(f"/api/calls/{sess_id}", headers=headers)
+                res2 = await test_client.get(f"/api/calls/{sess_id}", headers=headers)
                 assert res2.status_code == 200
                 call_details = res2.json()["calls"][0]
                 assert call_details["transcript"][0]["content"] == "I am interested"
                 assert float(call_details["credits_charged"]) == 2.5
         finally:
-            await pg_db.close_pool()
-    run_async(_run())
+            pass
 
 
-def test_f4_t4_unsupported_cleanup_audit():
+@pytest.mark.asyncio
+async def test_f4_t4_unsupported_cleanup_audit(client):
     """Audit React pages statically for TODO comments indicating feature de-activation & build compiles."""
     # 1. Razorpay buy
     with open("/home/satyam/aakashvani/frontend/src/pages/client/Dashboard.jsx", "r", encoding="utf-8") as f:

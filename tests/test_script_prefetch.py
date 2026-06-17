@@ -1,22 +1,29 @@
-"""Unit tests for script_prefetch (no Postgres required)."""
+"""Unit tests for script_prefetch (Redis required for register/pop)."""
 
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
+from dotenv import load_dotenv
 
 import script_prefetch as sp
 
-
-@pytest.fixture(autouse=True)
-def _clear_prefetch_registry():
-    sp.PREFETCHED_CONFIGS.clear()
-    yield
-    sp.PREFETCHED_CONFIGS.clear()
+load_dotenv(override=True)
 
 
-def test_build_lead_dict_filters_metadata_keys():
+async def _redis_test(coro):
+    from db import redis_client as redis_db
+    redis = redis_db.get_redis()
+    async for key in redis.scan_iter(match="prefetch:*"):
+        await redis.delete(key)
+    return await coro()
+
+
+@pytest.mark.asyncio
+
+async def test_build_lead_dict_filters_metadata_keys():
     lead = {"name": "Satyam", "phone": "+919123866924"}
     meta = {
         "city": "Pune",
@@ -35,8 +42,9 @@ def test_build_lead_dict_filters_metadata_keys():
     assert "9bad" not in d
 
 
-def test_render_script_config_substitutes_templates():
-    row = {
+@pytest.mark.asyncio
+async def test_render_script_config_substitutes_templates():
+    sc = {
         "id": "00000000-0000-4000-8000-000000000099",
         "script_id": "pyramid_mr",
         "route": "sts",
@@ -70,7 +78,7 @@ def test_render_script_config_substitutes_templates():
         "outcome_callback": ["Callback_Requested"],
     }
     lead_dict = {"lead_name": "Asha", "lead_city": "Mumbai", "lead_phone": "+911"}
-    cfg = sp.render_script_config(row, lead_dict, expected_route="sts")
+    cfg = sp.render_script_config(sc, lead_dict, expected_route="sts")
     assert cfg["source"] == "script_config"
     assert cfg["system_instruction"] == "Hello Asha from Mumbai"
     assert cfg["system_prompt"] == "Hello Asha from Mumbai"
@@ -78,33 +86,44 @@ def test_render_script_config_substitutes_templates():
     assert cfg["version"] == 2
 
 
-def test_render_script_config_route_mismatch_raises():
-    row = {"route": "cascaded", "system_instruction_template": "x"}
+@pytest.mark.asyncio
+
+async def test_render_script_config_route_mismatch_raises():
+    row = {"route": "cascaded"}
     with pytest.raises(ValueError, match="does not match"):
         sp.render_script_config(row, {}, expected_route="sts")
 
 
-def test_sweep_stale_prefetched_configs():
-    sp.register_prefetched_config("call-live", {"route": "sts"})
-    sp.register_prefetched_config("call-done", {"route": "sts"})
-    sp.register_prefetched_config("call-orphan", {"route": "sts"})
+@pytest.mark.skipif(not os.getenv("REDIS_URL"), reason="REDIS_URL not set")
+@pytest.mark.asyncio
+
+async def test_sweep_stale_prefetched_configs():
+    from db import redis_client
+    await redis_client.init_redis()
+    await sp.register_prefetched_config("call-live", {"route": "sts"})
+    await sp.register_prefetched_config("call-done", {"route": "sts"})
+    await sp.register_prefetched_config("call-orphan", {"route": "sts"})
 
     class _Pool:
         async def fetch(self, _sql, keys):
             assert "call-live" in keys
             return [{"session_call_id": "call-done"}]
 
-    async def _run():
-        return await sp.sweep_stale_prefetched_configs(_Pool())
-
-    n = asyncio.run(_run())
+    n = await sp.sweep_stale_prefetched_configs(_Pool())
     assert n == 1
-    assert "call-live" in sp.PREFETCHED_CONFIGS
-    assert "call-done" not in sp.PREFETCHED_CONFIGS
-    assert "call-orphan" in sp.PREFETCHED_CONFIGS
+    assert await sp.pop_prefetched_config("call-live") is not None
+    assert await sp.pop_prefetched_config("call-done") is None
+    assert await sp.pop_prefetched_config("call-orphan") is not None
 
 
-def test_register_and_pop_prefetched_config():
-    sp.register_prefetched_config("sid-1", {"route": "sts"})
-    assert sp.pop_prefetched_config("sid-1") == {"route": "sts"}
-    assert sp.pop_prefetched_config("sid-1") is None
+
+@pytest.mark.skipif(not os.getenv("REDIS_URL"), reason="REDIS_URL not set")
+@pytest.mark.asyncio
+
+async def test_register_and_pop_prefetched_config():
+    from db import redis_client
+    await redis_client.init_redis()
+    await sp.register_prefetched_config("sid-1", {"route": "sts"})
+    assert await sp.pop_prefetched_config("sid-1") == {"route": "sts"}
+    assert await sp.pop_prefetched_config("sid-1") is None
+

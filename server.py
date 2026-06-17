@@ -20,15 +20,25 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from background_tasks import bind_background_tasks, drain_background_tasks
 from call_log_db import init_db
 from db import postgres as pg_db
+from db import redis_client as redis_db
+from db.warmup_state import (
+    clear_warmup,
+    set_warmup_pending,
+    set_warmup_ready,
+    wait_for_warmup,
+)
 from plivo_hangup import handle_plivo_hangup
 from telephony import build_hangup_url, make_plivo_call
+
+from api.script_config_validation import normalize_route
 
 load_dotenv(override=True)
 
 # ── Select which bot to run ────────────────────────────────────────────────────
-BOT_ROUTE = os.getenv("BOT_ROUTE", "sts")
+BOT_ROUTE = normalize_route(os.getenv("BOT_ROUTE", "sts"))
 
 # ── Module-level imports for the per-call hot path ────────────────────────────
 # Importing the bot module and pipecat's WebSocketRunnerArguments at module
@@ -41,13 +51,6 @@ if BOT_ROUTE == "sts":
     from bot_sts import bot as _bot  # noqa: E402
 else:
     from bot_cascade import bot as _bot  # noqa: E402
-
-# ── Pre-warm state ─────────────────────────────────────────────────────────────
-# Maps call_id → asyncio.Event that is set once Gemini is warmed up.
-# The /answer route waits on this event before returning XML to Plivo,
-# so by the time Plivo streams audio to /ws, Gemini is already connected.
-_warmup_ready: dict[str, asyncio.Event] = {}
-
 
 def _prewarm_live_connect_config():
     """Minimal LiveConnectConfig aligned with Pipecat audio STS (not empty setup)."""
@@ -115,9 +118,7 @@ async def _prewarm_gemini(call_id: str) -> None:
     """
     if BOT_ROUTE != "sts":
         logger.debug(f"[prewarm:{call_id}] skipped (BOT_ROUTE={BOT_ROUTE!r})")
-        event = _warmup_ready.get(call_id)
-        if event:
-            event.set()
+        await set_warmup_ready(call_id)
         return
 
     from google import genai  # pip install google-genai  (NOT google-generativeai)
@@ -125,9 +126,7 @@ async def _prewarm_gemini(call_id: str) -> None:
     api_key = os.getenv("GOOGLE_API_KEY", "")
     if not api_key:
         logger.warning(f"[prewarm:{call_id}] GOOGLE_API_KEY missing; skipping prewarm")
-        event = _warmup_ready.get(call_id)
-        if event:
-            event.set()
+        await set_warmup_ready(call_id)
         return
 
     try:
@@ -151,9 +150,7 @@ async def _prewarm_gemini(call_id: str) -> None:
     except Exception as exc:
         logger.warning(f"[prewarm:{call_id}] Pre-warm failed ({exc}); continuing anyway")
     finally:
-        event = _warmup_ready.get(call_id)
-        if event:
-            event.set()
+        await set_warmup_ready(call_id)
 
 
 @asynccontextmanager
@@ -189,6 +186,10 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"[startup] PostgreSQL pool init failed ({exc}); continuing without Postgres")
 
+    await redis_db.init_redis()
+
+    app.state.background_tasks: set[asyncio.Task] = set()
+    bind_background_tasks(app.state.background_tasks)
     app.state.dialer_tasks: dict[str, asyncio.Task] = {}
     app.state.session = aiohttp.ClientSession()
     app.state.stale_call_log_task = None
@@ -223,7 +224,7 @@ async def lifespan(app: FastAPI):
                 host = (os.getenv("DIALER_CALLBACK_HOST") or os.getenv("NGROK_URL") or "localhost:7860").strip()
                 logger.info(f"[startup] Found {len(running_camps)} running campaigns. Auto-resuming...")
                 for camp in running_camps:
-                    start_dialer(app, camp["id"], camp["client_id"], host=host)
+                    await start_dialer(app, camp["id"], camp["client_id"], host=host)
         except Exception as exc:
             logger.warning("[startup] Failed to auto-resume campaigns: {}", exc)
     yield
@@ -234,11 +235,21 @@ async def lifespan(app: FastAPI):
             await stale_task
         except asyncio.CancelledError:
             pass
+    await drain_background_tasks()
     await app.state.session.close()
-    await pg_db.close_pool()
+    import sys
+    is_testing = "pytest" in sys.modules
+    if not is_testing:
+        await pg_db.close_pool()
+        await redis_db.close_redis()
 
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["100/minute"],
+    storage_uri=redis_db.redis_url(),
+    in_memory_fallback_enabled=False,
+)
 
 app = FastAPI(lifespan=lifespan)
 app.state.limiter = limiter
@@ -280,9 +291,8 @@ async def start_call(request: Request) -> JSONResponse:
     body_data = {**body_data, "phone_number": phone_number}
     call_id = str(uuid.uuid4())
 
-    # Register the warmup event BEFORE starting the background task.
-    event = asyncio.Event()
-    _warmup_ready[call_id] = event
+    # Register warmup state BEFORE starting the background task.
+    await set_warmup_pending(call_id)
 
     # Fire pre-warm in the background — overlaps with the Plivo dial request.
     asyncio.create_task(_prewarm_gemini(call_id))
@@ -305,8 +315,7 @@ async def start_call(request: Request) -> JSONResponse:
         )
         call_uuid = result.get("request_uuid", "unknown")
     except Exception as e:
-        # Clean up the warmup event so we don't leak memory.
-        _warmup_ready.pop(call_id, None)
+        await clear_warmup(call_id)
         raise HTTPException(500, str(e))
 
     logger.info(f"[start] call_id={call_id}  plivo_uuid={call_uuid}  phone={phone_number}")
@@ -342,16 +351,12 @@ async def answer_xml(
     bot's own Gemini WS cold-start (~1–2 s), which is now overlapped
     with the rest of pipeline setup by the on_client_connected handler.
     """
-    if call_id and call_id in _warmup_ready:
-        event = _warmup_ready[call_id]
-        try:
-            await asyncio.wait_for(event.wait(), timeout=3.0)
+    if call_id:
+        ready = await wait_for_warmup(call_id, timeout_s=3.0)
+        if ready:
             logger.info(f"[answer:{call_id}] Gemini warm — sending stream XML")
-        except asyncio.TimeoutError:
+        else:
             logger.warning(f"[answer:{call_id}] Pre-warm timeout — proceeding anyway")
-        finally:
-            # Clean up; the session is single-use.
-            _warmup_ready.pop(call_id, None)
 
     if call_id and CallUUID:
         pool = getattr(request.app.state, "pool", None)
@@ -422,11 +427,16 @@ async def ws_endpoint(
     # Correlate with POST /start response `call_id` (UUID). Not set for ad-hoc WS tests.
     if call_id:
         body_data["_session_call_id"] = call_id
+        from script_prefetch import pop_prefetched_config
+
+        prefetch = await pop_prefetched_config(call_id)
+        if prefetch is not None:
+            body_data["_prefetched_config"] = prefetch
         pg = body_data.get("_pg")
         if isinstance(pg, dict):
             from call_transcript import register_pg_context
 
-            register_pg_context(call_id, pg)
+            await register_pg_context(call_id, pg)
 
     runner_args = WebSocketRunnerArguments(
         websocket=websocket,

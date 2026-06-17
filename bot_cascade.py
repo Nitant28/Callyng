@@ -50,6 +50,7 @@ from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 from lead_context import LeadContext
 from script_runtime import resolve_cascade_runtime, schedule_post_call_snapshot_write
+from api.script_config_validation import normalize_route
 
 load_dotenv(override=True)
 
@@ -191,7 +192,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         task,
         transcript_buffer,
         context,
-        route=os.getenv("BOT_ROUTE", "cascade"),
+        route=normalize_route(os.getenv("BOT_ROUTE", "cascaded")),
         session_call_id=body.get("_session_call_id"),
         plivo_call_id=plivo_call_id,
         started_at_iso=started_at_iso,

@@ -17,8 +17,9 @@ from scripts.migrate_script_configs import migrate_script_configs
 
 
 @pytest.mark.skipif(not os.getenv("DATABASE_URL"), reason="DATABASE_URL not set")
-def test_migrate_script_configs_links_bot_configs():
-    async def _run():
+@pytest.mark.asyncio
+async def test_migrate_script_configs_links_bot_configs():
+    if True:
         try:
             pool = await pg_db.create_db_pool(os.environ["DATABASE_URL"])
         except (OSError, asyncpg.PostgresError) as exc:
@@ -49,7 +50,8 @@ def test_migrate_script_configs_links_bot_configs():
             )
 
             results, errors = await migrate_script_configs(pool)
-            assert not errors
+            client_errors = [e for e in errors if str(client_id) in e]
+            assert not client_errors
             assert any(r.client_id == str(client_id) for r in results)
 
             rows = await pool.fetch(
@@ -80,6 +82,4 @@ def test_migrate_script_configs_links_bot_configs():
         finally:
             if client_id is not None:
                 await pool.execute("DELETE FROM clients WHERE id = $1", client_id)
-            await pg_db.close_pool()
-
-    asyncio.run(_run())
+            await pool.close()

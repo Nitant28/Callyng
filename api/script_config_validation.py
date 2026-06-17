@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -10,7 +11,19 @@ from post_call_extract import validate_extraction_schema as _validate_extraction
 
 _SCRIPT_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _VALID_ROUTES = frozenset({"sts", "cascaded"})
+_LEGACY_ROUTE_ALIASES = {"cascade": "cascaded"}
 _VALID_FIELD_TYPES = frozenset({"string", "enum", "boolean", "datetime"})
+
+_JSON_DICT_FIELDS = ("extraction_schema", "lead_schema", "outcome_event_map")
+_JSON_LIST_FIELDS = (
+    "bootstrap_messages_json",
+    "goodbye_markers",
+    "cascade_live_tools",
+    "normalization_rules",
+    "outcome_terminal",
+    "outcome_retry",
+    "outcome_callback",
+)
 
 _SNAPSHOT_COLUMNS = (
     "script_id",
@@ -86,8 +99,72 @@ def validate_script_id(script_id: str) -> None:
         )
 
 
+def normalize_route(route: str) -> str:
+    """Map legacy route aliases (e.g. cascade) to canonical DB values."""
+    key = (route or "").strip().lower()
+    return _LEGACY_ROUTE_ALIASES.get(key, key)
+
+
+def _ensure_json_dict(value: Any, field_name: str) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{field_name} must be a dict, invalid JSON string"
+            ) from exc
+        if isinstance(parsed, str):
+            raise ValueError(
+                f"{field_name} appears double-stringified; pass a dict, not a JSON-encoded string"
+            )
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"{field_name} must be a dict, got {type(parsed).__name__}"
+            )
+        return parsed
+    raise ValueError(f"{field_name} must be a dict, got {type(value).__name__}")
+
+
+def _ensure_json_list(value: Any, field_name: str) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{field_name} must be a list, invalid JSON string"
+            ) from exc
+        if isinstance(parsed, str):
+            raise ValueError(
+                f"{field_name} appears double-stringified; pass a list, not a JSON-encoded string"
+            )
+        if not isinstance(parsed, list):
+            raise ValueError(
+                f"{field_name} must be a list, got {type(parsed).__name__}"
+            )
+        return parsed
+    raise ValueError(f"{field_name} must be a list, got {type(value).__name__}")
+
+
+def normalize_script_config_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize route aliases and coerce JSON fields before validation/DB write."""
+    out = dict(data)
+    if "route" in out and out["route"] is not None:
+        out["route"] = normalize_route(str(out["route"]))
+    for field in _JSON_DICT_FIELDS:
+        if field in out and out[field] is not None:
+            out[field] = _ensure_json_dict(out[field], field)
+    for field in _JSON_LIST_FIELDS:
+        if field in out and out[field] is not None:
+            out[field] = _ensure_json_list(out[field], field)
+    return out
+
+
 def validate_route(route: str) -> None:
-    if route not in _VALID_ROUTES:
+    if normalize_route(route) not in _VALID_ROUTES:
         raise ValueError(f"route must be one of {sorted(_VALID_ROUTES)!r}")
 
 
@@ -200,6 +277,10 @@ def validate_outcome_mapping(
 
 def validate_script_config_payload(data: dict[str, Any], *, partial: bool = False) -> None:
     """Validate create or merged patch payload before DB write."""
+    normalized = normalize_script_config_payload(data)
+    data.clear()
+    data.update(normalized)
+
     if not partial or "script_id" in data:
         validate_script_id(str(data.get("script_id") or ""))
     if not partial or "route" in data:
@@ -207,8 +288,6 @@ def validate_script_config_payload(data: dict[str, Any], *, partial: bool = Fals
 
     schema = data.get("extraction_schema")
     if schema is not None:
-        if not isinstance(schema, dict):
-            raise ValueError("extraction_schema must be a dict")
         validate_extraction_schema(schema)
         validate_outcome_mapping(
             schema,

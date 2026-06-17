@@ -7,6 +7,7 @@ import ScriptingGuideModal from '../../components/shared/ScriptingGuideModal';
 export default function AdminScriptConfigs() {
   const [configs, setConfigs] = useState([]);
   const [clients, setClients] = useState([]);
+  const [search, setSearch] = useState('');
   
   // Modals
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -316,12 +317,21 @@ export default function AdminScriptConfigs() {
           <h2 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text mb-2">Script Templates</h2>
           <p className="font-body-md text-body-md text-arctic-text-muted dark:text-molten-text-muted">Manage conversational logic, extraction schemas, and models for agents.</p>
         </div>
-        <button 
-          onClick={openCreator}
-          className="px-4 py-2 rounded-lg bg-primary dark:bg-molten-primary text-white dark:text-molten-bg font-label-md text-label-md hover:brightness-110 transition-all flex items-center gap-2"
-        >
-          <span className="material-symbols-outlined text-[18px]">add</span> Create Template
-        </button>
+        <div className="flex gap-2 items-center">
+          <input 
+            type="text"
+            placeholder="Search templates"
+            className="px-4 py-2 bg-surface-container-lowest dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm text-on-surface dark:text-molten-text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <button 
+            onClick={openCreator}
+            className="px-4 py-2 rounded-lg bg-primary dark:bg-molten-primary text-white dark:text-molten-bg font-label-md text-label-md hover:brightness-110 transition-all flex items-center gap-2"
+          >
+            <span className="material-symbols-outlined text-[18px]">add</span> Create Template
+          </button>
+        </div>
       </div>
 
       {/* Table View */}
@@ -338,7 +348,7 @@ export default function AdminScriptConfigs() {
             </tr>
           </thead>
           <tbody>
-            {configs.map((c) => (
+            {configs.filter(c => c.script_id.toLowerCase().includes(search.toLowerCase()) || getClientName(c.client_id).toLowerCase().includes(search.toLowerCase())).map((c) => (
               <tr key={c.id} className="border-b border-outline-variant dark:border-[#2A345E] hover:bg-surface-container-lowest dark:hover:bg-[#1A1A24] transition-colors">
                 <td className="px-4 py-3 font-body-md text-body-md text-on-surface dark:text-molten-text">{c.script_id}</td>
                 <td className="px-4 py-3 font-body-md text-body-md text-on-surface dark:text-molten-text">{getClientName(c.client_id)}</td>
