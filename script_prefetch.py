@@ -48,7 +48,10 @@ def build_lead_dict(lead: dict[str, Any], metadata: dict[str, Any] | None) -> di
 
 
 def _substitute_template(text: str, lead_dict: dict[str, str]) -> str:
-    return Template(text).safe_substitute(lead_dict)
+    result = Template(text).safe_substitute(lead_dict)
+    for k, v in lead_dict.items():
+        result = result.replace(f"{{{k}}}", v)
+    return result
 
 
 def _render_bootstrap_messages(

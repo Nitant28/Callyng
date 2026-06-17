@@ -6,7 +6,7 @@ import os
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.auth import get_pool, require_admin
@@ -97,6 +97,13 @@ class TestScriptConfigBody(BaseModel):
     transcript: list[dict[str, Any]]
     extraction_schema: dict[str, Any] | None = None
     normalization_rules: list[Any] | None = None
+
+
+class DialTestBody(BaseModel):
+    phone: str
+    telephony_number: str
+    lead_name: str = "Test Lead"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 def _validation_error(exc: ValueError) -> HTTPException:
@@ -287,3 +294,119 @@ async def test_script_config_extraction(
         "error": err,
         "model": model,
     }
+
+
+@router.post("/script-configs/{script_config_id}/dial-test")
+async def dial_test_script_config(
+    script_config_id: UUID,
+    body: DialTestBody,
+    request: Request,
+    client_id: UUID = Query(...),
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    import aiohttp
+    from uuid import uuid4
+    from dialer.concurrent_dialer import fire_call, _release_lead_to_pending
+    
+    for key in ("PLIVO_AUTH_ID", "PLIVO_AUTH_TOKEN", "PLIVO_PHONE_NUMBER"):
+        if not (os.getenv(key) or "").strip():
+            raise HTTPException(503, f"{key} is not configured in .env")
+
+    row = await pg_db.get_script_config(pool, script_config_id, client_id)
+    if row is None:
+        raise HTTPException(404, "script_config not found or inactive")
+        
+    route = row.get("route")
+    
+    # Ensure a test bot exists for this client
+    test_bot_row = await pool.fetchrow(
+        "SELECT * FROM bot_configs WHERE client_id = $1 AND name = 'Test Bot' LIMIT 1",
+        client_id
+    )
+    if not test_bot_row:
+        bot_id = await pg_db.create_bot_config(
+            pool, client_id, "Test Bot", route, str(row.get("script_id")), body.telephony_number, 0.0
+        )
+        bot_config = await pg_db.get_bot_config(pool, bot_id, client_id)
+    else:
+        await pool.execute(
+            "UPDATE bot_configs SET script_config_id = $1, script_id = $2, route = $3, telephony_number = $4 WHERE id = $5",
+            script_config_id, str(row.get("script_id")), route, body.telephony_number, test_bot_row["id"]
+        )
+        bot_config = await pg_db.get_bot_config(pool, test_bot_row["id"], client_id)
+        
+    if not bot_config:
+        raise HTTPException(500, "Failed to create or retrieve Test Bot")
+        
+    bot_config_id = UUID(str(bot_config["id"]))
+    
+    # Ensure a test campaign exists for this client
+    test_camp_row = await pool.fetchrow(
+        "SELECT * FROM campaigns WHERE client_id = $1 AND name = 'Test Campaign' LIMIT 1",
+        client_id
+    )
+    if not test_camp_row:
+        camp_id = await pool.fetchval(
+            """
+            INSERT INTO campaigns (client_id, name, bot_config_id, status, calls_per_minute, max_concurrent_calls)
+            VALUES ($1, 'Test Campaign', $2, 'running', 10, 1)
+            RETURNING id
+            """,
+            client_id, bot_config_id
+        )
+        campaign = await pg_db.get_campaign(pool, camp_id, client_id)
+    else:
+        await pool.execute(
+            "UPDATE campaigns SET bot_config_id = $1 WHERE id = $2",
+            bot_config_id, test_camp_row["id"]
+        )
+        campaign = await pg_db.get_campaign(pool, test_camp_row["id"], client_id)
+        
+    if not campaign:
+        raise HTTPException(500, "Failed to create or retrieve Test Campaign")
+
+    meta = dict(body.metadata)
+    meta["real_phone"] = body.phone
+    synthetic_phone = f"+cli{uuid4().hex[:12]}"
+    lead = await pg_db.insert_single_lead(
+        pool,
+        {
+            "client_id": client_id,
+            "campaign_id": UUID(str(campaign["id"])),
+            "phone": synthetic_phone,
+            "name": f"[TEST CALL] {body.lead_name}",
+            "metadata": meta,
+            "status": "pending",
+        },
+    )
+    lead_id = UUID(str(lead["id"]))
+    await pool.execute(
+        "UPDATE leads SET status = 'calling', last_attempted_at = NOW() WHERE id = $1 AND client_id = $2 AND status = 'pending'",
+        lead_id, client_id
+    )
+    campaign_uuid = UUID(str(campaign["id"]))
+    await pg_db.increment_campaign_counters(pool, campaign_uuid, from_status="pending", to_status="calling")
+    lead["status"] = "calling"
+    
+    host = (os.getenv("DIALER_CALLBACK_HOST") or os.getenv("NGROK_URL") or "").strip()
+    if not host:
+        host = request.headers.get("host", "localhost:7860")
+        
+    session_call_id = None
+    try:
+        async with aiohttp.ClientSession() as session:
+            session_call_id = await fire_call(
+                session, lead, campaign, bot_config,
+                host=host, pool=pool, client_id=client_id, campaign_id=campaign_uuid, dial_phone=body.phone,
+                is_test_call=True
+            )
+    except Exception as exc:
+        await _release_lead_to_pending(pool, lead, campaign_uuid, client_id)
+        raise HTTPException(500, f"Dial failed: {exc}")
+        
+    if not session_call_id:
+        await _release_lead_to_pending(pool, lead, campaign_uuid, client_id)
+        raise HTTPException(500, "Call was skipped (duplicate guard?)")
+        
+    return {"session_call_id": session_call_id, "message": "Test call dispatched successfully"}

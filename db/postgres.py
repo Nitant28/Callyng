@@ -1394,10 +1394,6 @@ async def bulk_insert_leads(pool: asyncpg.Pool, leads: list[dict]) -> int:
     async with pool.acquire() as conn:
         for lead in leads:
             meta = lead.get("metadata") or {}
-            if isinstance(meta, dict):
-                meta_json = json.dumps(meta, ensure_ascii=False)
-            else:
-                meta_json = meta
             lead_status = lead.get("status", "pending")
             result = await conn.execute(
                 """
@@ -1415,7 +1411,7 @@ async def bulk_insert_leads(pool: asyncpg.Pool, leads: list[dict]) -> int:
                 lead.get("lead_type", "cold"),
                 lead_status,
                 lead.get("max_attempts", 3),
-                meta_json,
+                meta,
             )
             if result.split()[-1] == "1":
                 inserted += 1
@@ -1724,7 +1720,7 @@ async def update_lead_post_call(
     scheduled_callback_at: datetime | None,
 ) -> bool:
     """Update lead after post-call. Returns False if status changed under lock."""
-    ext_json = json.dumps(extraction, ensure_ascii=False)
+    ext_json = extraction
     sql = """
         UPDATE leads SET
             status = $1,
@@ -1928,7 +1924,7 @@ async def update_lead_fields(
         idx += 1
     if metadata is not None:
         sets.append(f"metadata = ${idx}::jsonb")
-        args.append(json.dumps(metadata, ensure_ascii=False))
+        args.append(metadata)
         idx += 1
 
     if not sets:
@@ -1952,7 +1948,7 @@ async def insert_single_lead(
     Counter increments are handled atomically.
     """
     meta = lead.get("metadata") or {}
-    meta_json = json.dumps(meta, ensure_ascii=False) if isinstance(meta, dict) else meta
+    meta_json = meta
     lead_status = lead.get("status", "pending")
 
     async with pool.acquire() as conn:
@@ -2067,6 +2063,7 @@ async def insert_call_log_start(
     route: str,
     started_at: datetime,
     call_data: dict | None = None,
+    is_test_call: bool = False,
 ) -> UUID:
     grace = live_call_grace_minutes()
     wrap = post_call_wrap_grace_minutes()
@@ -2105,6 +2102,10 @@ async def insert_call_log_start(
                 if live or recent_end:
                     raise Exception("Duplicate call prevented by atomic check")
 
+            data = dict(call_data) if call_data else {}
+            if is_test_call:
+                data["is_test_call"] = True
+
             row = await conn.fetchrow(
                 """
                 INSERT INTO call_logs (
@@ -2122,7 +2123,7 @@ async def insert_call_log_start(
                 bot_config_id,
                 route,
                 started_at,
-                json.dumps(call_data or {}, ensure_ascii=False),
+                data,
             )
             return row["id"]
 
@@ -2144,7 +2145,7 @@ async def patch_call_log_post_call_snapshot(
         RETURNING id
         """,
         session_call_id,
-        json.dumps(snapshot_wrapper, ensure_ascii=False),
+        snapshot_wrapper,
     )
     return row is not None
 
@@ -2233,7 +2234,7 @@ async def record_plivo_hangup(
         "hangup_source": _normalize_hangup_source(payload),
         "call_uuid": call_uuid or payload.get("CallUUID") or payload.get("call_uuid"),
     }
-    blob = json.dumps(stored, ensure_ascii=False)
+    blob = stored
     if session_call_id:
         row = await pool.fetchrow(
             """
@@ -2290,6 +2291,8 @@ async def apply_callee_hangup_callback(
             existing = json.loads(existing)
         except json.JSONDecodeError:
             existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
     if existing.get("hangup_processed_at"):
         return bool(existing.get("callback_applied"))
 
@@ -2317,13 +2320,10 @@ async def apply_callee_hangup_callback(
                     WHERE session_call_id = $1
                     """,
                     session_call_id,
-                    json.dumps(
-                        {
-                            "hangup_processed_at": datetime.now(timezone.utc).isoformat(),
-                            "callback_applied": False,
-                        },
-                        ensure_ascii=False,
-                    ),
+                    {
+                        "hangup_processed_at": datetime.now(timezone.utc).isoformat(),
+                        "callback_applied": False,
+                    },
                 )
                 return False
 
@@ -2351,14 +2351,11 @@ async def apply_callee_hangup_callback(
                 WHERE session_call_id = $1
                 """,
                 session_call_id,
-                json.dumps(
-                    {
-                        "hangup_processed_at": datetime.now(timezone.utc).isoformat(),
-                        "callback_applied": True,
-                        "retry_delay_minutes": retry_delay,
-                    },
-                    ensure_ascii=False,
-                ),
+                {
+                    "hangup_processed_at": datetime.now(timezone.utc).isoformat(),
+                    "callback_applied": True,
+                    "retry_delay_minutes": retry_delay,
+                },
             )
     logger.info(
         "Callee hangup -> callback_scheduled lead={} campaign={} call={} retry_min={}",
@@ -2377,17 +2374,14 @@ async def append_transcript_turn(
     content: str,
     ts: datetime,
 ) -> None:
-    turn = json.dumps(
-        {"role": role, "content": content, "ts": ts.isoformat()},
-        ensure_ascii=False,
-    )
+    turn = [{"role": role, "content": content, "ts": ts.isoformat()}]
     await pool.execute(
         """
         UPDATE call_logs
         SET transcript = transcript || $1::jsonb
         WHERE session_call_id = $2 AND in_progress = TRUE
         """,
-        f"[{turn}]",
+        turn,
         session_call_id,
     )
 
@@ -2407,11 +2401,9 @@ async def finalize_call_log(
     extraction_error: str | None = None,
     qualified: bool | None = None,
 ) -> None:
-    ext = json.dumps(extraction_json or {}, ensure_ascii=False)
+    ext = extraction_json or {}
     qual = qualified if qualified is not None else (outcome == "Interested")
-    transcript_json = (
-        json.dumps(transcript, ensure_ascii=False) if transcript is not None else None
-    )
+    transcript_json = transcript
     sql = """
         UPDATE call_logs SET
             in_progress = FALSE,
@@ -2469,9 +2461,9 @@ async def finalize_call_log_dev(
     cost_inr: float | None,
 ) -> None:
     """Upsert-style finalize for Phase 0 parallel path (dev client, no campaign)."""
-    ext = json.dumps(extraction_json or {}, ensure_ascii=False)
-    trans = json.dumps(transcript, ensure_ascii=False)
-    call_data = json.dumps({"cost_inr": cost_inr}, ensure_ascii=False)
+    ext = extraction_json or {}
+    trans = transcript
+    call_data = {"cost_inr": cost_inr}
     existing = await pool.fetchrow(
         "SELECT id FROM call_logs WHERE session_call_id = $1",
         session_call_id,
@@ -2541,6 +2533,7 @@ async def get_call_log(
         """
         SELECT * FROM call_logs
         WHERE session_call_id = $1 AND client_id = $2
+          AND (call_data->>'is_test_call' IS NULL OR call_data->>'is_test_call' != 'true')
         """,
         session_call_id,
         client_id,
@@ -2557,6 +2550,7 @@ async def get_latest_call_log_for_lead(
         """
         SELECT * FROM call_logs
         WHERE lead_id = $1 AND client_id = $2
+          AND (call_data->>'is_test_call' IS NULL OR call_data->>'is_test_call' != 'true')
         ORDER BY created_at DESC
         LIMIT 1
         """,
@@ -2582,6 +2576,7 @@ async def list_call_logs(
         conditions.append(f"cl.client_id = ${idx}")
         args.append(client_id)
         idx += 1
+        conditions.append("(cl.call_data->>'is_test_call' IS NULL OR cl.call_data->>'is_test_call' != 'true')")
         
     if search:
         search_pattern = f"%{search}%"

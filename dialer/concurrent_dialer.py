@@ -122,6 +122,7 @@ async def fire_call(
     client_id: UUID | None = None,
     campaign_id: UUID | None = None,
     dial_phone: str | None = None,
+    is_test_call: bool = False,
 ) -> str | None:
     """Place outbound call via Plivo. Returns session_call_id or None if skipped."""
     call_id = str(uuid.uuid4())
@@ -259,6 +260,7 @@ async def fire_call(
             route=bot_config["route"],
             started_at=started_at,
             call_data=call_data_for_insert,
+            is_test_call=is_test_call,
         )
         await make_plivo_call(
             session,

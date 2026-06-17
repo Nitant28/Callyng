@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import adminApi from '../../api/admin';
 import './AdminScriptConfigs.css';
+import ScriptingGuideModal from '../../components/shared/ScriptingGuideModal';
 
 export default function AdminScriptConfigs() {
   const [configs, setConfigs] = useState([]);
@@ -12,6 +13,7 @@ export default function AdminScriptConfigs() {
   const [isCreatorOpen, setIsCreatorOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isDeployBotOpen, setIsDeployBotOpen] = useState(false);
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
   
   const navigate = useNavigate();
   
@@ -36,6 +38,14 @@ export default function AdminScriptConfigs() {
   const [deployTelephonyNumber, setDeployTelephonyNumber] = useState('');
   const [deployCredits, setDeployCredits] = useState('');
   const [deployError, setDeployError] = useState('');
+
+  // Test Call form
+  const [isTestCallOpen, setIsTestCallOpen] = useState(false);
+  const [testCallPhone, setTestCallPhone] = useState('');
+  const [testCallTelephonyNumber, setTestCallTelephonyNumber] = useState('');
+  const [testCallMetadata, setTestCallMetadata] = useState('{\n  "lead_name": "Test Lead",\n  "city": ""\n}');
+  const [testCallError, setTestCallError] = useState('');
+  const [testCallSuccess, setTestCallSuccess] = useState('');
 
   useEffect(() => {
     fetchClients();
@@ -172,7 +182,9 @@ export default function AdminScriptConfigs() {
         delete patchPayload.created_at;
         delete patchPayload.updated_at;
         
-        await adminApi.patch(`/internal/script-configs/${payload.id}`, patchPayload);
+        await adminApi.patch(`/internal/script-configs/${payload.id}`, patchPayload, {
+          params: { client_id: payload.client_id }
+        });
       } else {
         // Create
         await adminApi.post('/internal/script-configs', payload);
@@ -198,7 +210,9 @@ export default function AdminScriptConfigs() {
     setHistoryConfigs([]);
     setSelectedHistory(null);
     try {
-      const res = await adminApi.get(`/internal/script-configs/${config.id}/revisions`);
+      const res = await adminApi.get(`/internal/script-configs/${config.id}/revisions`, {
+        params: { client_id: config.client_id }
+      });
       setHistoryConfigs(res.data.revisions || []);
     } catch (err) {
       console.error(err);
@@ -210,6 +224,8 @@ export default function AdminScriptConfigs() {
     try {
       await adminApi.post(`/internal/script-configs/${selectedHistory.script_config_id}/rollback`, {
         version: selectedHistory.version
+      }, {
+        params: { client_id: selectedHistory.client_id }
       });
       setIsHistoryOpen(false);
       fetchConfigs();
@@ -253,6 +269,43 @@ export default function AdminScriptConfigs() {
       } else {
         setDeployError(typeof detail === 'string' ? detail : (error.message || 'Failed to deploy bot.'));
       }
+    }
+  };
+
+  const handleTestCall = async (e) => {
+    e.preventDefault();
+    setTestCallError('');
+    setTestCallSuccess('');
+    try {
+      if (!editingConfig || !editingConfig.id) {
+        setTestCallError("Save template first.");
+        return;
+      }
+      let parsedMeta = {};
+      try {
+        parsedMeta = JSON.parse(testCallMetadata);
+      } catch (err) {
+        setTestCallError("Invalid JSON in metadata.");
+        return;
+      }
+      const leadName = parsedMeta.lead_name || "Test Lead";
+      
+      const res = await adminApi.post(`/internal/script-configs/${editingConfig.id}/dial-test`, {
+        phone: testCallPhone,
+        telephony_number: testCallTelephonyNumber,
+        lead_name: leadName,
+        metadata: parsedMeta
+      }, {
+        params: { client_id: editingConfig.client_id }
+      });
+      setTestCallSuccess(`Dispatched successfully. Session ID: ${res.data.session_call_id}`);
+      setTimeout(() => {
+        setIsTestCallOpen(false);
+        setTestCallSuccess('');
+      }, 4000);
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      setTestCallError(typeof detail === 'string' ? detail : (error.message || 'Failed to dispatch test call.'));
     }
   };
 
@@ -396,12 +449,26 @@ export default function AdminScriptConfigs() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-on-surface/40 dark:bg-black/60 backdrop-blur-sm p-4 sm:p-6">
           <div className="bg-arctic-surface dark:bg-[#1A1A24] rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col border border-outline-variant/50 dark:border-[#2A345E] overflow-hidden">
             <div className="flex justify-between items-center px-6 py-4 bg-surface dark:bg-[#1C1810] border-b border-outline-variant dark:border-[#2A345E]">
-              <h3 className="font-headline-md text-on-surface dark:text-molten-text truncate pr-4">
-                {editingConfig.id ? `Edit Template: ${editingConfig.script_id} (v${editingConfig.version})` : `Create Template: ${editingConfig.script_id}`}
-              </h3>
+              <div className="flex items-center gap-4">
+                <h3 className="font-headline-md text-on-surface dark:text-molten-text truncate pr-4">
+                  {editingConfig.id ? `Edit Template: ${editingConfig.script_id} (v${editingConfig.version})` : `Create Template: ${editingConfig.script_id}`}
+                </h3>
+                <button 
+                  onClick={() => setIsGuideOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-primary/10 text-primary dark:bg-molten-primary/10 dark:text-molten-primary rounded-full text-xs font-medium hover:bg-primary/20 dark:hover:bg-molten-primary/20 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[16px]">menu_book</span>
+                  Guide
+                </button>
+              </div>
               <div className="flex items-center gap-3 shrink-0">
                 {saveError && <span className="text-arctic-error dark:text-molten-error text-sm">{saveError}</span>}
                 <button onClick={() => setIsEditorOpen(false)} className="px-4 py-2 border border-outline-variant dark:border-[#2A345E] rounded-lg text-on-surface dark:text-molten-text hover:bg-surface-container-low dark:hover:bg-[#2A345E]">Cancel</button>
+                {editingConfig.id && (
+                  <button onClick={() => setIsTestCallOpen(true)} className="px-4 py-2 border border-primary dark:border-molten-primary text-primary dark:text-molten-primary rounded-lg font-bold hover:bg-primary/10 dark:hover:bg-molten-primary/10 transition-colors">
+                    Test Call
+                  </button>
+                )}
                 <button onClick={saveConfig} className="px-4 py-2 bg-primary dark:bg-molten-primary text-white dark:text-molten-bg rounded-lg">Save</button>
               </div>
             </div>
@@ -473,6 +540,14 @@ export default function AdminScriptConfigs() {
                           <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Voice</label>
                           <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.gemini_voice || ''} onChange={e => handleEditorChange('gemini_voice', e.target.value)} />
                         </div>
+                        <div>
+                          <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Language</label>
+                          <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" placeholder="hi-IN" value={editingConfig.gemini_language || ''} onChange={e => handleEditorChange('gemini_language', e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Temperature</label>
+                          <input type="number" step="0.01" min="0" max="2" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.gemini_temperature !== undefined ? editingConfig.gemini_temperature : ''} onChange={e => handleEditorChange('gemini_temperature', parseFloat(e.target.value))} />
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -496,6 +571,24 @@ export default function AdminScriptConfigs() {
                       <div>
                         <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Silence Duration (ms)</label>
                         <input type="number" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_silence_duration_ms || ''} onChange={e => handleEditorChange('vad_silence_duration_ms', parseInt(e.target.value))} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Prefix Padding (ms)</label>
+                        <input type="number" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_prefix_padding_ms || ''} onChange={e => handleEditorChange('vad_prefix_padding_ms', parseInt(e.target.value))} />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Start Sensitivity</label>
+                        <select className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_start_sensitivity || 'HIGH'} onChange={e => handleEditorChange('vad_start_sensitivity', e.target.value)}>
+                          <option value="LOW">LOW</option>
+                          <option value="HIGH">HIGH</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">End Sensitivity</label>
+                        <select className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_end_sensitivity || 'LOW'} onChange={e => handleEditorChange('vad_end_sensitivity', e.target.value)}>
+                          <option value="LOW">LOW</option>
+                          <option value="HIGH">HIGH</option>
+                        </select>
                       </div>
                     </div>
                   </div>
@@ -590,6 +683,45 @@ export default function AdminScriptConfigs() {
           </div>
         </div>
       )}
+
+      {/* Test Call Modal */}
+      {isTestCallOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-on-surface/40 dark:bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-arctic-surface dark:bg-[#1A1A24] rounded-lg p-stack-lg shadow-2xl w-full max-w-sm border border-outline-variant/50 dark:border-[#2A345E]">
+            <div className="flex justify-between items-center mb-stack-md">
+              <h3 className="font-headline-md text-on-surface dark:text-molten-text">Test Dial</h3>
+              <button onClick={() => setIsTestCallOpen(false)} className="text-on-surface-variant dark:text-molten-text-muted hover:bg-surface-container-low dark:hover:bg-molten-surface p-1 rounded transition-colors"><span className="material-symbols-outlined">close</span></button>
+            </div>
+            {testCallError && <div className="mb-4 text-arctic-error dark:text-molten-error text-sm p-2 bg-error-container/20 rounded-lg">{testCallError}</div>}
+            {testCallSuccess && <div className="mb-4 text-molten-success dark:text-[#5cf7db] text-sm p-2 bg-secondary/10 rounded-lg">{testCallSuccess}</div>}
+            
+            <form onSubmit={handleTestCall} className="space-y-4">
+              <div>
+                <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">From: Telephony Number</label>
+                <input required type="text" placeholder="+1..." className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={testCallTelephonyNumber} onChange={(e) => setTestCallTelephonyNumber(e.target.value)} />
+                <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mt-1">Your registered Plivo number (Caller ID)</p>
+              </div>
+              <div>
+                <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">To: Target Phone Number</label>
+                <input required type="text" placeholder="+91..." className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={testCallPhone} onChange={(e) => setTestCallPhone(e.target.value)} />
+                <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mt-1">E.164 format, e.g. +919876543210</p>
+              </div>
+              <div>
+                <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Lead Data (JSON)</label>
+                <textarea rows="4" className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text font-mono text-sm" value={testCallMetadata} onChange={(e) => setTestCallMetadata(e.target.value)}></textarea>
+                <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mt-1">Include variables like lead_name, city, etc.</p>
+              </div>
+              <div className="flex justify-end gap-3 pt-4">
+                <button type="button" onClick={() => setIsTestCallOpen(false)} className="px-4 py-2 border border-outline-variant dark:border-[#2A345E] rounded-lg text-on-surface dark:text-molten-text">Cancel</button>
+                <button type="submit" className="px-4 py-2 bg-primary dark:bg-molten-primary text-white dark:text-molten-bg rounded-lg shadow-md">Dial</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Scripting Guide Modal */}
+      <ScriptingGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
     </>
   );
 }
