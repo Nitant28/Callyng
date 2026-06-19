@@ -37,6 +37,8 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         alters.append("ALTER TABLE call_logs ADD COLUMN extraction_model TEXT")
     if "cost_inr" not in existing:
         alters.append("ALTER TABLE call_logs ADD COLUMN cost_inr REAL")
+    if "recording_path" not in existing:
+        alters.append("ALTER TABLE call_logs ADD COLUMN recording_path TEXT")
     for sql in alters:
         conn.execute(sql)
 

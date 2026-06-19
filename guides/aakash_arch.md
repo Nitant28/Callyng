@@ -25,7 +25,8 @@
 13. [Admin-first build order](#13-admin-first-build-order)
 14. [File layout](#14-file-layout)
 15. [Environment variables](#15-environment-variables)
-16. [Open questions](#16-open-questions)
+16. [Call recording](#16-call-recording)
+17. [Open questions](#17-open-questions)
 
 ---
 
@@ -482,11 +483,11 @@ CREATE TABLE call_logs (
     flagged_for_review      BOOLEAN DEFAULT FALSE,
     -- Set by automated checks or admin. Surfaces in admin dashboard.
 
-    -- ── RECORDING (Phase 4 placeholder) ──────────────────────
+    -- ── RECORDING ─────────────────────────────────────────────
     recording_url           TEXT,
-    -- Cloudflare R2 object key. NOT a public URL.
-    -- API generates signed URL (1hr expiry) on demand.
-    -- NULL until Phase 4 wires Plivo recording → R2 upload.
+    -- Cloudflare R2 object key (e.g. 'recordings/{client_id}/{session_call_id}.mp3').
+    -- NOT a public URL. API generates signed URL (1hr expiry) on demand.
+    -- See §16 Call Recording for full pipeline.
 
     -- ── OVERFLOW ─────────────────────────────────────────────
     call_data               JSONB DEFAULT '{}',
@@ -1413,9 +1414,9 @@ pool = await asyncpg.create_pool(
 )
 ```
 
-### Recording URLs (Phase 4)
+### Recording URLs
 
-`call_logs.recording_url` stores the Cloudflare R2 object key (e.g. `recordings/client-id/call-id.wav`). Never a public URL. The API endpoint generates a signed URL on demand with 1-hour expiry. No permanent public access to any recording, ever.
+`call_logs.recording_url` stores the Cloudflare R2 object key (e.g. `recordings/{client_id}/{session_call_id}.mp3`). Never a public URL. The API endpoint generates a presigned URL on demand with 1-hour expiry. No permanent public access to any recording, ever. Full implementation detail in §16.
 
 ---
 
@@ -1768,16 +1769,509 @@ N8N_WEBHOOK_URL=http://localhost:5678/webhook/...
 RAZORPAY_KEY_ID=
 RAZORPAY_KEY_SECRET=
 
-# ── STORAGE (Phase 4) ─────────────────────────────────────────
+# ── STORAGE (Call Recording — §16) ────────────────────────────
 R2_ACCOUNT_ID=
 R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
 R2_BUCKET_NAME=aakashvani-recordings
+# Set RECORDING_STORAGE=local for local dev (saves to ./data/recordings/)
+RECORDING_STORAGE=r2
 ```
 
 ---
 
-## 16. Open questions
+## 16. Call recording
+
+### Why now
+
+Recording was originally Phase 4. Pulled forward because once real client calls start flowing, every call you don't record is one you can never go back and capture. The integration is contained (no schema migration, no billing impact) and recording is free on Plivo's side.
+
+### Cost analysis
+
+| Item | Cost | Notes |
+|---|---|---|
+| Plivo: act of recording | **$0.00/min** | Confirmed current pricing. Recording itself has no per-minute charge. |
+| Plivo: recording storage | **Free for 90 days** | After 90 days: $0.0004/min/month. We download immediately, so this never applies. |
+| Plivo: audio streaming (`<Stream>`) | **$0.003/min** | Already incurred by both routes — NOT new cost from recording. |
+| R2 storage | **$0.015/GB** | No egress fees. A 10-min MP3 ≈ 2.4 MB. 1000 calls/month ≈ 2.4 GB ≈ $0.04/month. |
+| R2 Class A ops (PUT) | **$4.50/M requests** | 1000 calls = $0.0045. Negligible. |
+| R2 Class B ops (GET) | **$0.36/M requests** | Presigned URL playback. Negligible. |
+
+**Net cost impact: effectively zero.** Recording adds no per-minute charge. R2 storage for typical volume is under $1/month. The only real cost was already being paid (Plivo Stream at $0.003/min), which is worth noting but is not attributable to recording.
+
+### Storage options evaluated
+
+| Option | Storage cost | Egress cost | Setup | Best for |
+|---|---|---|---|---|
+| **Cloudflare R2** ✅ | $0.015/GB | **$0.00** | Create bucket + API token in Cloudflare dashboard | Production. Zero egress means presigned URL playback is free. S3-compatible API. |
+| AWS S3 Standard | $0.023/GB | $0.09/GB | AWS account + IAM credentials | Already-AWS shops. Egress fees add up fast with audio playback. |
+| AWS S3 Glacier | $0.004/GB | $0.09/GB + retrieval | Same as S3 | Long-term compliance archive. Not suitable for on-demand playback. |
+| Local filesystem | $0.00 | $0.00 | `mkdir -p ./data/recordings/` | Dev/test only. No redundancy, no CDN, no presigned URLs. |
+| Plivo-hosted (no download) | $0.00 (90 days) | N/A | Nothing | Throwaway/interim. URLs are either public or require Plivo auth. Files deleted after 90 days. No control. |
+
+**Decision: Cloudflare R2 for production, local filesystem for dev.** R2 gives zero-egress presigned URLs (critical for audio player), S3-compatible API (boto3 works unchanged), and $0.015/GB storage. Local filesystem for `just test-call` and dev runs avoids needing R2 credentials during development.
+
+### How Plivo call recording works
+
+Two independent mechanisms exist. Both are compatible with `<Stream>` (no conflicts, no added latency):
+
+**Mechanism A — REST Record API (chosen):**
+```
+POST https://api.plivo.com/v1/Account/{auth_id}/Call/{call_uuid}/Record/
+Auth: Basic (PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
+Body: {
+  "time_limit": 3600,
+  "file_format": "mp3",
+  "callback_url": "https://{host}/plivo-recording?session_call_id={call_id}",
+  "callback_method": "POST"
+}
+Response: 202 { "message": "async api spawned", "api_id": "..." }
+```
+
+**Mechanism B — `<Record>` XML element (rejected):**
+```xml
+<Response>
+  <Record action="https://..." maxLength="3600" redirect="false" />
+  <Stream bidirectional="true" keepCallAlive="true">wss://...</Stream>
+</Response>
+```
+Works technically, but `<Record>` is a sequential/blocking XML element designed for IVR-style "press 1 to stop" recording. Mixing it with `<Stream>` is undocumented territory. The REST API is the officially supported path for recording calls that use audio streaming.
+
+**Critical gotcha: `time_limit` defaults to 60 seconds.** If you don't pass `time_limit`, Plivo cuts the recording at 1 minute. Must explicitly set to 3600 (1 hour) or higher. Our calls are capped at `MAX_CALL_MINUTES` (default 10), so 3600 provides ample headroom.
+
+### Recording pipeline — end to end
+
+```
+┌─────────────┐
+│  /answer    │  Plivo hits this when callee picks up.
+│  handler    │  CallUUID now known.
+│             │  ──► fire Plivo Record API (background task)
+│             │  ──► link_call_log_plivo_sid (existing)
+│             │  ──► return <Stream> XML
+└──────┬──────┘
+       │  call in progress (bot speaks via Stream, Plivo records audio)
+       ▼
+┌─────────────┐
+│  Call ends  │  Plivo stops recording automatically.
+│  (hangup)   │  Recording file rendered (mp3/wav).
+└──────┬──────┘
+       │  Plivo POSTs to callback_url
+       ▼
+┌──────────────────┐
+│ /plivo-recording │  New webhook endpoint.
+│  handler         │  Receives: CallUUID, RecordUrl, RecordingID,
+│                  │           RecordingDuration, session_call_id (query param)
+│                  │
+│  1. Look up call_logs row by session_call_id (primary)
+│     or call_sid/CallUUID (fallback)
+│  2. Download MP3 from RecordUrl (Basic Auth)
+│  3. Upload to R2: recordings/{client_id}/{session_call_id}.mp3
+│  4. UPDATE call_logs SET recording_url = R2 object key
+│  5. Delete from Plivo (optional, saves their storage)
+│  6. Return 200 OK
+└──────────────────┘
+       │
+       ▼
+┌─────────────────────────────────────────┐
+│ GET /api/calls/{session_call_id}/recording │
+│  → look up call_logs.recording_url         │
+│  → generate presigned R2 URL (1hr expiry)  │
+│  → return { "url": "https://..." }         │
+└─────────────────────────────────────────┘
+```
+
+### Plivo recording callback fields
+
+When Plivo finishes rendering the recording file, it POSTs these fields to `callback_url`:
+
+| Field | Type | Description |
+|---|---|---|
+| `CallUUID` | string | Plivo's call identifier (= `call_logs.call_sid`) |
+| `RecordingID` | string | Unique recording identifier |
+| `RecordUrl` | string | Full URL to download the MP3/WAV file |
+| `RecordingDuration` | string | Duration in seconds |
+| `RecordingDurationMs` | string | Duration in milliseconds |
+| `RecordingStartMs` | string | Epoch ms when recording started |
+| `RecordingEndMs` | string | Epoch ms when recording ended |
+| `RecordingFormat` | string | `mp3` or `wav` |
+
+Security: Validate `X-Plivo-Signature-V3` header on the webhook.
+
+### Downloading from Plivo
+
+```python
+# RecordUrl from the callback, e.g.:
+# https://media.plivo.com/v1/Account/{auth_id}/Recording/{recording_id}.mp3
+
+async with session.get(record_url, auth=aiohttp.BasicAuth(auth_id, auth_token)) as resp:
+    if resp.status == 200:
+        audio_bytes = await resp.read()
+```
+
+**Important:** Enable "Basic Auth For Recording URLs" in Plivo Console → Voice Settings. By default, recording URLs are publicly accessible — unacceptable for client call data.
+
+### R2 upload via boto3 (S3-compatible)
+
+```python
+import boto3
+from botocore.config import Config
+
+def _r2_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        config=Config(signature_version="s3v4"),
+        region_name="auto",
+    )
+
+def upload_recording(audio_bytes: bytes, object_key: str) -> None:
+    client = _r2_client()
+    client.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=object_key,
+        Body=audio_bytes,
+        ContentType="audio/mpeg",
+    )
+
+def generate_presigned_url(object_key: str, expires_in: int = 3600) -> str:
+    client = _r2_client()
+    return client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": R2_BUCKET_NAME, "Key": object_key},
+        ExpiresIn=expires_in,
+    )
+```
+
+Object key convention: `recordings/{client_id}/{session_call_id}.mp3`
+
+### Local dev recording (filesystem fallback)
+
+When `RECORDING_STORAGE=local` (or R2 credentials are absent), recordings save to `./data/recordings/{session_call_id}.mp3`. No client_id nesting needed for dev. The "presigned URL" endpoint returns a direct file-serve response instead.
+
+```python
+# In /answer handler — local dev path:
+# The Plivo Record API requires a public callback_url, which doesn't exist
+# in pure local dev (no ngrok for recording callbacks).
+# Two approaches for local dev recording:
+#
+# A) If ngrok is running (NGROK_URL set): fire Record API normally,
+#    /plivo-recording webhook stores to local filesystem instead of R2.
+#
+# B) If no ngrok: skip Plivo-side recording entirely.
+#    Dev calls still get transcript + extraction in SQLite.
+#    Recording is a "nice to have" for dev, not a blocker.
+```
+
+For dev calls that DO go through Plivo (via `just call` / `just test-call`, which always use ngrok):
+- The `/plivo-recording` handler checks `RECORDING_STORAGE`
+- If `local`: write to `./data/recordings/` instead of R2
+- `call_log_db.py` gets a new `recording_path` column via `_ensure_columns`
+- `call_logs` SQLite table stores the local file path
+
+### Implementation — file-by-file changelist
+
+#### 1. New file: `recording.py`
+
+Core recording module. Contains:
+
+```python
+# recording.py — Call recording pipeline
+
+async def start_plivo_recording(
+    session: aiohttp.ClientSession,
+    call_uuid: str,
+    session_call_id: str,
+    *,
+    host: str = "",
+) -> bool:
+    """Fire Plivo Record API. Returns True if accepted (202)."""
+    auth_id, auth_token = _plivo_auth()
+    url = f"https://api.plivo.com/v1/Account/{auth_id}/Call/{call_uuid}/Record/"
+    base = public_telephony_base_url(host)
+    callback = f"{base}/plivo-recording?session_call_id={urllib.parse.quote(session_call_id)}"
+    data = {
+        "time_limit": 3600,
+        "file_format": "mp3",
+        "callback_url": callback,
+        "callback_method": "POST",
+    }
+    auth = aiohttp.BasicAuth(auth_id, auth_token)
+    async with session.post(url, json=data, auth=auth) as resp:
+        if resp.status == 202:
+            logger.info("Recording started for call_uuid={} session_call_id={}", call_uuid, session_call_id)
+            return True
+        body = await resp.text()
+        logger.error("Record API failed ({}) for {}: {}", resp.status, call_uuid, body)
+        return False
+
+
+async def handle_plivo_recording(request: Request) -> PlainTextResponse:
+    """Webhook: Plivo POSTs here when recording file is ready."""
+    pool = getattr(request.app.state, "pool", None)
+    payload = await _parse_plivo_payload(request)  # reuse from plivo_hangup.py
+
+    session_call_id = (
+        payload.get("session_call_id")
+        or request.query_params.get("session_call_id")
+        or ""
+    )
+    call_uuid = payload.get("CallUUID") or payload.get("call_uuid") or ""
+    record_url = payload.get("RecordUrl") or ""
+    recording_id = payload.get("RecordingID") or ""
+    recording_duration = payload.get("RecordingDuration") or "0"
+
+    # 1. Look up call_log
+    call_log = None
+    if session_call_id and pool:
+        call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
+    if not call_log and call_uuid and pool:
+        call_log = await pg_db.get_call_log_by_call_sid(pool, call_uuid)
+
+    if not call_log:
+        logger.warning("plivo-recording: no call_log for CallUUID={} session_call_id={}",
+                       call_uuid, session_call_id)
+        return PlainTextResponse("OK", status_code=200)
+
+    # 2. Download from Plivo
+    audio_bytes = await _download_recording(request.app.state.session, record_url)
+    if not audio_bytes:
+        return PlainTextResponse("OK", status_code=200)
+
+    # 3. Upload to storage (R2 or local)
+    client_id = str(call_log["client_id"])
+    scid = str(call_log["session_call_id"])
+    object_key = f"recordings/{client_id}/{scid}.mp3"
+
+    storage = os.getenv("RECORDING_STORAGE", "r2").lower()
+    if storage == "local":
+        _save_local(audio_bytes, scid)
+        stored_key = f"local:{scid}.mp3"
+    else:
+        upload_recording(audio_bytes, object_key)
+        stored_key = object_key
+
+    # 4. Update call_logs.recording_url
+    await pg_db.update_call_log_recording_url(pool, scid, stored_key)
+
+    # 5. (Optional) Delete from Plivo to free their storage
+    # await _delete_plivo_recording(session, recording_id)
+
+    logger.info("Recording stored: session_call_id={} key={} duration={}s",
+                scid, stored_key, recording_duration)
+    return PlainTextResponse("OK", status_code=200)
+
+
+async def _download_recording(
+    session: aiohttp.ClientSession,
+    record_url: str,
+) -> bytes | None:
+    """Download recording from Plivo with Basic Auth."""
+    if not record_url:
+        return None
+    auth_id, auth_token = _plivo_auth()
+    auth = aiohttp.BasicAuth(auth_id, auth_token)
+    try:
+        async with session.get(record_url, auth=auth) as resp:
+            if resp.status == 200:
+                return await resp.read()
+            logger.error("Failed to download recording from {}: {}", record_url, resp.status)
+    except Exception as exc:
+        logger.error("Recording download error: {}", exc)
+    return None
+
+
+def _save_local(audio_bytes: bytes, session_call_id: str) -> None:
+    """Save recording to local filesystem (dev mode)."""
+    path = Path("./data/recordings")
+    path.mkdir(parents=True, exist_ok=True)
+    (path / f"{session_call_id}.mp3").write_bytes(audio_bytes)
+```
+
+#### 2. `server.py` — Two changes
+
+**Change A: Register `/plivo-recording` endpoint** (after line 333, same pattern as `/plivo-hangup`):
+
+```python
+@app.api_route("/plivo-recording", methods=["GET", "POST"])
+async def plivo_recording(request: Request):
+    return await handle_plivo_recording(request)
+```
+
+**Change B: Fire Record API in `/answer`** (after the existing `link_call_log_plivo_sid` block, ~line 366):
+
+```python
+    # Start Plivo call recording (non-blocking)
+    if call_id and CallUUID:
+        pool = getattr(request.app.state, "pool", None)
+        if pool is not None:
+            asyncio.create_task(
+                pg_db.link_call_log_plivo_sid(pool, call_id, CallUUID)
+            )
+            # Fire recording — background task, don't block /answer response
+            session = getattr(request.app.state, "session", None)
+            if session is not None:
+                host = request.headers.get("host", "localhost")
+                asyncio.create_task(
+                    start_plivo_recording(session, CallUUID, call_id, host=host)
+                )
+```
+
+This fires for ALL calls that have a `CallUUID` — both Phase 0 `/start` and Phase 2 campaign dialer calls share this `/answer` handler.
+
+#### 3. `db/postgres.py` — One new function
+
+```python
+async def update_call_log_recording_url(
+    pool, session_call_id: str, recording_url: str
+) -> bool:
+    """Store the R2 object key (or local path) on the call_log row."""
+    result = await pool.execute(
+        "UPDATE call_logs SET recording_url = $1 WHERE session_call_id = $2",
+        recording_url,
+        session_call_id,
+    )
+    return result == "UPDATE 1"
+```
+
+No schema migration needed — `recording_url TEXT` already exists in `001_initial.sql` line 421.
+
+#### 4. `api/routes/calls.py` — One new endpoint
+
+```python
+@router.get("/{session_call_id}/recording")
+async def get_call_recording(
+    session_call_id: str,
+    client=Depends(require_client),
+    pool=Depends(get_pool),
+):
+    """Generate a presigned URL for the call recording."""
+    cid = str(client["id"])
+    row = await pg_db.get_call_log(pool, session_call_id, cid)
+    if not row:
+        raise HTTPException(404, "Call not found")
+
+    recording_key = row.get("recording_url")
+    if not recording_key:
+        raise HTTPException(404, "No recording available for this call")
+
+    storage = os.getenv("RECORDING_STORAGE", "r2").lower()
+    if storage == "local" or recording_key.startswith("local:"):
+        # Local dev: serve file directly
+        filename = recording_key.removeprefix("local:")
+        file_path = Path("./data/recordings") / filename
+        if not file_path.exists():
+            raise HTTPException(404, "Recording file not found")
+        return FileResponse(file_path, media_type="audio/mpeg")
+
+    # Production: presigned R2 URL
+    url = generate_presigned_url(recording_key, expires_in=3600)
+    return {"url": url, "expires_in": 3600}
+```
+
+#### 5. `call_log_db.py` — Add recording_path to SQLite
+
+Add to `_ensure_columns()` (follows existing pattern):
+
+```python
+    if "recording_path" not in existing:
+        alters.append("ALTER TABLE call_logs ADD COLUMN recording_path TEXT")
+```
+
+This stores the local filesystem path for dev recordings. Optional — only needed if you want to browse dev recordings after the fact.
+
+#### 6. `n8n_webhook.py` — Replace hardcoded None
+
+Line 118 currently has `"recording_url": None`. Change to:
+
+```python
+    "recording_url": call_log.get("recording_url") if call_log else None,
+```
+
+This passes the R2 object key to n8n. The n8n workflow can then hit `GET /api/calls/{session_call_id}/recording` for a presigned URL if it needs to attach audio to a CRM record or Google Sheet.
+
+#### 7. New dependency: `boto3`
+
+```bash
+uv add boto3
+```
+
+`boto3` is the S3-compatible client that works with R2 unchanged. It's a well-established dependency (used by virtually every Python project touching object storage). `aioboto3` is an option but overkill — the recording upload happens in a background task where blocking I/O is fine.
+
+### Scope: what gets recorded
+
+| Call type | Records? | Storage | Why |
+|---|---|---|---|
+| Campaign calls (dialer) | ✅ Yes | R2 (production) | Real client calls. Always record. |
+| `just test-call` | ✅ Yes | R2 or local (per `RECORDING_STORAGE`) | Goes through Plivo + `/answer`. Useful for QA. |
+| `just call` (Phase 0 `/start`) | ✅ Yes | R2 or local | Also goes through `/answer`. Same recording path. |
+| Pure local dev (no Plivo) | ❌ No | N/A | No `CallUUID` exists. No Plivo involvement. Transcript still captured in SQLite. |
+
+The recording trigger is in `/answer`, which ALL Plivo-routed calls pass through. No per-path wiring needed.
+
+### Recording disclosure (compliance)
+
+Not hardcoded into the pipeline. As admins, you handle this through bot script content. If a campaign or client vertical requires recording disclosure, add a line to the script module's opening message (e.g., "This call may be recorded for quality purposes"). This is a content decision per bot, not an infrastructure decision.
+
+### Retention & cleanup
+
+**Plivo side:** Recordings stored free for 90 days. Since we download immediately in the `/plivo-recording` webhook, Plivo's copies can be deleted right away via `DELETE /v1/Account/{auth_id}/Recording/{recording_id}/` (returns 204). This keeps Plivo clean.
+
+**R2 side:** Configurable retention. Options:
+
+| Strategy | How | Recommended? |
+|---|---|---|
+| R2 lifecycle rule | Set in Cloudflare dashboard: auto-delete objects after N days | ✅ Simplest. Set-and-forget. |
+| Application sweep | Periodic task queries `call_logs WHERE recording_url IS NOT NULL AND created_at < NOW() - INTERVAL 'N days'`, deletes R2 object, nulls `recording_url` | Good if you want DB-level awareness that recording was purged |
+| Manual | Admin deletes via Cloudflare dashboard or `aws s3 rm` | For now (few recordings). Not scalable. |
+
+Recommended: Start with manual. Add R2 lifecycle rule once recording volume justifies it. 90 days mirrors Plivo's own free window and is reasonable for most client verticals.
+
+### Error handling & edge cases
+
+| Scenario | Handling |
+|---|---|
+| Record API returns non-202 | Log error, continue. Call still works — recording is best-effort. |
+| Recording callback never arrives | No `recording_url` set. Call log still complete (transcript, extraction, billing all unaffected). |
+| Download from Plivo fails | Log error, return 200 to Plivo (prevent retries). `recording_url` stays NULL. |
+| R2 upload fails | Log error. Consider retry with exponential backoff (future). `recording_url` stays NULL. |
+| Call ends before Record API fires | Plivo auto-stops recording on hangup. Callback still fires with whatever was captured. |
+| Very short call (<2s) | Plivo may not produce a recording file. Callback may not fire. Acceptable — nothing useful to record. |
+| `time_limit` exceeded | Plivo stops recording at `time_limit` seconds but call continues. Set `time_limit` >= `MAX_CALL_MINUTES * 60 + 60` for safety. |
+
+### Plivo API rate limits
+
+- **Global rate limit:** 300 requests per 5 seconds across all Plivo APIs.
+- **Record API:** Falls under the global limit. At typical dialer throughput (~10 calls/minute), this is well within limits.
+- If you ever hit 429 (Too Many Requests): implement exponential backoff on the Record API call. Don't retry more than 3 times.
+
+### Implementation steps — ordered checklist
+
+```
+[ ] 1. Enable "Basic Auth For Recording URLs" in Plivo Console → Voice Settings
+[ ] 2. Create R2 bucket in Cloudflare dashboard (name: aakashvani-recordings)
+[ ] 3. Generate R2 API token (read+write) → add R2_* env vars to .env
+[ ] 4. uv add boto3
+[ ] 5. Create recording.py (start_plivo_recording, handle_plivo_recording,
+       _download_recording, _save_local, upload_recording, generate_presigned_url)
+[ ] 6. server.py: add /plivo-recording route (line ~333)
+[ ] 7. server.py: fire start_plivo_recording in /answer handler (line ~366)
+[ ] 8. db/postgres.py: add update_call_log_recording_url function
+[ ] 9. api/routes/calls.py: add GET /{session_call_id}/recording endpoint
+[ ] 10. call_log_db.py: add recording_path to _ensure_columns
+[ ] 11. n8n_webhook.py: replace hardcoded None at line 118
+[ ] 12. env.example: add RECORDING_STORAGE=r2 and document R2 vars
+[ ] 13. Test: just test-call → verify /plivo-recording webhook fires,
+        recording appears in R2, presigned URL works
+[ ] 14. Test: campaign dial → same verification at scale
+[ ] 15. (Optional) Add Plivo recording deletion after successful R2 upload
+[ ] 16. (Optional) Add R2 lifecycle rule for 90-day retention
+```
+
+---
+
+## 17. Open questions
 
 | Question | Options | Current decision |
 |---|---|---|
@@ -1789,3 +2283,5 @@ R2_BUCKET_NAME=aakashvani-recordings
 | Transcript write frequency | Per turn vs at call end | Per turn (required for live polling to work). |
 | Campaign budget setting | Admin sets it vs client sets it | Admin sets it. Managed service model. |
 | Credit packs | Now vs after initial client feedback | After feedback. Manual top-up for now. |
+| Recording retention | 30 / 60 / 90 / 180 days | 90 days (matches Plivo free window). Manual for now, lifecycle rule later. |
+| Recording file format | mp3 vs wav | mp3. Smaller files (~2.4 MB/10 min vs ~9.6 MB). Quality sufficient for QA/compliance. |

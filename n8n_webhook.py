@@ -115,7 +115,7 @@ async def fire_event_webhook(
             "billed_minutes": billed_minutes,
             "credits_charged": credits_charged,
             "route": route,
-            "recording_url": None,
+            "recording_url": call_log.get("recording_url") if call_log else None,
         },
         "lead": {
             "phone": lead.get("phone"),

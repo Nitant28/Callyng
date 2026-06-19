@@ -6,9 +6,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
+import os
+from pathlib import Path
+from fastapi.responses import FileResponse
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from db import postgres as pg_db
+from recording import generate_presigned_url
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
 
@@ -47,3 +51,33 @@ async def get_call(
         raise HTTPException(404, "Call not found")
         
     return {"calls": [row]}
+
+
+@router.get("/{session_call_id}/recording")
+async def get_call_recording(
+    session_call_id: str,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    """Generate a presigned URL for the call recording."""
+    cid = client_id_uuid(client)
+    row = await pg_db.get_call_log(pool, session_call_id, cid)
+    if not row:
+        raise HTTPException(404, "Call not found")
+
+    recording_key = row.get("recording_url")
+    if not recording_key:
+        raise HTTPException(404, "No recording available for this call")
+
+    storage = os.getenv("RECORDING_STORAGE", "r2").lower()
+    if storage == "local" or recording_key.startswith("local:"):
+        # Local dev: serve file directly
+        filename = recording_key.removeprefix("local:")
+        file_path = Path("./data/recordings") / filename
+        if not file_path.exists():
+            raise HTTPException(404, "Recording file not found")
+        return FileResponse(file_path, media_type="audio/mpeg")
+
+    # Production: presigned R2 URL
+    url = generate_presigned_url(recording_key, expires_in=3600)
+    return {"url": url, "expires_in": 3600}

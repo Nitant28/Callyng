@@ -2728,3 +2728,15 @@ async def get_lead_status_for_update(
         lead_id,
         client_id,
     )
+
+
+async def update_call_log_recording_url(
+    pool, session_call_id: str, recording_url: str
+) -> bool:
+    """Store the R2 object key (or local path) on the call_log row."""
+    result = await pool.execute(
+        "UPDATE call_logs SET recording_url = $1 WHERE session_call_id = $2",
+        recording_url,
+        session_call_id,
+    )
+    return result == "UPDATE 1"

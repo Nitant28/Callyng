@@ -8,6 +8,7 @@ dependencies = [
   "aiohttp>=3.13.5",
   "alembic>=1.18.4",
   "asyncpg>=0.30.0",
+  "boto3>=1.43.33",
   "fastapi>=0.136.1",
   "google-generativeai>=0.8.6",
   "loguru>=0.7.3",

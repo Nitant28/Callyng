@@ -31,6 +31,7 @@ from db.warmup_state import (
     wait_for_warmup,
 )
 from plivo_hangup import handle_plivo_hangup
+from recording import handle_plivo_recording, start_plivo_recording
 from telephony import build_hangup_url, make_plivo_call
 
 from api.script_config_validation import normalize_route
@@ -333,6 +334,11 @@ async def plivo_hangup(request: Request):
     return await handle_plivo_hangup(request)
 
 
+@app.api_route("/plivo-recording", methods=["GET", "POST"])
+async def plivo_recording(request: Request):
+    return await handle_plivo_recording(request)
+
+
 @app.api_route("/answer", methods=["GET", "POST"])
 async def answer_xml(
     request: Request,
@@ -364,6 +370,12 @@ async def answer_xml(
             asyncio.create_task(
                 pg_db.link_call_log_plivo_sid(pool, call_id, CallUUID)
             )
+            session = getattr(request.app.state, "session", None)
+            if session is not None:
+                host = request.headers.get("host", "localhost")
+                asyncio.create_task(
+                    start_plivo_recording(session, CallUUID, call_id, host=host)
+                )
 
     host = request.headers.get("host", "localhost")
     ws_url = f"wss://{host}/ws"
