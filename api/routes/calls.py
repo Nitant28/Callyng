@@ -49,8 +49,7 @@ async def get_call(
 
     if row is None:
         raise HTTPException(404, "Call not found")
-        
-    return {"calls": [row]}
+    return dict(row)
 
 
 @router.get("/{session_call_id}/recording")

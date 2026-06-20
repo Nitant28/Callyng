@@ -72,11 +72,23 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
         payload=payload,
     )
     if call_log:
-        applied = await pg_db.apply_callee_hangup_callback(pool, call_log, payload)
-        if applied:
-            logger.info(
-                "plivo-hangup callback_scheduled session_call_id={}",
-                call_log.get("session_call_id"),
-            )
+        hangup_source = payload.get("HangupSource") or payload.get("hangup_source") or ""
+        hangup_source = str(hangup_source).strip().lower()
+        call_status = str(payload.get("CallStatus") or "").strip().lower()
+        
+        unanswered_statuses = ("busy", "no-answer", "cancel", "reject", "failed")
+        is_unanswered = hangup_source != "callee" or call_status in unanswered_statuses
+        
+        if is_unanswered:
+            settled = await pg_db.settle_unanswered_call(pool, call_log)
+            if settled:
+                logger.info("plivo-hangup settled unanswered session={}", call_log.get("session_call_id"))
+        else:
+            applied = await pg_db.apply_callee_hangup_callback(pool, call_log, payload)
+            if applied:
+                logger.info(
+                    "plivo-hangup callback_scheduled session_call_id={}",
+                    call_log.get("session_call_id"),
+                )
 
     return PlainTextResponse("OK", status_code=200)

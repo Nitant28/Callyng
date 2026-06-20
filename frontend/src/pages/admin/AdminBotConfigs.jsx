@@ -48,6 +48,7 @@ export default function AdminBotConfigs() {
           active: bot.active,
           route: bot.route,
           script_id: bot.script_id,
+          script_config_id: bot.script_config_id,
           telephony_number: bot.telephony_number
         };
       });
@@ -194,6 +195,11 @@ export default function AdminBotConfigs() {
               <div>
                 <h3 className="font-headline-sm text-headline-sm text-on-surface dark:text-molten-text">{bot.name}</h3>
                 <p className="font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted mt-1 uppercase tracking-wider">{bot.code}</p>
+                {bot.script_config_id && (
+                  <p className="font-label-sm text-[10px] text-on-surface-variant/70 dark:text-molten-text-muted mt-1 font-mono break-all" title="Script Config ID">
+                    {bot.script_config_id}
+                  </p>
+                )}
               </div>
               <div className={`flex items-center gap-1.5 ${bot.bgColorClass} px-2 py-1 rounded border ${bot.borderColorClass}`}>
                 <div className={`w-2 h-2 rounded-full bg-${bot.colorTheme === 'secondary-container' ? 'secondary' : bot.colorTheme} dark:bg-${bot.colorTheme} shadow-[0_0_8px_var(--color-${bot.colorTheme})]`}></div>
@@ -308,7 +314,12 @@ export default function AdminBotConfigs() {
                 <select 
                   className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
                   value={newBotClientId}
-                  onChange={(e) => setNewBotClientId(e.target.value)}
+                  onChange={(e) => {
+                    setNewBotClientId(e.target.value);
+                    setNewBotScriptConfigId('');
+                    setNewBotScriptId('');
+                    setNewBotRoute('');
+                  }}
                   required
                 >
                   <option value="">Select a Client</option>

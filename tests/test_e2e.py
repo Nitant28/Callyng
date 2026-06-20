@@ -464,7 +464,14 @@ async def test_f4_t1_list_call_logs(client):
                 pool, sess_id, client_id, None, None, bot_id, "sts", datetime.now(timezone.utc)
             )
             await pg_db.finalize_call_log(
-                pool, sess_id, 120, "Interested", {"rating": "good"}, 2, 2.0, {}
+                pool,
+                session_call_id=sess_id,
+                duration_seconds=120,
+                outcome="Interested",
+                extraction_json={"rating": "good"},
+                billed_minutes=2,
+                credits_charged=2.0,
+                usage={}
             )
             
             test_client = client
@@ -504,7 +511,15 @@ async def test_f4_t1_view_call_transcript(client):
                 {"role": "user", "content": "I am fine.", "ts": datetime.now(timezone.utc).isoformat()}
             ]
             await pg_db.finalize_call_log(
-                pool, sess_id, 30, "Interested", {"rating": "good"}, 1, 1.0, {}, transcript=ts
+                pool,
+                session_call_id=sess_id,
+                duration_seconds=30,
+                outcome="Interested",
+                extraction_json={"rating": "good"},
+                billed_minutes=1,
+                credits_charged=1.0,
+                usage={},
+                transcript=ts
             )
             
             test_client = client
@@ -512,8 +527,7 @@ async def test_f4_t1_view_call_transcript(client):
                 res = await test_client.get(f"/api/calls/{sess_id}", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 data = res.json()
-                assert len(data["calls"]) == 1
-                assert data["calls"][0]["transcript"][0]["content"] == "Hello, how are you?"
+                assert data["transcript"][0]["content"] == "Hello, how are you?"
         finally:
             pass
 
@@ -541,14 +555,21 @@ async def test_f4_t1_view_call_extraction(client):
             )
             ext_json = {"intent": "schedule_demo", "budget_confirmed": True}
             await pg_db.finalize_call_log(
-                pool, sess_id, 45, "Interested", ext_json, 1, 1.0, {}
+                pool,
+                session_call_id=sess_id,
+                duration_seconds=45,
+                outcome="Interested",
+                extraction_json=ext_json,
+                billed_minutes=1,
+                credits_charged=1.0,
+                usage={}
             )
             test_client = client
             if True:
                 res = await test_client.get(f"/api/calls/{sess_id}", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 data = res.json()
-                assert data["calls"][0]["extraction_json"]["intent"] == "schedule_demo"
+                assert data["extraction_json"]["intent"] == "schedule_demo"
         finally:
             pass
 
@@ -835,6 +856,16 @@ async def test_f3_t2_start_campaign_no_leads(client):
                 res = await test_client.patch(f"/api/campaigns/{camp_id}/start", headers={"Authorization": f"Bearer {api_key}"})
                 assert res.status_code == 200
                 assert res.json()["status"] == "running"
+                
+                # BUG-21: Wait for background task to immediately complete the empty campaign
+                import asyncio
+                for _ in range(20):
+                    camp = await pg_db.get_campaign(pool, camp_id, client_id)
+                    if camp["status"] == "completed":
+                        break
+                    await asyncio.sleep(0.1)
+                else:
+                    pytest.fail("Campaign did not reach 'completed' state")
         finally:
             pass
 
@@ -1202,7 +1233,15 @@ async def test_f4_t4_analytics_and_review(client):
             )
             ts = [{"role": "user", "content": "I am interested"}]
             await pg_db.finalize_call_log(
-                pool, sess_id, 120, "Interested", "{}", 2, 2.5, {}, transcript=ts
+                pool,
+                session_call_id=sess_id,
+                duration_seconds=120,
+                outcome="Interested",
+                extraction_json={},
+                billed_minutes=2,
+                credits_charged=2.5,
+                usage={},
+                transcript=ts
             )
             
             test_client = client
@@ -1217,7 +1256,7 @@ async def test_f4_t4_analytics_and_review(client):
                 
                 res2 = await test_client.get(f"/api/calls/{sess_id}", headers=headers)
                 assert res2.status_code == 200
-                call_details = res2.json()["calls"][0]
+                call_details = res2.json()
                 assert call_details["transcript"][0]["content"] == "I am interested"
                 assert float(call_details["credits_charged"]) == 2.5
         finally:

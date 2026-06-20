@@ -87,29 +87,38 @@ export default function AdminCampaigns() {
   };
 
   const handleAction = async (action, id) => {
-    if (action === 'stop') {
-      if (!window.confirm("Pause this campaign and release stuck leads?")) return;
-      try {
-        await adminApi.patch(`/internal/campaigns/${id}/stop`);
-        fetchCampaigns();
-      } catch (err) {
-        alert(err.customErrorMessage || "Failed to stop campaign");
-      }
-    } else if (action === 'cancel') {
-      if (!window.confirm("Cancel this campaign, fail pending leads, and refund budget?")) return;
-      try {
-        const res = await adminApi.patch(`/internal/campaigns/${id}/cancel`);
+    let confirmMsg = "";
+    if (action === 'stop') confirmMsg = "Pause this campaign and release stuck leads?";
+    else if (action === 'cancel') confirmMsg = "Cancel this campaign, fail pending leads, and refund budget?";
+    
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+
+    try {
+      const res = await adminApi.patch(`/internal/campaigns/${id}/${action}`);
+      if (action === 'cancel') {
         alert(`Cancelled! Refunded ₹${res.data.credits_returned?.toFixed(2)}`);
-        fetchCampaigns();
-      } catch (err) {
-        alert(err.customErrorMessage || "Failed to cancel campaign");
       }
+      fetchCampaigns();
+      if (selectedCampaign && selectedCampaign.id === id) {
+        const campRes = await adminApi.get(`/internal/campaigns/${id}`);
+        if (campRes.data.campaign) setSelectedCampaign(campRes.data.campaign);
+      }
+    } catch (err) {
+      alert(err.customErrorMessage || `Failed to ${action} campaign`);
     }
   };
 
-  const openDrawer = (camp) => {
+  const openDrawer = async (camp) => {
     setSelectedCampaign(camp);
     setIsDrawerOpen(true);
+    try {
+      const res = await adminApi.get(`/internal/campaigns/${camp.id}`);
+      if (res.data.campaign) {
+        setSelectedCampaign(res.data.campaign);
+      }
+    } catch (e) {
+      console.error("Failed to refresh campaign drawer", e);
+    }
   };
 
   const renderStatus = (status) => {
@@ -202,6 +211,12 @@ export default function AdminCampaigns() {
                           className="px-2 py-1 text-xs rounded bg-arctic-warning/20 dark:bg-molten-warning/20 text-arctic-warning dark:text-molten-warning hover:opacity-80"
                         >Stop</button>
                       )}
+                      {(camp.status === 'draft' || camp.status === 'paused') && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleAction('start', camp.id); }}
+                          className="px-2 py-1 text-xs rounded bg-primary/20 dark:bg-molten-primary/20 text-primary dark:text-molten-primary hover:opacity-80"
+                        >Start</button>
+                      )}
                       {(camp.status !== 'completed' && camp.status !== 'cancelled') && (
                         <button 
                           onClick={(e) => { e.stopPropagation(); handleAction('cancel', camp.id); }}
@@ -279,6 +294,14 @@ export default function AdminCampaigns() {
                   <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Max Call Mins</label>
                   <input className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" type="number" min="1" value={createData.max_call_minutes} onChange={e => setCreateData({...createData, max_call_minutes: e.target.value})} />
                 </div>
+                <div>
+                  <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Max Attempts</label>
+                  <input required className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" type="number" min="1" value={createData.max_attempts} onChange={e => setCreateData({...createData, max_attempts: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Retry Delay (min)</label>
+                  <input required className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" type="number" min="0" value={createData.retry_delay_minutes} onChange={e => setCreateData({...createData, retry_delay_minutes: e.target.value})} />
+                </div>
               </div>
               <div className="pt-4 flex justify-end gap-2">
                 <button type="button" onClick={() => setIsCreateOpen(false)} className="px-4 py-2 rounded-lg text-on-surface-variant dark:text-molten-text border border-outline-variant dark:border-[#2A345E] hover:bg-surface-container dark:hover:bg-[#2A345E]/50 transition-colors">Cancel</button>
@@ -304,7 +327,18 @@ export default function AdminCampaigns() {
               <div>
                 <h4 className="text-lg font-bold dark:text-molten-text">{selectedCampaign.name}</h4>
                 <p className="text-sm text-on-surface-variant dark:text-molten-text-muted font-mono">{selectedCampaign.id}</p>
-                <div className="mt-2">{renderStatus(selectedCampaign.status)}</div>
+                <div className="mt-2 flex items-center gap-2">
+                  {renderStatus(selectedCampaign.status)}
+                  {(selectedCampaign.status === 'running' || selectedCampaign.status === 'pausing') && (
+                    <button onClick={() => handleAction('stop', selectedCampaign.id)} className="px-2 py-1 text-xs rounded bg-arctic-warning/20 dark:bg-molten-warning/20 text-arctic-warning dark:text-molten-warning hover:opacity-80">Stop</button>
+                  )}
+                  {(selectedCampaign.status === 'draft' || selectedCampaign.status === 'paused') && (
+                    <button onClick={() => handleAction('start', selectedCampaign.id)} className="px-2 py-1 text-xs rounded bg-primary/20 dark:bg-molten-primary/20 text-primary dark:text-molten-primary hover:opacity-80">Start</button>
+                  )}
+                  {(selectedCampaign.status !== 'completed' && selectedCampaign.status !== 'cancelled') && (
+                    <button onClick={() => handleAction('cancel', selectedCampaign.id)} className="px-2 py-1 text-xs rounded bg-error-container dark:bg-molten-error/20 text-on-error-container dark:text-molten-error hover:opacity-80">Cancel</button>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

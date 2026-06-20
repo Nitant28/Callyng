@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from api.guards import require_campaign_modifiable, require_lead_not_calling, require_lead_unstarted
-from compliance import add_dnd, is_call_allowed
+from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from lead_upload.normaliser import normalise_phone
 
@@ -19,10 +19,10 @@ router = APIRouter(prefix="/api/campaigns", tags=["leads"])
 # ── Allowed manual status transitions ────────────────────────────────────────
 
 _MANUAL_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"failed", "dnc", "callback_scheduled"},
-    "callback_scheduled": {"pending", "failed", "dnc"},
-    "failed": {"pending"},
-    "dnc": {"pending"},
+    "pending": {"failed", "dnc", "callback_scheduled", "completed"},
+    "callback_scheduled": {"pending", "failed", "dnc", "completed"},
+    "failed": {"pending", "completed"},
+    "dnc": {"pending", "completed"},
     "completed": {"pending"},
 }
 
@@ -169,12 +169,11 @@ async def add_lead(
     if not phone:
         raise HTTPException(422, f"Invalid phone number: {body.phone}")
 
-    # DNC check
     status = "pending"
-    allowed, reason = is_call_allowed(phone)
-    if not allowed and "DND" in reason:
-        status = "dnc"
-        add_dnd(phone)
+    allowed, reason = is_call_allowed()
+    next_attempt_at = None
+    if not allowed and "window" in reason:
+        next_attempt_at = next_compliant_time()
 
     if body.lead_type and body.lead_type not in ("cold", "warm", "hot"):
         raise HTTPException(422, "lead_type must be one of: cold, warm, hot")
@@ -187,6 +186,7 @@ async def add_lead(
         "lead_type": body.lead_type or "cold",
         "status": status,
         "max_attempts": int(camp.get("max_attempts") or 3),
+        "next_attempt_at": next_attempt_at,
         "metadata": body.metadata or {},
     }
 
@@ -197,7 +197,6 @@ async def add_lead(
 
     return {
         "lead": inserted,
-        "dnc": status == "dnc",
     }
 
 

@@ -38,6 +38,7 @@ from pipecat.transports.websocket.fastapi import (
 from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 
 from call_limits import (
+    BotSpeechEndGate,
     end_call_function_schema,
     make_end_call_handler,
     parse_goodbye_hangup_delay_s,
@@ -135,11 +136,13 @@ async def run_bot(
         ),
     )
 
+    end_gate = BotSpeechEndGate()
     pipeline = Pipeline([
         transport.input(),
         user_aggregator,
         llm,
         transport.output(),
+        end_gate,
         usage_tap,
         assistant_aggregator,
     ])
@@ -160,9 +163,13 @@ async def run_bot(
     pg = body.get("_pg") or {}
     max_minutes = parse_max_call_minutes(pg.get("max_call_minutes"))
     call_limits = schedule_max_call_duration(
-        task, max_minutes, "max_call_duration"
+        task,
+        max_minutes,
+        "max_call_duration",
+        hangup_delay_s=parse_goodbye_hangup_delay_s(),
     )
     coordinator = call_limits.coordinator
+    end_gate.bind(coordinator)
     llm.register_function("end_call", make_end_call_handler(coordinator))
 
     started_at_iso = datetime.now(timezone.utc).isoformat()

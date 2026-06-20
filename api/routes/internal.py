@@ -37,6 +37,7 @@ class CreateBotConfigBody(BaseModel):
     name: str
     route: str
     script_id: str
+    script_config_id: UUID | None = None
     telephony_number: str
     credits_per_minute: float
 
@@ -83,6 +84,7 @@ class BotConfigPatchBody(BaseModel):
     name: str | None = None
     route: str | None = None
     script_id: str | None = None
+    script_config_id: UUID | None = None
     telephony_number: str | None = None
     credits_per_minute: float | None = None
     active: bool | None = None
@@ -246,6 +248,7 @@ async def create_bot_config(
         body.script_id,
         body.telephony_number,
         body.credits_per_minute,
+        script_config_id=body.script_config_id,
     )
     return {"id": str(bot_id)}
 
@@ -307,6 +310,10 @@ async def patch_bot_config(
             raise HTTPException(422, "script_id validation failed")
         sets.append(f"script_id = ${idx}")
         args.append(body.script_id)
+        idx += 1
+    if body.script_config_id is not None:
+        sets.append(f"script_config_id = ${idx}")
+        args.append(body.script_config_id)
         idx += 1
     if body.telephony_number is not None:
         sets.append(f"telephony_number = ${idx}")
@@ -424,12 +431,11 @@ async def stop_campaign_admin(
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
 ):
-    from dialer.concurrent_dialer import stop_dialer
     camp = await pg_db.get_campaign_admin(pool, campaign_id)
     if camp is None:
         raise HTTPException(404, "Campaign not found")
     client_id = UUID(str(camp["client_id"]))
-    stop_dialer(campaign_id, client_id)
+    await stop_dialer(campaign_id, client_id)
     released = await pg_db.release_stuck_calling_leads(pool, campaign_id, client_id)
     await pg_db.update_campaign_status(pool, campaign_id, client_id, "paused")
     return {"status": "paused", "released_calling_leads": released}
@@ -481,7 +487,7 @@ async def cancel_campaign_admin(
     if camp["status"] in ("completed", "cancelled"):
         raise HTTPException(409, f"Campaign already {camp['status']}")
     client_id = UUID(str(camp["client_id"]))
-    stop_dialer(campaign_id, client_id)
+    await stop_dialer(campaign_id, client_id)
     try:
         result = await pg_db.cancel_campaign(pool, campaign_id, client_id)
     except ValueError as exc:

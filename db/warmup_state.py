@@ -22,7 +22,7 @@ async def set_warmup_pending(call_id: str) -> None:
 
 async def set_warmup_ready(call_id: str) -> None:
     redis = get_redis()
-    await redis.set(_warmup_key(call_id), "ready", ex=WARMUP_TTL_SECONDS)
+    await redis.set(_warmup_key(call_id), "ready", ex=WARMUP_TTL_SECONDS, xx=True)
 
 
 async def clear_warmup(call_id: str) -> None:

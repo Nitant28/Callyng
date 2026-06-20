@@ -18,6 +18,7 @@ from pipecat.transcriptions.language import Language
 
 from lead_context import LeadContext
 from script_prefetch import build_lead_dict
+from background_tasks import spawn_background_task
 
 _STS_SCRIPT_ATTRS = (
     "build_system_instruction",
@@ -343,7 +344,6 @@ def schedule_post_call_snapshot_write(
     """Fire-and-forget snapshot write for module-path bots."""
     if not session_call_id or runtime.source != "module":
         return
-    import asyncio
 
     async def _run() -> None:
         try:
@@ -356,8 +356,7 @@ def schedule_post_call_snapshot_write(
             logger.warning("post_call_snapshot schedule failed: {}", exc)
 
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_run())
+        spawn_background_task(_run(), "post_call_snapshot")
     except RuntimeError:
         pass
 

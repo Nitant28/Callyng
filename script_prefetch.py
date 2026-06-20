@@ -15,7 +15,7 @@ from db.redis_client import get_redis
 
 _METADATA_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _PREFETCH_KEY_PREFIX = "prefetch:"
-PREFETCH_TTL_SECONDS = 300
+PREFETCH_TTL_SECONDS = 1800
 
 
 def _prefetch_key(session_call_id: str) -> str:

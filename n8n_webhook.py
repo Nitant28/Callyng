@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -48,21 +49,29 @@ async def _post_signed(
         headers["X-Aakashvani-Signature"] = sign_payload(payload, secret)
 
     logger.info("n8n webhook: sending POST (timeout {}s)", timeout_s)
-    try:
-        timeout = aiohttp.ClientTimeout(total=timeout_s)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                body_preview = (await resp.text())[:500]
-                if resp.status >= 400:
-                    logger.warning(
-                        "n8n webhook: HTTP {} — {}",
-                        resp.status,
-                        body_preview,
-                    )
-                else:
-                    logger.info("n8n webhook: HTTP {} ok", resp.status)
-    except Exception as exc:
-        logger.warning("n8n webhook: request failed: {}", exc)
+    timeout = aiohttp.ClientTimeout(total=timeout_s)
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    body_preview = (await resp.text())[:500]
+                    if resp.status >= 400:
+                        logger.warning(
+                            "n8n webhook: HTTP {} — {} (attempt {})",
+                            resp.status,
+                            body_preview,
+                            attempt + 1,
+                        )
+                        if resp.status < 500:
+                            return
+                    else:
+                        logger.info("n8n webhook: HTTP {} ok", resp.status)
+                        return
+        except Exception as exc:
+            logger.warning("n8n webhook: request failed (attempt {}): {}", attempt + 1, exc)
+            
+        if attempt < 2:
+            await asyncio.sleep(2 ** attempt)
 
 
 async def send_call_completed_webhook(payload: dict[str, Any]) -> None:
@@ -96,6 +105,7 @@ async def fire_event_webhook(
     billed_minutes: int,
     credits_charged: float,
     route: str | None,
+    recording_url: str | None = None,
 ) -> None:
     from db import postgres as pg_db
 
@@ -115,7 +125,7 @@ async def fire_event_webhook(
             "billed_minutes": billed_minutes,
             "credits_charged": credits_charged,
             "route": route,
-            "recording_url": call_log.get("recording_url") if call_log else None,
+            "recording_url": recording_url,
         },
         "lead": {
             "phone": lead.get("phone"),

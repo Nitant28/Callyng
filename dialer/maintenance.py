@@ -30,6 +30,10 @@ async def run_stale_call_log_sweep(pool: asyncpg.Pool) -> int:
     n = await pg_db.finalize_all_stale_in_progress_call_logs(pool)
     if n:
         logger.info("Stale call_log sweep finalized {} row(s)", n)
+        
+    settled = await pg_db.settle_budget_for_stale_call_logs(pool)
+    if settled:
+        logger.info("Stale sweep settled budget for {} call_log(s)", settled)
     
     released = await pg_db.release_all_stuck_calling_leads(pool)
     if released:

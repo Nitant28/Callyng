@@ -297,10 +297,7 @@ const CampaignDetail = () => {
     try {
       const response = await clientApi.post(`/api/campaigns/${id}/leads`, newLead);
       if (response.data) {
-        if (response.data.dnc) {
-          showToast('Warning: This number is on the DNC (Do Not Call) list and was blocked.', 'warning');
-          return;
-        }
+
         showToast('Lead added successfully.', 'success');
         setIsAddLeadOpen(false);
         setNewLead({ name: '', phone: '', lead_type: 'cold', metadata: {} });
@@ -783,7 +780,7 @@ const CampaignDetail = () => {
                         <ul className="text-xs space-y-1 list-disc list-inside">
                           <li>Uploaded: <strong>{uploadResult.details.leads_uploaded}</strong> leads</li>
                           <li>Duplicates skipped: <strong>{uploadResult.details.duplicates_skipped}</strong></li>
-                          <li>DNC numbers skipped: <strong>{uploadResult.details.dnc_on_upload}</strong></li>
+
                           <li>Invalid formats skipped: <strong>{uploadResult.details.invalid_phones}</strong></li>
                         </ul>
                       )}

@@ -45,6 +45,8 @@ export default function AdminDiagnostics() {
   const failedExtractions = useMemo(() => {
     return calls.filter(c => {
       if (c.in_progress) return false;
+      if (!c.campaign_id) return false;
+      if (c.duration_seconds < 15) return false;
       return (!c.outcome) || (c.extraction_error !== null);
     });
   }, [calls]);
@@ -61,8 +63,8 @@ export default function AdminDiagnostics() {
 
   const handleReleaseStuckLeads = async (campaignId) => {
     try {
-      const res = await adminApi.post(`/internal/campaigns/${campaignId}/release`);
-      alert(`Released ${res.data.released_leads} leads!`);
+      const res = await adminApi.post(`/internal/campaigns/${campaignId}/release-stuck`);
+      alert(`Released ${res.data.released} leads!`);
       fetchData();
     } catch (err) {
       alert(err.customErrorMessage || "Failed to release leads");

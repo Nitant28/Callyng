@@ -15,7 +15,7 @@ import db.postgres as pg_db
 
 
 def _r2_client():
-    account_id = os.environ.get("R2_ACCOUNT_ID")
+    account_id = (os.environ.get("R2_ACCOUNT_ID") or "").strip().rstrip("/")
     access_key = os.environ.get("R2_ACCESS_KEY_ID")
     secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
     return boto3.client(
@@ -69,7 +69,7 @@ async def start_plivo_recording(
     }
     auth = aiohttp.BasicAuth(auth_id, auth_token)
     async with session.post(url, json=data, auth=auth) as resp:
-        if resp.status == 202:
+        if resp.status in (200, 202):
             logger.info("Recording started for call_uuid={} session_call_id={}", call_uuid, session_call_id)
             return True
         body = await resp.text()
@@ -93,6 +93,7 @@ async def handle_plivo_recording(request: Request) -> PlainTextResponse:
     recording_duration = payload.get("RecordingDuration") or "0"
 
     # 1. Look up call_log
+    logger.info(f"[DEBUG] session_call_id: {session_call_id}, call_uuid: {call_uuid}, record_url: {record_url}")
     call_log = None
     if session_call_id and pool:
         call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
@@ -105,8 +106,10 @@ async def handle_plivo_recording(request: Request) -> PlainTextResponse:
         return PlainTextResponse("OK", status_code=200)
 
     # 2. Download from Plivo
+    logger.info("[DEBUG] Downloading recording...")
     audio_bytes = await _download_recording(request.app.state.session, record_url)
     if not audio_bytes:
+        logger.warning("[DEBUG] Download failed or returned empty.")
         return PlainTextResponse("OK", status_code=200)
 
     # 3. Upload to storage (R2 or local)
@@ -115,15 +118,25 @@ async def handle_plivo_recording(request: Request) -> PlainTextResponse:
     object_key = f"recordings/{client_id}/{scid}.mp3"
 
     storage = os.getenv("RECORDING_STORAGE", "r2").lower()
-    if storage == "local":
-        _save_local(audio_bytes, scid)
-        stored_key = f"local:{scid}.mp3"
-    else:
-        upload_recording(audio_bytes, object_key)
-        stored_key = object_key
+    logger.info(f"[DEBUG] Storage type: {storage}, object_key: {object_key}")
+    try:
+        if storage == "local":
+            _save_local(audio_bytes, scid)
+            stored_key = f"local:{scid}.mp3"
+        else:
+            upload_recording(audio_bytes, object_key)
+            stored_key = object_key
+    except Exception as e:
+        logger.error(f"[DEBUG] Upload error: {e}")
+        return PlainTextResponse("OK", status_code=200)
 
     # 4. Update call_logs.recording_url
-    await pg_db.update_call_log_recording_url(pool, scid, stored_key)
+    logger.info(f"[DEBUG] Updating DB with key: {stored_key}")
+    try:
+        await pg_db.update_call_log_recording_url(pool, scid, stored_key)
+        logger.info("[DEBUG] DB update successful")
+    except Exception as e:
+        logger.error(f"[DEBUG] DB update error: {e}")
 
     # 5. (Optional) Delete from Plivo to free their storage
     # await _delete_plivo_recording(session, recording_id)

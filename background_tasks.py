@@ -15,9 +15,9 @@ def bind_background_tasks(registry: set[asyncio.Task[Any]]) -> None:
     _registry = registry
 
 
-def spawn_background_task(coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+def spawn_background_task(coro: Coroutine[Any, Any, Any], name: str | None = None) -> asyncio.Task[Any]:
     """Create a task and retain a strong reference until it completes."""
-    task = asyncio.create_task(coro)
+    task = asyncio.create_task(coro, name=name)
     if _registry is not None:
         _registry.add(task)
         task.add_done_callback(_registry.discard)

@@ -184,6 +184,54 @@ async def finalize_all_stale_in_progress_call_logs(
     return n
 
 
+async def settle_budget_for_stale_call_logs(pool: asyncpg.Pool) -> int:
+    """Settle budget for call_logs finalized by the stale sweep that still hold reservations."""
+    rows = await pool.fetch(
+        """
+        SELECT cl.session_call_id, cl.campaign_id, cl.client_id, cl.call_data
+        FROM call_logs cl
+        WHERE cl.in_progress = FALSE
+          AND cl.credits_charged IS NULL
+          AND cl.ended_at IS NOT NULL
+          AND cl.ended_at > NOW() - INTERVAL '1 hour'
+          AND cl.call_data IS NOT NULL
+        """
+    )
+    settled = 0
+    for row in rows:
+        reserved = budget_reserved_from_call_data(row["call_data"])
+        if reserved <= 0:
+            continue
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await settle_call_budget(
+                        conn,
+                        row["campaign_id"],
+                        row["client_id"],
+                        Decimal("0"),
+                        reserved,
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE call_logs
+                        SET credits_charged = 0, billed_minutes = 0
+                        WHERE session_call_id = $1 AND credits_charged IS NULL
+                        """,
+                        row["session_call_id"],
+                    )
+            settled += 1
+        except Exception as exc:
+            logger.warning(
+                "Failed to settle budget for stale call_log {}: {}",
+                row["session_call_id"],
+                exc,
+            )
+    if settled:
+        logger.info("Settled budget for {} stale call_log(s)", settled)
+    return settled
+
+
 # Counter deltas: (from_status, to_status) -> column adjustments
 _COUNTER_DELTAS: dict[tuple[str, str], dict[str, int]] = {
     ("pending", "calling"): {"calling_leads": 1, "pending_leads": -1},
@@ -193,6 +241,10 @@ _COUNTER_DELTAS: dict[tuple[str, str], dict[str, int]] = {
     ("calling", "dnc"): {"calling_leads": -1, "dnc_leads": 1},
     ("calling", "callback_scheduled"): {"calling_leads": -1, "callback_leads": 1},
     ("calling", "pending"): {"calling_leads": -1, "pending_leads": 1},
+    ("callback_scheduled", "completed"): {"callback_leads": -1, "completed_leads": 1},
+    ("callback_scheduled", "failed"): {"callback_leads": -1, "failed_leads": 1},
+    ("callback_scheduled", "dnc"): {"callback_leads": -1, "dnc_leads": 1},
+    ("callback_scheduled", "pending"): {"callback_leads": -1, "pending_leads": 1},
 }
 
 _ALLOWED_COUNTER_COLS = frozenset(
@@ -419,13 +471,14 @@ async def create_bot_config(
     script_id: str,
     telephony_number: str,
     credits_per_minute: float,
+    script_config_id: UUID | None = None,
 ) -> UUID:
     row = await pool.fetchrow(
         """
         INSERT INTO bot_configs (
-            client_id, name, route, script_id, telephony_number, credits_per_minute
+            client_id, name, route, script_id, telephony_number, credits_per_minute, script_config_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
         """,
         client_id,
@@ -434,6 +487,7 @@ async def create_bot_config(
         script_id,
         telephony_number,
         Decimal(str(credits_per_minute)),
+        script_config_id,
     )
     return row["id"]
 
@@ -1468,7 +1522,7 @@ async def bulk_insert_leads(pool: asyncpg.Pool, leads: list[dict]) -> int:
                     client_id, campaign_id, phone, name, lead_type,
                     status, max_attempts, next_attempt_at, metadata
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8::jsonb)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($9::timestamptz, NOW()), $8::jsonb)
                 ON CONFLICT (campaign_id, phone) DO NOTHING
                 """,
                 lead["client_id"],
@@ -1479,6 +1533,7 @@ async def bulk_insert_leads(pool: asyncpg.Pool, leads: list[dict]) -> int:
                 lead_status,
                 lead.get("max_attempts", 3),
                 meta,
+                lead.get("next_attempt_at"),
             )
             if result.split()[-1] == "1":
                 inserted += 1
@@ -2051,7 +2106,7 @@ async def insert_single_lead(
                     client_id, campaign_id, phone, name, lead_type,
                     status, max_attempts, next_attempt_at, metadata
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8::jsonb)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($9::timestamptz, NOW()), $8::jsonb)
                 ON CONFLICT (campaign_id, phone) DO NOTHING
                 RETURNING *
                 """,
@@ -2063,6 +2118,7 @@ async def insert_single_lead(
                 lead_status,
                 lead.get("max_attempts", 3),
                 meta_json,
+                lead.get("next_attempt_at"),
             )
             if row is None:
                 raise ValueError(
@@ -2249,18 +2305,29 @@ async def patch_call_log_post_call_snapshot(
 async def mark_call_log_not_in_progress(
     pool: asyncpg.Pool,
     session_call_id: str,
+    *,
+    set_credits_charged_zero: bool = False,
 ) -> bool:
     """Clear live flag as soon as the pipeline ends (before post-call extraction)."""
-    row = await pool.fetchrow(
-        """
-        UPDATE call_logs SET
-            in_progress = FALSE,
-            ended_at = COALESCE(ended_at, NOW())
-        WHERE session_call_id = $1 AND in_progress = TRUE
-        RETURNING id
-        """,
-        session_call_id,
-    )
+    if set_credits_charged_zero:
+        sql = """
+            UPDATE call_logs SET
+                in_progress = FALSE,
+                ended_at = COALESCE(ended_at, NOW()),
+                credits_charged = 0,
+                billed_minutes = 0
+            WHERE session_call_id = $1 AND in_progress = TRUE
+            RETURNING id
+            """
+    else:
+        sql = """
+            UPDATE call_logs SET
+                in_progress = FALSE,
+                ended_at = COALESCE(ended_at, NOW())
+            WHERE session_call_id = $1 AND in_progress = TRUE
+            RETURNING id
+            """
+    row = await pool.fetchrow(sql, session_call_id)
     return row is not None
 
 
@@ -2330,7 +2397,8 @@ async def record_plivo_hangup(
         "hangup_source": _normalize_hangup_source(payload),
         "call_uuid": call_uuid or payload.get("CallUUID") or payload.get("call_uuid"),
     }
-    blob = stored
+    import json
+    blob = json.dumps(stored)
     if session_call_id:
         row = await pool.fetchrow(
             """
@@ -2459,6 +2527,94 @@ async def apply_callee_hangup_callback(
         campaign_id,
         session_call_id,
         retry_delay,
+    )
+    return True
+
+
+async def settle_unanswered_call(
+    pool: asyncpg.Pool,
+    call_log: dict,
+    *,
+    retry_delay_minutes: int = 120,
+) -> bool:
+    """Settle budget and release lead for calls that were never answered.
+
+    Handles BUSY, NO_ANSWER, CALL_REJECTED, and provider-error hangups.
+    The call is billed at 0 credits and the lead is returned to pending for retry.
+    """
+    session_call_id = call_log.get("session_call_id")
+    lead_id = call_log.get("lead_id")
+    campaign_id = call_log.get("campaign_id")
+    client_id = call_log.get("client_id")
+    if not session_call_id or not lead_id or not campaign_id or not client_id:
+        return False
+
+    reserved = budget_reserved_from_call_data(call_log.get("call_data"))
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Mark call_log as done with 0 charge
+            result = await conn.execute(
+                """
+                UPDATE call_logs
+                SET in_progress = FALSE,
+                    ended_at = COALESCE(ended_at, NOW()),
+                    credits_charged = 0,
+                    billed_minutes = 0,
+                    outcome = COALESCE(NULLIF(TRIM(outcome), ''), 'Unanswered')
+                WHERE session_call_id = $1 AND in_progress = TRUE
+                """,
+                session_call_id,
+            )
+            if result.split()[-1] == "0":
+                # Already finalized by another path
+                return False
+
+            # Settle budget: release the reservation with 0 charge
+            if reserved > 0:
+                await settle_call_budget(
+                    conn,
+                    UUID(str(campaign_id)),
+                    UUID(str(client_id)),
+                    Decimal("0"),
+                    reserved,
+                )
+
+            # Release lead back to pending for retry
+            lead_row = await conn.fetchrow(
+                """
+                SELECT status FROM leads
+                WHERE id = $1 AND client_id = $2
+                FOR UPDATE
+                """,
+                UUID(str(lead_id)),
+                UUID(str(client_id)),
+            )
+            if lead_row and lead_row["status"] == "calling":
+                await conn.execute(
+                    """
+                    UPDATE leads
+                    SET status = 'pending',
+                        next_attempt_at = NOW() + ($3::text || ' minutes')::interval
+                    WHERE id = $1 AND client_id = $2 AND status = 'calling'
+                    """,
+                    UUID(str(lead_id)),
+                    UUID(str(client_id)),
+                    str(retry_delay_minutes),
+                )
+                await increment_campaign_counters(
+                    conn,
+                    UUID(str(campaign_id)),
+                    from_status="calling",
+                    to_status="pending",
+                )
+
+    logger.info(
+        "Settled unanswered call session={} lead={} campaign={} reserved={}",
+        session_call_id,
+        lead_id,
+        campaign_id,
+        reserved,
     )
     return True
 

@@ -20,6 +20,8 @@ from server import app
 from db import postgres as pg_db
 import redis.asyncio as redis
 from db import redis_client as redis_db
+import aiohttp
+from unittest.mock import patch
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def setup_globals():
@@ -28,6 +30,10 @@ async def setup_globals():
     app.state.pool = pool
     await redis_db.init_redis(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
     app.state.dialer_tasks = {}
+    app.state.session = aiohttp.ClientSession()
+    app.state.background_tasks = set()
+    from background_tasks import bind_background_tasks
+    bind_background_tasks(app.state.background_tasks)
     
     yield
     
@@ -77,6 +83,7 @@ async def setup_globals():
     except Exception as e:
         print(f"Warning: Failed to clean up database records: {e}")
         
+    await app.state.session.close()
     await pg_db.close_pool()
 
 @pytest_asyncio.fixture(scope="session")
@@ -91,3 +98,10 @@ def client(_global_client):
 @pytest.fixture
 def test_client(_global_client):
     return _global_client
+
+@pytest.fixture(autouse=True)
+def mock_is_call_allowed():
+    with patch("dialer.concurrent_dialer.is_call_allowed", return_value=(True, "Allowed")), \
+         patch("api.routes.campaigns.is_call_allowed", return_value=(True, "Allowed")), \
+         patch("api.routes.leads.is_call_allowed", return_value=(True, "Allowed")):
+        yield

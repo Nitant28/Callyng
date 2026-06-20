@@ -89,6 +89,34 @@ def test_warmup_pending_to_ready():
 
 
 @pytest.mark.skipif(not os.getenv("REDIS_URL"), reason="REDIS_URL not set")
+def test_warmup_aborted_clear_warmup():
+    """BUG-11 regression test: set_warmup_ready should not recreate a cleared key."""
+    async def _run_test():
+        from db import redis_client as redis_db
+        from db.warmup_state import (
+            set_warmup_pending,
+            set_warmup_ready,
+            clear_warmup,
+        )
+
+        await _init_redis()
+        call_id = f"warmup-abort-{uuid.uuid4().hex}"
+        try:
+            await set_warmup_pending(call_id)
+            await clear_warmup(call_id)
+            # This should do nothing because the key is missing
+            await set_warmup_ready(call_id)
+            
+            redis = redis_db.get_redis()
+            val = await redis.get(f"warmup:{call_id}")
+            assert val is None
+        finally:
+            await _close_redis()
+
+    _run(_run_test())
+
+
+@pytest.mark.skipif(not os.getenv("REDIS_URL"), reason="REDIS_URL not set")
 def test_dialer_lock_acquire_refresh_release():
     async def _run_test():
         from dialer.dialer_lock import (

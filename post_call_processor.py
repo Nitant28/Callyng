@@ -15,7 +15,7 @@ from db import postgres as pg_db
 from n8n_webhook import fire_event_webhook, outcome_to_event
 from script_runtime import outcome_buckets
 
-_IST = timezone.utc  # callback parsing uses UTC; compliance uses IST separately
+
 
 
 def _parse_callback_time(raw: Any) -> datetime | None:
@@ -27,7 +27,21 @@ def _parse_callback_time(raw: Any) -> datetime | None:
         try:
             return datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
-            return None
+            pass
+        try:
+            import dateparser
+
+            parsed = dateparser.parse(
+                raw,
+                settings={
+                    "TIMEZONE": "Asia/Kolkata",
+                    "RETURN_AS_TIMEZONE_AWARE": True,
+                },
+            )
+            if parsed is not None:
+                return parsed
+        except Exception:
+            pass
     return None
 
 
@@ -182,9 +196,8 @@ async def process_post_call(
         return
 
     credits_per_minute = float(bot_config["credits_per_minute"])
-    billed_minutes = max(1, math.ceil(duration_seconds / 60)) if duration_seconds > 0 else 0
-    if duration_seconds > 0 and billed_minutes == 0:
-        billed_minutes = 1
+    _MIN_BILLABLE_DURATION_S = 15
+    billed_minutes = math.ceil(duration_seconds / 60) if duration_seconds >= _MIN_BILLABLE_DURATION_S else 0
     credits_charged = billed_minutes * credits_per_minute
 
     outcome = (extraction_json or {}).get("intent_status", "Unknown")
@@ -350,4 +363,5 @@ async def process_post_call(
                 billed_minutes=billed_minutes,
                 credits_charged=credits_charged,
                 route=bot_config.get("route"),
+                recording_url=call_log.get("recording_url") if call_log else None,
             )

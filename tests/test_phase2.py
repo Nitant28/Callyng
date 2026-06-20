@@ -18,25 +18,7 @@ def test_script_id_regex_rejects_traversal():
     assert not SCRIPT_RE.fullmatch("../secrets")
 
 
-def test_compliance_dnd_list(monkeypatch):
-    import compliance
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    
-    _IST = ZoneInfo("Asia/Kolkata")
-    
-    class MockDatetime:
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 6, 1, 12, 0, tzinfo=_IST)
-            
-    monkeypatch.setattr(compliance, "datetime", MockDatetime)
 
-    phone = "+919999999001"
-    compliance.add_dnd(phone)
-    allowed, reason = compliance.is_call_allowed(phone)
-    assert allowed is False
-    assert "DND" in reason
 
 
 def test_outcome_to_event_mapping():
@@ -267,13 +249,13 @@ async def test_finalize_call_log_after_early_in_progress_clear():
             transcript = [{"role": "user", "content": "hello"}]
             await pg_db.finalize_call_log(
                 pool,
-                sid,
-                60,
-                "Not_Interested",
-                {"intent_status": "Not_Interested", "callback_time": None},
-                1,
-                1.0,
-                {},
+                session_call_id=sid,
+                duration_seconds=60,
+                outcome="Not_Interested",
+                extraction_json={"intent_status": "Not_Interested", "callback_time": None},
+                billed_minutes=1,
+                credits_charged=1.0,
+                usage={},
                 transcript=transcript,
             )
             row = await pool.fetchrow(

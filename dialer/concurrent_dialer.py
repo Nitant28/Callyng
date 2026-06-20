@@ -280,6 +280,13 @@ async def fire_call(
         bot_config.get("telephony_number")
         or os.getenv("PLIVO_PHONE_NUMBER", "")
     )
+    if not await check_plivo_balance(session):
+        if prefetch_registered:
+            await pop_prefetched_config(call_id)
+        if lead_uuid:
+            await _release_lead_to_pending(pool, lead, camp_id, cid)
+        raise Exception("Plivo error (402): Insufficient balance")
+
     try:
         await pg_db.insert_call_log_start(
             pool,
@@ -294,6 +301,18 @@ async def fire_call(
             is_test_call=is_test_call,
             budget_reserved_credits=budget_reserved_credits,
         )
+    except Exception as exc:
+        if prefetch_registered:
+            await pop_prefetched_config(call_id)
+        logger.error(
+            "DB insert failed for lead {} (call_id={}): {}",
+            lead_uuid,
+            call_id,
+            exc,
+        )
+        raise
+
+    try:
         await make_plivo_call(
             session,
             phone,
@@ -312,6 +331,16 @@ async def fire_call(
     except Exception as exc:
         if prefetch_registered:
             await pop_prefetched_config(call_id)
+        # Mark orphaned call_log as not-in-progress so _release_lead_to_pending
+        # doesn't see it as live and skip budget release (EDGE-05).
+        try:
+            await pg_db.mark_call_log_not_in_progress(
+                pool, call_id, set_credits_charged_zero=True
+            )
+        except Exception:
+            pass
+        if exception_is_plivo_balance_exhausted(exc):
+            invalidate_plivo_balance_cache()
         logger.error(
             "Plivo dial failed for lead {} (call_id={}): {}",
             lead_uuid,
@@ -515,7 +544,7 @@ async def run_campaign_dialer(
 
             tasks = []
             for lead in leads:
-                allowed, reason = is_call_allowed(lead["phone"])
+                allowed, reason = is_call_allowed()
                 if not allowed:
                     logger.warning(
                         "Skipping lead {} ({}): {}",
@@ -566,7 +595,8 @@ async def run_campaign_dialer(
         raise
     finally:
         key = _campaign_key(campaign_id, client_id)
-        _active_tasks.pop(key, None)
+        if _active_tasks.get(key) is asyncio.current_task():
+            _active_tasks.pop(key, None)
         await release_dialer_lock(campaign_id, lock_token)
 
 
@@ -601,22 +631,34 @@ async def start_dialer(
     h = host or os.getenv("DIALER_CALLBACK_HOST", "localhost:7860")
 
     async def _runner() -> None:
-        await run_campaign_dialer(
-            pool,
-            campaign_id,
-            client_id,
-            session=app.state.session,
-            host=h,
-            lock_token=lock_token,
-        )
+        try:
+            await run_campaign_dialer(
+                pool,
+                campaign_id,
+                client_id,
+                session=app.state.session,
+                host=h,
+                lock_token=lock_token,
+            )
+        finally:
+            if app.state.dialer_tasks.get(key) is task:
+                app.state.dialer_tasks.pop(key, None)
 
     task = asyncio.create_task(_runner())
     _active_tasks[key] = task
     app.state.dialer_tasks[key] = task
 
 
-def stop_dialer(campaign_id: UUID, client_id: UUID) -> None:
+async def stop_dialer(campaign_id: UUID, client_id: UUID) -> None:
     key = _campaign_key(campaign_id, client_id)
     task = _active_tasks.get(key)
-    if task and not task.done():
+    if not task:
+        return
+    if not task.done():
         task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.warning("stop_dialer: dialer teardown raised: {}", exc)

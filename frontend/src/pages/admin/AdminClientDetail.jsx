@@ -220,22 +220,24 @@ export default function AdminClientDetail() {
   };
 
   const handleCampaignAction = async (action, campId) => {
-    if (action === 'stop') {
-      if (!window.confirm("Pause this campaign and release stuck leads?")) return;
-      try {
-        await adminApi.patch(`/internal/campaigns/${campId}/stop`);
-        fetchCampaigns();
-      } catch (err) {
-        alert(err.customErrorMessage || "Failed to stop campaign");
-      }
-    } else if (action === 'cancel') {
-      if (!window.confirm("Cancel this campaign, fail pending leads, and refund budget?")) return;
-      try {
-        const res = await adminApi.patch(`/internal/campaigns/${campId}/cancel`);
+    let confirmMsg = "";
+    if (action === 'stop') confirmMsg = "Pause this campaign and release stuck leads?";
+    else if (action === 'cancel') confirmMsg = "Cancel this campaign, fail pending leads, and refund budget?";
+    
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+
+    try {
+      const res = await adminApi.patch(`/internal/campaigns/${campId}/${action}`);
+      if (action === 'cancel') {
         alert(`Cancelled! Refunded ₹${res.data.credits_returned?.toFixed(2)}`);
-        fetchCampaigns();
-        
-        // Re-fetch client details to reflect the refunded budget
+      }
+      fetchCampaigns();
+      if (selectedCampaign && selectedCampaign.id === campId) {
+        const campRes = await adminApi.get(`/internal/campaigns/${campId}`);
+        if (campRes.data.campaign) setSelectedCampaign(campRes.data.campaign);
+      }
+      
+      if (action === 'cancel') {
         const clientRes = await adminApi.get(`/internal/clients/${id}`);
         const clientData = clientRes.data.client || clientRes.data;
         setClient(prev => ({
@@ -243,9 +245,20 @@ export default function AdminClientDetail() {
           balance_credits: clientData.balance_credits,
           balance: clientData.balance_credits
         }));
-      } catch (err) {
-        alert(err.customErrorMessage || "Failed to cancel campaign");
       }
+    } catch (err) {
+      alert(err.customErrorMessage || `Failed to ${action} campaign`);
+    }
+  };
+
+  const openCampaignDrawer = async (camp) => {
+    setSelectedCampaign(camp);
+    setIsDrawerOpen(true);
+    try {
+      const res = await adminApi.get(`/internal/campaigns/${camp.id}`);
+      if (res.data.campaign) setSelectedCampaign(res.data.campaign);
+    } catch (e) {
+      console.error("Failed to refresh campaign drawer", e);
     }
   };
 
@@ -488,8 +501,8 @@ export default function AdminClientDetail() {
                       {campaigns.map(camp => (
                         <tr 
                           key={camp.id} 
-                          onClick={() => { setSelectedCampaign(camp); setIsDrawerOpen(true); }}
-                          className="hover:bg-surface-container/30 dark:hover:bg-molten-bg/50 transition-colors cursor-pointer group"
+                          onClick={() => openCampaignDrawer(camp)}
+                          className="border-b border-outline-variant dark:border-[#2A345E] last:border-0 hover:bg-surface-container dark:hover:bg-[#2A345E]/50 transition-colors cursor-pointer"
                         >
                           <td className="py-3 px-4 font-medium">
                             <div className="flex flex-col">
@@ -525,6 +538,12 @@ export default function AdminClientDetail() {
                                   onClick={(e) => { e.stopPropagation(); handleCampaignAction('stop', camp.id); }}
                                   className="px-2 py-1 text-xs rounded bg-arctic-warning/20 dark:bg-molten-warning/20 text-arctic-warning dark:text-molten-warning hover:opacity-80"
                                 >Stop</button>
+                              )}
+                              {(camp.status === 'draft' || camp.status === 'paused') && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); handleCampaignAction('start', camp.id); }}
+                                  className="px-2 py-1 text-xs rounded bg-primary/20 dark:bg-molten-primary/20 text-primary dark:text-molten-primary hover:opacity-80"
+                                >Start</button>
                               )}
                               {(camp.status !== 'completed' && camp.status !== 'cancelled') && (
                                 <button 
@@ -716,6 +735,28 @@ export default function AdminClientDetail() {
                     onChange={e => setCreateCampaignData({...createCampaignData, max_call_minutes: e.target.value})} 
                   />
                 </div>
+                <div>
+                  <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Max Attempts</label>
+                  <input 
+                    required 
+                    className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" 
+                    type="number" 
+                    min="1" 
+                    value={createCampaignData.max_attempts} 
+                    onChange={e => setCreateCampaignData({...createCampaignData, max_attempts: e.target.value})} 
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1 font-label-md text-on-surface dark:text-molten-text">Retry Delay (min)</label>
+                  <input 
+                    required 
+                    className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" 
+                    type="number" 
+                    min="0" 
+                    value={createCampaignData.retry_delay_minutes} 
+                    onChange={e => setCreateCampaignData({...createCampaignData, retry_delay_minutes: e.target.value})} 
+                  />
+                </div>
               </div>
               <div className="pt-4 flex justify-end gap-2 border-t border-outline-variant dark:border-[#2A345E] bg-surface-container-lowest dark:bg-[#1A1E36] mt-2">
                 <button 
@@ -752,7 +793,18 @@ export default function AdminClientDetail() {
               <div>
                 <h4 className="text-lg font-bold dark:text-molten-text">{selectedCampaign.name}</h4>
                 <p className="text-sm text-on-surface-variant dark:text-molten-text-muted font-mono">{selectedCampaign.id}</p>
-                <div className="mt-2">{renderCampaignStatus(selectedCampaign.status)}</div>
+                <div className="mt-2 flex items-center gap-2">
+                  {renderCampaignStatus(selectedCampaign.status)}
+                  {(selectedCampaign.status === 'running' || selectedCampaign.status === 'pausing') && (
+                    <button onClick={() => handleCampaignAction('stop', selectedCampaign.id)} className="px-2 py-1 text-xs rounded bg-arctic-warning/20 dark:bg-molten-warning/20 text-arctic-warning dark:text-molten-warning hover:opacity-80">Stop</button>
+                  )}
+                  {(selectedCampaign.status === 'draft' || selectedCampaign.status === 'paused') && (
+                    <button onClick={() => handleCampaignAction('start', selectedCampaign.id)} className="px-2 py-1 text-xs rounded bg-primary/20 dark:bg-molten-primary/20 text-primary dark:text-molten-primary hover:opacity-80">Start</button>
+                  )}
+                  {(selectedCampaign.status !== 'completed' && selectedCampaign.status !== 'cancelled') && (
+                    <button onClick={() => handleCampaignAction('cancel', selectedCampaign.id)} className="px-2 py-1 text-xs rounded bg-error-container dark:bg-molten-error/20 text-on-error-container dark:text-molten-error hover:opacity-80">Cancel</button>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

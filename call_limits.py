@@ -12,9 +12,17 @@ from typing import Any
 
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.frames.frames import EndFrame
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    Frame,
+    UserStartedSpeakingFrame,
+)
 from pipecat.pipeline.task import PipelineTask
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.llm_service import FunctionCallParams
+
+from background_tasks import spawn_background_task
 
 
 def parse_max_call_minutes(override: float | None = None) -> float:
@@ -48,13 +56,34 @@ def end_call_function_schema() -> FunctionSchema:
 
 
 class CallEndCoordinator:
-    """Queues ``EndFrame`` at most once (timer + tool + races)."""
+    """Coordinates a single, prompt hangup (end_call tool + timer + goodbye marker).
 
-    def __init__(self, task: PipelineTask) -> None:
+    The hangup is a hard ``task.cancel()`` (``CancelFrame``), not a queued
+    ``EndFrame``. The Gemini Live service defers ``EndFrame`` until it sees a
+    ``turn_complete`` from the model, which never arrives after the ``end_call``
+    tool — leaving ~30s of dead air before the framework's fallback timeout.
+    ``CancelFrame`` is processed immediately and still flushes the final
+    assistant turn into the transcript.
+
+    For tool/goodbye-driven ends, the cancel is delayed ``hangup_delay_s`` after
+    the bot finishes its closing line (fed via ``note_bot_speaking``) so the
+    goodbye plays out and the hangup feels natural rather than abrupt.
+    """
+
+    def __init__(self, task: PipelineTask, *, hangup_delay_s: float = 2.0) -> None:
         self._task = task
         self._lock = asyncio.Lock()
         self._ended = False
+        self._hangup_delay_s = max(0.0, hangup_delay_s)
         self._watchdog_task: asyncio.Task[None] | None = None
+        self._armed = False
+        self._bot_speaking = False
+        self._scheduled: asyncio.Task[None] | None = None
+        self._arm_reason = "end_call"
+
+    @property
+    def hangup_delay_s(self) -> float:
+        return self._hangup_delay_s
 
     def attach_watchdog_task(self, t: asyncio.Task[None] | None) -> None:
         """Background max-duration task; cancelled on successful ``try_end`` or by caller."""
@@ -69,20 +98,69 @@ class CallEndCoordinator:
             return
         wt.cancel()
 
+    # ── prompt-but-natural hangup after the bot's closing line ──────────────
+    def arm_hangup(self, reason: str) -> None:
+        """Request a hangup once the bot finishes its current/closing line."""
+        self._armed = True
+        self._arm_reason = reason
+        if not self._bot_speaking:
+            self._schedule_hangup()
+
+    def note_bot_speaking(self, speaking: bool) -> None:
+        """Feed bot speech boundaries (from the transport) to time the hangup."""
+        self._bot_speaking = speaking
+        if speaking:
+            # Bot is talking (again) — wait for it to go quiet before hanging up.
+            self._cancel_scheduled()
+        elif self._armed:
+            self._schedule_hangup()
+
+    def note_user_speaking(self) -> None:
+        """Caller re-engaged — abort any pending hangup; require a fresh end_call."""
+        self._armed = False
+        self._cancel_scheduled()
+
+    def _schedule_hangup(self) -> None:
+        if self._ended:
+            return
+        if self._scheduled is not None and not self._scheduled.done():
+            return
+        self._scheduled = spawn_background_task(self._delayed_end(), "call_end_delayed")
+        logger.debug(
+            "call end: hangup scheduled in {:.1f}s ({})",
+            self._hangup_delay_s,
+            self._arm_reason,
+        )
+
+    def _cancel_scheduled(self) -> None:
+        s = self._scheduled
+        if s is not None and not s.done():
+            s.cancel()
+        self._scheduled = None
+
+    async def _delayed_end(self) -> None:
+        try:
+            if self._hangup_delay_s > 0:
+                await asyncio.sleep(self._hangup_delay_s)
+            await self.try_end(self._arm_reason)
+        except asyncio.CancelledError:
+            raise
+
     async def try_end(self, reason: str) -> bool:
+        """Hang up now (idempotent). Hard-cancels the pipeline task."""
         async with self._lock:
             if self._ended:
                 return False
             self._ended = True
         logger.info("call end: {}", reason)
+        self._cancel_watchdog_if_pending()
         try:
-            await self._task.queue_frames([EndFrame()])
+            await self._task.cancel()
         except Exception as exc:
             async with self._lock:
                 self._ended = False
-            logger.warning("call end queue_frames failed: {}", exc)
+            logger.warning("call end cancel failed: {}", exc)
             return False
-        self._cancel_watchdog_if_pending()
         return True
 
 
@@ -95,10 +173,10 @@ class ScheduledCallLimits:
 
 
 def schedule_max_call_duration(
-    task: PipelineTask, minutes: float, label: str
+    task: PipelineTask, minutes: float, label: str, *, hangup_delay_s: float = 2.0
 ) -> ScheduledCallLimits:
     """Start optional background sleep then ``try_end(label)``; return coordinator + task."""
-    coordinator = CallEndCoordinator(task)
+    coordinator = CallEndCoordinator(task, hangup_delay_s=hangup_delay_s)
     if minutes <= 0:
         logger.debug("max call duration watchdog disabled (minutes={})", minutes)
         return ScheduledCallLimits(coordinator=coordinator, watchdog_task=None)
@@ -110,7 +188,7 @@ def schedule_max_call_duration(
         except asyncio.CancelledError:
             raise
 
-    watchdog_task = asyncio.create_task(_watchdog())
+    watchdog_task = spawn_background_task(_watchdog(), "max_call_duration_watchdog")
     coordinator.attach_watchdog_task(watchdog_task)
     logger.info("max call duration watchdog: {:.2f} min ({})", minutes, label)
     return ScheduledCallLimits(
@@ -207,7 +285,7 @@ def register_goodbye_hangup_fallback(
         blob = _normalize_for_goodbye_match(str(raw))
         for needle in normed_markers:
             if len(needle) >= 3 and needle in blob:
-                pending["task"] = asyncio.create_task(_delayed_try_end())
+                pending["task"] = spawn_background_task(_delayed_try_end(), "delayed_try_end")
                 logger.debug("goodbye hangup: scheduled after {:.1f}s (matched marker)", delay_s)
                 return
 
@@ -217,10 +295,46 @@ def register_goodbye_hangup_fallback(
 def make_end_call_handler(
     coordinator: CallEndCoordinator, *, log_prefix: str = "end_call"
 ):
-    """Build a ``FunctionCallParams`` handler that ends the call once."""
+    """Build a ``FunctionCallParams`` handler that hangs up after the closing line.
+
+    The model calls ``end_call`` mid-/end-of its goodbye turn, so we *arm* the
+    coordinator rather than cutting immediately; ``BotSpeechEndGate`` triggers the
+    actual hangup a short, natural delay after the bot stops speaking.
+    """
 
     async def _handler(params: FunctionCallParams) -> None:
-        await coordinator.try_end(log_prefix)
-        await params.result_callback({"status": "ended"})
+        coordinator.arm_hangup(log_prefix)
+        await params.result_callback({"status": "ending"})
 
     return _handler
+
+
+class BotSpeechEndGate(FrameProcessor):
+    """Pass-through sensor that feeds bot/user speech boundaries to a coordinator.
+
+    Anchors the post-goodbye hangup on the transport's ``BotStoppedSpeakingFrame``
+    (audio-accurate) instead of the LLM aggregator's turn-stopped event, which
+    Gemini Live does not emit promptly after the ``end_call`` tool. Place this
+    immediately after ``transport.output()`` in the pipeline.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._coordinator: CallEndCoordinator | None = None
+
+    def bind(self, coordinator: CallEndCoordinator) -> None:
+        self._coordinator = coordinator
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        c = self._coordinator
+        if c is not None:
+            if isinstance(frame, BotStartedSpeakingFrame):
+                c.note_bot_speaking(True)
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                c.note_bot_speaking(False)
+            elif isinstance(frame, UserStartedSpeakingFrame):
+                c.note_user_speaking()
+
+        await self.push_frame(frame, direction)

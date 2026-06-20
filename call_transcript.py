@@ -69,13 +69,27 @@ def _pg_context_has_campaign_fields(ctx: dict[str, Any] | None) -> bool:
 
 
 def _pg_context_from_call_log(row: dict[str, Any]) -> dict[str, Any] | None:
-    if not all(row.get(k) for k in _CAMPAIGN_PG_FIELDS):
+    if not row.get("client_id"):
         return None
+
+    is_test_call = False
+    call_data = row.get("call_data")
+    if call_data and isinstance(call_data, dict):
+        if call_data.get("is_test_call"):
+            is_test_call = True
+    elif call_data and isinstance(call_data, str):
+        if '"is_test_call": true' in call_data.lower() or '"is_test_call":true' in call_data.lower():
+            is_test_call = True
+
+    if not is_test_call:
+        if not all(row.get(k) for k in _CAMPAIGN_PG_FIELDS):
+            return None
+            
     ctx: dict[str, Any] = {
         "client_id": str(row["client_id"]),
-        "campaign_id": str(row["campaign_id"]),
-        "lead_id": str(row["lead_id"]),
-        "bot_config_id": str(row["bot_config_id"]),
+        "campaign_id": str(row["campaign_id"]) if row.get("campaign_id") else "",
+        "lead_id": str(row["lead_id"]) if row.get("lead_id") else "",
+        "bot_config_id": str(row.get("bot_config_id")) if row.get("bot_config_id") else "",
     }
     if row.get("route"):
         ctx["route"] = row["route"]
@@ -87,8 +101,12 @@ async def resolve_pg_context(
     session_call_id: str | None,
     redis_ctx: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    if _pg_context_has_campaign_fields(redis_ctx):
-        return redis_ctx
+    if redis_ctx and redis_ctx.get("client_id"):
+        if _pg_context_has_campaign_fields(redis_ctx):
+            return redis_ctx
+        if not redis_ctx.get("campaign_id") and not redis_ctx.get("lead_id"):
+            return redis_ctx
+
     if not pool or not session_call_id:
         return None
     row = await pg_db.get_call_log_by_session(pool, session_call_id)
@@ -118,11 +136,37 @@ async def _run_campaign_post_call(
                 session_call_id,
             )
         else:
-            logger.error(
-                "call_log missing campaign fields for post_call session={} ctx={}",
-                session_call_id,
-                resolved_ctx,
-            )
+            # If it has a client_id but lacks campaign fields, it is a test call
+            if resolved_ctx.get("client_id"):
+                pool = _pg_pool()
+                if pool:
+                    try:
+                        from db import postgres as pg_db
+                        
+                        test_outcome = (extraction or {}).get("intent_status", "Test Call")
+                        await pg_db.finalize_call_log(
+                            pool,
+                            session_call_id,
+                            duration_seconds,
+                            test_outcome,
+                            extraction or {},
+                            0,
+                            0.0,
+                            usage_dict,
+                            transcript=transcript,
+                            extraction_model=extraction_model,
+                            extraction_error=extraction_error,
+                            qualified=False,
+                        )
+                        logger.info("Finalized test call log in Postgres for session={}", session_call_id)
+                    except Exception as exc:
+                        logger.exception("Failed to finalize test call log for session={}: {}", session_call_id, exc)
+            else:
+                logger.error(
+                    "call_log missing campaign fields for post_call session={} ctx={}",
+                    session_call_id,
+                    resolved_ctx,
+                )
         return
     try:
         from post_call_processor import process_post_call
@@ -156,7 +200,8 @@ def _pg_pool():
         from db import postgres as pg_db
 
         return pg_db.get_pool()
-    except Exception:
+    except Exception as exc:
+        logger.error("Failed to get pg_pool in transcript writer: {}", exc)
         return None
 
 

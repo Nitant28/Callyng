@@ -62,8 +62,8 @@ const CallLogs = () => {
 
     try {
       const response = await clientApi.get(`/api/calls/${call.session_call_id}`);
-      if (response.data && response.data.calls && response.data.calls.length > 0) {
-        const call = response.data.calls[0];
+      if (response.data && response.data.session_call_id) {
+        const call = response.data;
         if (typeof call.transcript === 'string') {
           try { call.transcript = JSON.parse(call.transcript); } catch { call.transcript = []; }
         }

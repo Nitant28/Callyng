@@ -14,8 +14,8 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
     
     try {
       const response = await clientApi.get(`/api/calls/${sessionCallId}`);
-      if (response.data && response.data.calls && response.data.calls.length > 0) {
-        const call = response.data.calls[0];
+      if (response.data && response.data.session_call_id) {
+        const call = response.data;
         // Defensive: parse JSONB fields if backend returned them as strings
         if (typeof call.transcript === 'string') {
           try { call.transcript = JSON.parse(call.transcript); } catch { call.transcript = []; }

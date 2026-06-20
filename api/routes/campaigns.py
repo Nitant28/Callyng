@@ -13,7 +13,7 @@ from typing import Optional
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from api.guards import require_campaign_modifiable
-from compliance import add_dnd, is_call_allowed
+from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from dialer.concurrent_dialer import start_dialer, stop_dialer
 from lead_upload.normaliser import normalise_phone
@@ -164,16 +164,23 @@ async def upload_leads(
     if bot is None:
         raise HTTPException(404, "Bot config not found")
 
-    script = _load_script_module(bot["route"], bot["script_id"])
-    lead_schema = getattr(script, "LEAD_SCHEMA", {"fields": []})
+    if bot.get("route") == "cms":
+        if bot.get("script_config_id"):
+            cfg = await pg_db.get_script_config(pool, bot["script_config_id"], cid)
+            lead_schema = cfg.get("lead_schema", {"fields": []}) if cfg else {"fields": []}
+        else:
+            lead_schema = {"fields": []}
+    else:
+        script = _load_script_module(bot["route"], bot["script_id"])
+        lead_schema = getattr(script, "LEAD_SCHEMA", {"fields": []})
 
     content = await file.read()
     import io
 
     try:
         df = parse_upload(io.BytesIO(content), file.filename or "upload.csv")
-    except pd.errors.EmptyDataError:
-        raise HTTPException(400, "Uploaded file is empty or missing columns")
+    except (pd.errors.EmptyDataError, pd.errors.ParserError):
+        raise HTTPException(400, "Uploaded file is empty, malformed, or missing columns")
     errors = validate_dataframe(df, lead_schema)
     if errors:
         raise HTTPException(400, {"errors": errors})
@@ -185,7 +192,6 @@ async def upload_leads(
 
     leads_to_insert: list[dict] = []
     invalid_phones = 0
-    dnc_count = 0
 
     for _, row in df.iterrows():
         raw_phone = str(row[phone_col]).strip() if phone_col else ""
@@ -194,12 +200,11 @@ async def upload_leads(
             invalid_phones += 1
             continue
 
-        allowed, reason = is_call_allowed(phone)
+        allowed, reason = is_call_allowed()
         status = "pending"
-        if not allowed and "DND" in reason:
-            status = "dnc"
-            dnc_count += 1
-            add_dnd(phone)
+        next_attempt_at = None
+        if not allowed and "window" in reason:
+            next_attempt_at = next_compliant_time()
 
         metadata: dict = {}
         for field in lead_schema.get("fields") or []:
@@ -226,12 +231,13 @@ async def upload_leads(
                 "lead_type": lt,
                 "status": status,
                 "max_attempts": int(campaign.get("max_attempts") or 3),
+                "next_attempt_at": next_attempt_at,
                 "metadata": metadata,
             }
         )
 
     inserted = await pg_db.bulk_insert_leads(pool, leads_to_insert)
-    duplicates_skipped = len(leads_to_insert) - inserted - dnc_count
+    duplicates_skipped = len(leads_to_insert) - inserted
     if duplicates_skipped < 0:
         duplicates_skipped = 0
 
@@ -239,7 +245,6 @@ async def upload_leads(
         "leads_uploaded": inserted,
         "invalid_phones": invalid_phones,
         "duplicates_skipped": max(0, len(leads_to_insert) - inserted - invalid_phones),
-        "dnc_on_upload": dnc_count,
     }
 
 
@@ -299,7 +304,7 @@ async def cancel_campaign(
             409,
             f"Campaign already {camp['status']}; cannot cancel again",
         )
-    stop_dialer(campaign_id, cid)
+    await stop_dialer(campaign_id, cid)
     try:
         result = await pg_db.cancel_campaign(pool, campaign_id, cid)
     except ValueError as exc:
@@ -320,7 +325,7 @@ async def stop_campaign(
     camp = await pg_db.get_campaign(pool, campaign_id, cid)
     if camp is None:
         raise HTTPException(404, "Campaign not found")
-    stop_dialer(campaign_id, cid)
+    await stop_dialer(campaign_id, cid)
     released = await pg_db.release_stuck_calling_leads(pool, campaign_id, cid)
     
     camp_updated = await pg_db.get_campaign(pool, campaign_id, cid)

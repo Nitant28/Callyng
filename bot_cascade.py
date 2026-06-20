@@ -41,8 +41,10 @@ from pipecat.transports.websocket.fastapi import (
 )
 
 from call_limits import (
+    BotSpeechEndGate,
     end_call_function_schema,
     make_end_call_handler,
+    parse_goodbye_hangup_delay_s,
     parse_max_call_minutes,
     schedule_max_call_duration,
 )
@@ -141,6 +143,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     usage_tap = UsageMetricsTap(usage_accumulator)
     transcript_buffer.register(user_aggregator, assistant_aggregator)
 
+    end_gate = BotSpeechEndGate()
     pipeline = Pipeline([
         transport.input(),
         stt,
@@ -148,6 +151,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         llm,
         tts,
         transport.output(),
+        end_gate,
         usage_tap,
         assistant_aggregator,
     ])
@@ -166,9 +170,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     pg = body.get("_pg") or {}
     max_minutes = parse_max_call_minutes(pg.get("max_call_minutes"))
     call_limits = schedule_max_call_duration(
-        task, max_minutes, "max_call_duration"
+        task,
+        max_minutes,
+        "max_call_duration",
+        hangup_delay_s=parse_goodbye_hangup_delay_s(),
     )
     coordinator = call_limits.coordinator
+    end_gate.bind(coordinator)
 
     async def handle_push_lead_data(params: FunctionCallParams):
         data = params.arguments
