@@ -8,12 +8,15 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
+from pathlib import Path
 from pydantic import BaseModel, Field
 
 from api.auth import get_pool, require_admin
 from api.script_config_validation import normalize_route, validate_route
 from db import postgres as pg_db
 from dialer.concurrent_dialer import start_dialer, stop_dialer
+from recording import resolve_recording_url
 from telephony import fetch_plivo_cash_credits
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -576,6 +579,31 @@ async def get_call_admin(
     if call is None:
         raise HTTPException(404, "Call not found")
     return {"call": call}
+
+
+@router.get("/calls/{session_call_id}/recording")
+async def get_call_recording_admin(
+    session_call_id: str,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    call = await pg_db.get_call_log_by_session(pool, session_call_id)
+    if not call:
+        raise HTTPException(404, "Call not found")
+        
+    recording_key = call.get("recording_url")
+    if not recording_key:
+        raise HTTPException(404, "No recording available for this call")
+
+    if recording_key.startswith("local:"):
+        filename = recording_key.removeprefix("local:")
+        file_path = Path("./data/recordings") / filename
+        if not file_path.exists():
+            raise HTTPException(404, "Recording file not found")
+        return FileResponse(file_path, media_type="audio/mpeg")
+
+    url = resolve_recording_url(recording_key, expires_in=3600)
+    return {"url": url, "expires_in": 3600}
 
 
 @router.get("/scripts")

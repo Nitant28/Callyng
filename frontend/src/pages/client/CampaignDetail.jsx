@@ -44,8 +44,25 @@ const CampaignDetail = () => {
   // Resume Confirmation Modal State
   const [isStartConfirmOpen, setIsStartConfirmOpen] = useState(false);
 
+  // Release stuck leads modal state
+  const [isReleaseStuckOpen, setIsReleaseStuckOpen] = useState(false);
+  const [isReleasingStuck, setIsReleasingStuck] = useState(false);
+
   // IST Compliance window state
   const [istStatus, setIstStatus] = useState({ isInside: true, formattedIst: '' });
+
+  const getDynamicLeadFields = useCallback(() => {
+    const schema = campaign?.bot_config?.lead_schema;
+    if (!schema) return [];
+    if (schema.fields && Array.isArray(schema.fields)) return schema.fields;
+    
+    return Object.entries(schema).map(([key, value]) => {
+      if (typeof value === 'object') {
+        return { key, ...value };
+      }
+      return null;
+    }).filter(f => f !== null);
+  }, [campaign]);
 
   useEffect(() => {
     const updateIst = () => {
@@ -101,8 +118,8 @@ const CampaignDetail = () => {
   }, [id]);
 
   // Load leads lists
-  const loadLeads = useCallback(async () => {
-    setLeadsLoading(true);
+  const loadLeads = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLeadsLoading(true);
     try {
       const response = await clientApi.get(`/api/campaigns/${id}/leads`, {
         params: {
@@ -124,7 +141,7 @@ const CampaignDetail = () => {
       setLeads([]);
       setTotalLeadsCount(0);
     } finally {
-      setLeadsLoading(false);
+      if (showSpinner) setLeadsLoading(false);
     }
   }, [id, leadsLimit, leadsOffset, leadsStatusFilter, leadsSearch]);
 
@@ -167,12 +184,24 @@ const CampaignDetail = () => {
     const isPausing = campaign.status === 'pausing' || (campaign.status === 'paused' && campaign.calling_leads > 0);
     if (campaign.status !== 'running' && !isPausing) return;
     
-    const pollInterval = isPausing ? 3000 : 10000;
+    const pollInterval = isPausing ? 2000 : 5000;
     const interval = setInterval(() => {
       loadCampaignDetails(false);
     }, pollInterval);
     return () => clearInterval(interval);
   }, [campaign, loadCampaignDetails]);
+
+  // Poll leads table while campaign is active
+  useEffect(() => {
+    if (!campaign || activeTab !== 'leads') return;
+    const isPausing = campaign.status === 'pausing' || (campaign.status === 'paused' && campaign.calling_leads > 0);
+    if (campaign.status !== 'running' && !isPausing) return;
+
+    const interval = setInterval(() => {
+      loadLeads(false);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [campaign, activeTab, loadLeads]);
 
   const handleOpenTranscript = (lead) => {
     setSelectedLeadForTranscript(lead);
@@ -217,6 +246,28 @@ const CampaignDetail = () => {
     }
   };
 
+  const handleConfirmReleaseStuck = async () => {
+    setIsReleasingStuck(true);
+    try {
+      const response = await clientApi.post(`/api/campaigns/${id}/release-stuck-calling`);
+      const released = response.data?.released ?? 0;
+      showToast(
+        released > 0
+          ? `Released ${released} stuck lead${released === 1 ? '' : 's'} back to pending.`
+          : 'No stuck leads needed releasing.',
+        released > 0 ? 'success' : 'info'
+      );
+      setIsReleaseStuckOpen(false);
+      loadCampaignDetails();
+      loadLeads(false);
+    } catch (err) {
+      console.warn('Release stuck leads failed.', err);
+      showToast(err.customErrorMessage || 'Failed to release stuck leads.', 'error');
+    } finally {
+      setIsReleasingStuck(false);
+    }
+  };
+
   const handleCancelCampaign = async () => {
     if (!window.confirm('Are you sure you want to cancel this campaign? Any allocated remaining budget will be refunded.')) return;
     
@@ -250,6 +301,23 @@ const CampaignDetail = () => {
     const files = e.target.files;
     if (files && files.length > 0) {
       uploadCSVFile(files[0]);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const response = await clientApi.get(`/api/campaigns/${id}/leads/template`, {
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `template.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+    } catch (err) {
+      console.warn('Failed to download template', err);
     }
   };
 
@@ -473,7 +541,22 @@ const CampaignDetail = () => {
               </p>
             </div>
             
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
+              {campaign.calling_leads > 0 &&
+                ['running', 'pausing', 'paused'].includes(campaign.status) && (
+                <button
+                  onClick={() => setIsReleaseStuckOpen(true)}
+                  disabled={isReleasingStuck}
+                  className="px-4 py-2 border border-amber-500/50 text-amber-700 dark:text-amber-400 font-label-md rounded-lg hover:bg-amber-500/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                >
+                  {isReleasingStuck ? (
+                    <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+                  ) : (
+                    <span className="material-symbols-outlined text-[18px]">lock_open</span>
+                  )}
+                  Release stuck leads
+                </button>
+              )}
               {campaign.status !== 'cancelled' && campaign.status !== 'completed' && (
                 <button
                   onClick={handleToggleState}
@@ -750,7 +833,12 @@ const CampaignDetail = () => {
                     <div className="flex-1 text-center sm:text-left">
                       <h3 className="font-headline-sm text-headline-sm font-bold text-on-surface dark:text-molten-text mb-2">Import New Leads</h3>
                       <p className="text-on-surface-variant dark:text-molten-text-muted font-body-sm text-body-sm mb-4">
-                        Drag and drop your CSV file here, or click to browse. We will automatically map Name and Phone number columns.
+                        Drag and drop your CSV file here, or click to browse. Expected format: <strong>{(() => {
+                          const baseHeaders = ['phone', 'name'];
+                          const fields = campaign?.bot_config?.lead_schema?.fields || [];
+                          const extraHeaders = fields.map(f => f.csv_column || f.key).filter(h => !baseHeaders.includes(h?.toLowerCase()));
+                          return [...baseHeaders, ...extraHeaders].join(', ');
+                        })()}</strong>.
                       </p>
                       {isUploading ? (
                         <div className="flex items-center justify-center sm:justify-start gap-2">
@@ -761,6 +849,12 @@ const CampaignDetail = () => {
                         <div className="flex flex-wrap justify-center sm:justify-start gap-3">
                           <button onClick={() => fileInputRef.current?.click()} className="bg-surface-variant dark:bg-surface-variant/20 text-primary dark:text-molten-primary px-4 py-2 rounded-lg font-label-md text-label-md hover:bg-surface-container-high dark:hover:bg-surface-variant/40 transition-colors cursor-pointer">
                             Browse Files
+                          </button>
+                          <button 
+                            onClick={handleDownloadTemplate}
+                            className="bg-surface-variant dark:bg-surface-variant/20 text-primary dark:text-molten-primary px-4 py-2 rounded-lg font-label-md text-label-md hover:bg-surface-container-high dark:hover:bg-surface-variant/40 transition-colors cursor-pointer"
+                          >
+                            Download Template
                           </button>
                           <button 
                             onClick={() => setIsAddLeadOpen(true)}
@@ -856,9 +950,24 @@ const CampaignDetail = () => {
                             leads.map((lead) => {
                               // Determine status style
                               let statusElement = null;
+                              const outcome = (lead.outcome || '').toString();
                               if (lead.status === 'completed') {
+                                const outcomeLabel = outcome === 'Interested'
+                                  ? 'Connected'
+                                  : outcome === 'Not_Interested'
+                                    ? 'Not Interested'
+                                    : outcome === 'Wrong_Requirement'
+                                      ? 'Wrong Requirement'
+                                      : outcome === 'Callback_Requested'
+                                        ? 'Callback'
+                                        : 'Completed';
+                                const completedClasses = outcome === 'Interested'
+                                  ? 'bg-secondary-container/20 text-on-secondary-container dark:text-emerald-400'
+                                  : outcome === 'Not_Interested'
+                                    ? 'bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted border border-outline-variant/30'
+                                    : 'bg-secondary-container/20 text-on-secondary-container dark:text-emerald-400';
                                 statusElement = (
-                                  <span className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-secondary-container/20 text-on-secondary-container dark:text-emerald-400 text-xs font-semibold">
+                                  <span className={`inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full text-xs font-semibold ${completedClasses}`}>
                                     <svg className="w-6 h-4" viewBox="0 0 24 16">
                                       <rect className="waveform-bar" height="12" rx="1" style={{ animationDelay: '0s' }} width="2" x="0" y="2"></rect>
                                       <rect className="waveform-bar" height="16" rx="1" style={{ animationDelay: '0.2s' }} width="2" x="4" y="0"></rect>
@@ -867,7 +976,7 @@ const CampaignDetail = () => {
                                       <rect className="waveform-bar" height="8" rx="1" style={{ animationDelay: '0.3s' }} width="2" x="16" y="4"></rect>
                                       <rect className="waveform-bar" height="12" rx="1" style={{ animationDelay: '0.15s' }} width="2" x="20" y="2"></rect>
                                     </svg>
-                                    Connected
+                                    {outcomeLabel}
                                   </span>
                                 );
                               } else if (lead.status === 'failed') {
@@ -942,32 +1051,42 @@ const CampaignDetail = () => {
                                   <td className="py-3 px-4 tabular-nums">{lead.attempts || 0}</td>
                                   <td className="py-3 px-4 text-right">
                                     <div className="flex items-center justify-end gap-2">
-                                      {(lead.status === 'pending' || lead.status === 'callback_scheduled') ? (
-                                        <>
-                                          <button 
-                                            className="text-on-surface-variant dark:text-molten-text-muted hover:text-primary dark:hover:text-molten-primary transition-colors cursor-pointer p-1"
-                                            title="Edit Lead"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setEditLeadData({ ...lead, original_status: lead.status });
-                                              setIsEditLeadOpen(true);
-                                            }}
-                                          >
-                                            <span className="material-symbols-outlined text-[20px]">edit</span>
-                                          </button>
-                                          <button 
-                                            className="text-on-surface-variant dark:text-molten-text-muted hover:text-error dark:hover:text-rose-400 transition-colors cursor-pointer p-1"
-                                            title="Delete Lead"
-                                            onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
-                                          >
-                                            <span className="material-symbols-outlined text-[20px]">delete</span>
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <span title="Actions locked for started leads" className="text-outline-variant p-1 cursor-not-allowed opacity-50 flex items-center">
-                                          <span className="material-symbols-outlined text-[20px]">lock</span>
-                                        </span>
-                                      )}
+                                      {(() => {
+                                        const isCampaignLocked = campaign.status === 'running' || campaign.status === 'pausing';
+                                        const isLeadLocked = lead.status === 'calling';
+                                        
+                                        if (isCampaignLocked || isLeadLocked) {
+                                          return (
+                                            <span title={isCampaignLocked ? "Campaign is running — leads are locked" : "Lead is on a live call"} 
+                                                  className="text-outline-variant p-1 cursor-not-allowed opacity-50 flex items-center">
+                                              <span className="material-symbols-outlined text-[20px]">lock</span>
+                                            </span>
+                                          );
+                                        }
+                                        
+                                        return (
+                                          <>
+                                            <button 
+                                              className="text-on-surface-variant dark:text-molten-text-muted hover:text-primary dark:hover:text-molten-primary transition-colors cursor-pointer p-1"
+                                              title="Edit Lead"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setEditLeadData({ ...lead, original_status: lead.status });
+                                                setIsEditLeadOpen(true);
+                                              }}
+                                            >
+                                              <span className="material-symbols-outlined text-[20px]">edit</span>
+                                            </button>
+                                            <button 
+                                              className="text-on-surface-variant dark:text-molten-text-muted hover:text-error dark:hover:text-rose-400 transition-colors cursor-pointer p-1"
+                                              title="Delete Lead"
+                                              onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}
+                                            >
+                                              <span className="material-symbols-outlined text-[20px]">delete</span>
+                                            </button>
+                                          </>
+                                        );
+                                      })()}
                                       <button 
                                         className="text-primary dark:text-molten-primary hover:text-primary/80 font-medium text-sm transition-colors cursor-pointer ml-2"
                                         title="View Transcript"
@@ -1122,6 +1241,27 @@ const CampaignDetail = () => {
               </select>
             </div>
 
+            {getDynamicLeadFields()
+              .filter(f => f.key !== 'lead_name' && f.key !== 'lead_phone' && f.key !== 'name' && f.key !== 'phone')
+              .map(field => (
+                <div key={field.key}>
+                  <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold capitalize">
+                    {field.key.replace(/_/g, ' ')} {field.required && '*'}
+                  </label>
+                  <input
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    required={field.required}
+                    className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
+                    value={newLead.metadata[field.key] || ''}
+                    onChange={(e) => setNewLead({ 
+                      ...newLead, 
+                      metadata: { ...newLead.metadata, [field.key]: e.target.value }
+                    })}
+                    placeholder={field.description || ''}
+                  />
+                </div>
+              ))}
+
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
@@ -1182,6 +1322,27 @@ const CampaignDetail = () => {
               </select>
             </div>
 
+            {getDynamicLeadFields()
+              .filter(f => f.key !== 'lead_name' && f.key !== 'lead_phone' && f.key !== 'name' && f.key !== 'phone')
+              .map(field => (
+                <div key={field.key}>
+                  <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold capitalize">
+                    {field.key.replace(/_/g, ' ')} {field.required && '*'}
+                  </label>
+                  <input
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    required={field.required}
+                    className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
+                    value={editLeadData.metadata?.[field.key] || ''}
+                    onChange={(e) => setEditLeadData({ 
+                      ...editLeadData, 
+                      metadata: { ...(editLeadData.metadata || {}), [field.key]: e.target.value }
+                    })}
+                    placeholder={field.description || ''}
+                  />
+                </div>
+              ))}
+
             <div>
               <label className="block text-xs text-arctic-text-muted dark:text-molten-text-muted mb-1 font-semibold">Status</label>
               <select
@@ -1189,13 +1350,34 @@ const CampaignDetail = () => {
                 onChange={(e) => setEditLeadData({ ...editLeadData, status: e.target.value })}
                 className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
               >
-                <option className="dark:bg-[#1A1C24]" value="pending">Pending</option>
-                <option className="dark:bg-[#1A1C24]" value="failed">Failed</option>
-                <option className="dark:bg-[#1A1C24]" value="dnc">DNC</option>
-                <option className="dark:bg-[#1A1C24]" value="completed">Completed</option>
-                <option className="dark:bg-[#1A1C24]" value="callback_scheduled">Callback Scheduled</option>
-                {/* Prevent selecting calling manually */}
-                {editLeadData.status === 'calling' && <option className="dark:bg-[#1A1C24]" value="calling" disabled>Calling (In Progress)</option>}
+                {(() => {
+                  const allowed = {
+                    pending: ['pending', 'failed', 'dnc', 'callback_scheduled', 'completed'],
+                    callback_scheduled: ['callback_scheduled', 'pending', 'failed', 'dnc', 'completed'],
+                    failed: ['failed', 'pending', 'completed'],
+                    dnc: ['dnc', 'pending', 'completed'],
+                    completed: ['completed', 'pending'],
+                    calling: ['calling']
+                  }[editLeadData.original_status] || [editLeadData.original_status];
+
+                  return [
+                    { value: 'pending', label: 'Pending' },
+                    { value: 'failed', label: 'Failed' },
+                    { value: 'dnc', label: 'DNC' },
+                    { value: 'completed', label: 'Completed' },
+                    { value: 'callback_scheduled', label: 'Callback Scheduled' }
+                  ].map(opt => (
+                    <option 
+                      key={opt.value} 
+                      className="dark:bg-[#1A1C24]" 
+                      value={opt.value} 
+                      disabled={!allowed.includes(opt.value)}
+                    >
+                      {opt.label}
+                    </option>
+                  ));
+                })()}
+                {editLeadData.original_status === 'calling' && <option className="dark:bg-[#1A1C24]" value="calling" disabled>Calling (In Progress)</option>}
               </select>
               {editLeadData.status !== editLeadData.original_status && (
                 <p className="text-[10px] text-amber-500 mt-1">Status change may require confirmation.</p>
@@ -1299,6 +1481,49 @@ const CampaignDetail = () => {
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {isReleaseStuckOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-surface-container-lowest dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4 animate-fade-in">
+            <div className="flex items-start gap-3">
+              <span className="material-symbols-outlined text-amber-500 text-3xl shrink-0">warning</span>
+              <div>
+                <h3 className="font-headline-sm text-on-surface dark:text-molten-text">Release stuck leads?</h3>
+                <p className="text-sm text-on-surface-variant dark:text-molten-text-muted mt-2">
+                  This resets leads stuck in &quot;Calling&quot; back to &quot;Pending&quot; so they can be redialed.
+                  Calls that are actively in progress will not be interrupted.
+                </p>
+                <p className="text-sm text-on-surface-variant dark:text-molten-text-muted mt-2">
+                  Currently showing <strong>{campaign.calling_leads}</strong> lead{campaign.calling_leads === 1 ? '' : 's'} in calling state.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-outline-variant dark:border-[#2A345E]">
+              <button
+                type="button"
+                onClick={() => setIsReleaseStuckOpen(false)}
+                disabled={isReleasingStuck}
+                className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted border border-outline-variant dark:border-[#2A345E] hover:bg-surface-container dark:hover:bg-[#2A345E]/50 rounded-lg cursor-pointer transition-colors text-sm font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmReleaseStuck}
+                disabled={isReleasingStuck}
+                className="px-5 py-2 bg-amber-600 text-white rounded-lg cursor-pointer font-bold hover:brightness-110 transition-all text-sm flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isReleasingStuck ? (
+                  <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+                ) : (
+                  <span className="material-symbols-outlined text-[18px]">lock_open</span>
+                )}
+                Release stuck leads
+              </button>
+            </div>
           </div>
         </div>
       )}

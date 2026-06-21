@@ -6,8 +6,14 @@ import json
 
 from post_call_extract import (
     apply_normalization_rules,
+    build_extraction_system_prompt,
+    filter_short_interrupted_turns,
+    format_transcript_for_extraction,
+    merge_consecutive_turns,
     normalize_post_call_extraction,
+    reconcile_extraction_with_assistant_turns,
 )
+from sts_scripts.pyramid_extraction import PYRAMID_EXTRACTION_SCHEMA
 from post_call_processor import _lead_transition
 from script_runtime import parse_post_call_snapshot
 
@@ -90,3 +96,105 @@ def test_outcome_to_event_without_map_unchanged():
 
     assert outcome_to_event("Interested") == "lead_qualified"
     assert outcome_to_event("Busy") == "lead_failed"
+
+
+HINDI_STT_CONFLICT_TRANSCRIPT = [
+    {
+        "role": "assistant",
+        "content": "जी। बस जानना था, क्या आप अभी Pune में कोई घर या flat देख रहे हैं?",
+    },
+    {"role": "user", "content": "और देख रहा हूं।"},
+    {"role": "assistant", "content": "अच्छा सत्यम जी... आप क्या प्रॉपर्टी देख रहे हो? Two या three BHK?"},
+    {"role": "user", "content": "सर, मैं टीवी बेच रहा हूं।"},
+    {"role": "assistant", "content": "ठीक है,"},
+    {
+        "role": "assistant",
+        "content": "ठीक है Satyam जी, मैंने आपकी बानेर, कोंढवा और कात्रज में 3 BHK की आवश्यकता नोट कर ली है। हमारे sales executive आपको जल्द कॉल करेंगे। धन्यवाद!",
+    },
+]
+
+
+def test_merge_consecutive_turns_combines_assistant_fragments():
+    raw = [
+        {"role": "assistant", "content": "ठीक है,"},
+        {"role": "assistant", "content": "Pune में कोई specific location?"},
+        {"role": "user", "content": "बानेर"},
+    ]
+    merged = merge_consecutive_turns(raw)
+    assert len(merged) == 2
+    assert "ठीक है," in merged[0]["content"]
+    assert "Pune में" in merged[0]["content"]
+
+
+def test_filter_short_interrupted_assistant_turns():
+    raw = [
+        {"role": "assistant", "content": "ठीक है,", "interrupted": True},
+        {"role": "assistant", "content": "Longer assistant response here."},
+    ]
+    filtered = filter_short_interrupted_turns(raw)
+    assert len(filtered) == 1
+    assert "Longer assistant" in filtered[0]["content"]
+
+
+def test_format_transcript_for_extraction_labels_roles():
+    text = format_transcript_for_extraction(HINDI_STT_CONFLICT_TRANSCRIPT)
+    assert "ASSISTANT (authoritative" in text
+    assert "USER (may contain speech-to-text errors" in text
+    assert "3 BHK" in text
+    assert "टीवी" in text
+
+
+def test_build_extraction_system_prompt_includes_global_preamble():
+    prompt = build_extraction_system_prompt(PYRAMID_EXTRACTION_SCHEMA)
+    assert "Transcript reliability (critical)" in prompt
+    assert "role=assistant text is the bot's own generated speech" in prompt
+    assert "STT conflict" in prompt
+
+
+def test_reconcile_overrides_wrong_requirement_from_assistant_summary():
+    parsed = {
+        "intent_status": "Wrong_Requirement",
+        "bhk_preference": None,
+        "location_preference": None,
+        "caller_notes": "Asked about selling a TV instead of property purchase",
+    }
+    out = reconcile_extraction_with_assistant_turns(
+        parsed, HINDI_STT_CONFLICT_TRANSCRIPT
+    )
+    assert out["intent_status"] == "Interested"
+    assert out["bhk_preference"] == "3BHK"
+    assert "Baner" in out["location_preference"]
+    assert out["caller_notes"] is None
+
+
+def test_normalize_post_call_extraction_reconciles_with_transcript():
+    parsed = {
+        "intent_status": "Wrong_Requirement",
+        "bhk_preference": None,
+        "location_preference": None,
+        "caller_notes": "Selling TV",
+    }
+    out = normalize_post_call_extraction(
+        parsed,
+        normalization_rules=None,
+        transcript=HINDI_STT_CONFLICT_TRANSCRIPT,
+    )
+    assert out["intent_status"] == "Interested"
+    assert out["bhk_preference"] == "3BHK"
+
+
+def test_reconcile_callback_from_assistant_confirmation():
+    transcript = [
+        {
+            "role": "user",
+            "content": "जी, क्या आप मेरे को 8:20 को कॉल कर सकते हैं क्या?",
+        },
+        {
+            "role": "assistant",
+            "content": "हम 8:20 पर ज़रूर कॉल करेंगे — तय समय पर कॉल करेंगे, धन्यवाद!",
+        },
+    ]
+    parsed = {"intent_status": "Busy", "callback_time": None}
+    out = normalize_post_call_extraction(parsed, transcript=transcript)
+    assert out["intent_status"] == "Callback_Requested"
+    assert out.get("callback_time")

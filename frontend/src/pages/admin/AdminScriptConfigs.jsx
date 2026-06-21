@@ -472,7 +472,7 @@ export default function AdminScriptConfigs() {
                 </button>
               </div>
               <div className="flex items-center gap-3 shrink-0">
-                {saveError && <span className="text-arctic-error dark:text-molten-error text-sm">{saveError}</span>}
+                {saveError && <span className="text-arctic-error dark:text-molten-error text-sm max-w-[200px] md:max-w-[300px] truncate" title={saveError}>{saveError}</span>}
                 <button onClick={() => setIsEditorOpen(false)} className="px-4 py-2 border border-outline-variant dark:border-[#2A345E] rounded-lg text-on-surface dark:text-molten-text hover:bg-surface-container-low dark:hover:bg-[#2A345E]">Cancel</button>
                 {editingConfig.id && (
                   <button onClick={() => setIsTestCallOpen(true)} className="px-4 py-2 border border-primary dark:border-molten-primary text-primary dark:text-molten-primary rounded-lg font-bold hover:bg-primary/10 dark:hover:bg-molten-primary/10 transition-colors">

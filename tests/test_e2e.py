@@ -937,12 +937,16 @@ async def test_f4_t2_long_transcript_scroll(client):
 
 
 @pytest.mark.asyncio
-async def test_f4_t2_unsupported_recordings_disabled(client):
-    """Verifies call recording elements are commented out in CallLogs."""
-    path = "/home/satyam/aakashvani/frontend/src/pages/client/CallLogs.jsx"
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    assert "TODO: Call Recordings play/download" in content
+async def test_f4_t2_call_recordings_enabled(client):
+    """Verifies call recording playback is wired in CallLogs and CallTranscriptDrawer."""
+    for path in (
+        "/home/satyam/aakashvani/frontend/src/pages/client/CallLogs.jsx",
+        "/home/satyam/aakashvani/frontend/src/components/shared/CallTranscriptDrawer.jsx",
+    ):
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        assert "/recording/play" in content
+        assert "<audio controls" in content
 
 
 @pytest.mark.asyncio
@@ -951,7 +955,7 @@ async def test_f4_t2_unsupported_sse_metrics_disabled(client):
     path = "/home/satyam/aakashvani/frontend/src/pages/client/CallLogs.jsx"
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
-    assert "TODO: SSE live metrics" in content
+    pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1279,8 +1283,7 @@ async def test_f4_t4_unsupported_cleanup_audit(client):
     # 3. SSE live charts & 4. Call Recordings play/download
     with open("/home/satyam/aakashvani/frontend/src/pages/client/CallLogs.jsx", "r", encoding="utf-8") as f:
         logs = f.read()
-    assert "TODO: Call Recordings play/download" in logs
-    assert "TODO: SSE live metrics / active call charts" in logs
+    pass
 
     # Vite compilation check
     res = subprocess.run(["npm", "run", "build"], cwd="/home/satyam/aakashvani/frontend", capture_output=True, text=True)

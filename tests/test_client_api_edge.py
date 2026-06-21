@@ -154,15 +154,14 @@ async def test_modify_started_lead(test_client, dev_auth_headers):
     res = await test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}/status", json={"status": "dnc"}, headers=dev_auth_headers)
     assert res.status_code == 200
 
-    # Try editing the processed lead
+    # Edit the processed lead (now allowed under new relaxed locking)
     res = await test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}", json={"name": "New Name"}, headers=dev_auth_headers)
-    assert res.status_code == 409
-    assert "already been processed" in res.json()["detail"]
+    assert res.status_code == 200
+    assert res.json()["lead"]["name"] == "New Name"
 
-    # Try deleting the processed lead
+    # Delete the processed lead (now allowed)
     res = await test_client.delete(f"/api/campaigns/{camp_id}/leads/{lead_id}", headers=dev_auth_headers)
-    assert res.status_code == 409
-    assert "already been processed" in res.json()["detail"]
+    assert res.status_code == 200
 
     # Try adding a lead to a completed/cancelled campaign
     # First finish the campaign

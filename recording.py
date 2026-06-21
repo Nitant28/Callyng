@@ -1,7 +1,6 @@
-import asyncio
+import json
 import os
 import urllib.parse
-from pathlib import Path
 from loguru import logger
 import aiohttp
 from fastapi import Request
@@ -13,6 +12,10 @@ from plivo_hangup import _parse_plivo_payload
 from telephony import public_telephony_base_url, _plivo_auth
 import db.postgres as pg_db
 
+
+# ---------------------------------------------------------------------------
+# R2 helpers (kept for legacy keys & optional future use)
+# ---------------------------------------------------------------------------
 
 def _r2_client():
     account_id = (os.environ.get("R2_ACCOUNT_ID") or "").strip().rstrip("/")
@@ -28,17 +31,6 @@ def _r2_client():
     )
 
 
-def upload_recording(audio_bytes: bytes, object_key: str) -> None:
-    client = _r2_client()
-    bucket_name = os.environ.get("R2_BUCKET_NAME")
-    client.put_object(
-        Bucket=bucket_name,
-        Key=object_key,
-        Body=audio_bytes,
-        ContentType="audio/mpeg",
-    )
-
-
 def generate_presigned_url(object_key: str, expires_in: int = 3600) -> str:
     client = _r2_client()
     bucket_name = os.environ.get("R2_BUCKET_NAME")
@@ -49,6 +41,44 @@ def generate_presigned_url(object_key: str, expires_in: int = 3600) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Plivo recording URL helpers
+# ---------------------------------------------------------------------------
+
+def generate_plivo_recording_url(recording_url: str, expires_in: int = 3600) -> str:
+    """Return a Plivo recording URL with Basic Auth embedded for direct playback.
+
+    Plivo media URLs require authentication. We embed the credentials directly
+    so the browser / frontend can fetch the MP3 without an extra proxy hop.
+    """
+    auth_id, auth_token = _plivo_auth()
+    parsed = urllib.parse.urlparse(recording_url)
+    authed = parsed._replace(
+        netloc=f"{auth_id}:{auth_token}@{parsed.hostname}"
+        + (f":{parsed.port}" if parsed.port else "")
+    )
+    return urllib.parse.urlunparse(authed)
+
+
+def resolve_recording_url(recording_key: str, expires_in: int = 3600) -> str:
+    """Given a stored recording_key, return a playable URL.
+
+    Handles three formats:
+    - plivo:<full-plivo-url>  → authenticates with Plivo creds
+    - recordings/...          → legacy R2 key, generates presigned URL
+    - local:<filename>        → not handled here (caller should serve file)
+    """
+    if recording_key.startswith("plivo:"):
+        plivo_url = recording_key[len("plivo:"):]
+        return generate_plivo_recording_url(plivo_url, expires_in)
+    # Legacy R2 key
+    return generate_presigned_url(recording_key, expires_in)
+
+
+# ---------------------------------------------------------------------------
+# Plivo Record API — start recording on an active call
+# ---------------------------------------------------------------------------
+
 async def start_plivo_recording(
     session: aiohttp.ClientSession,
     call_uuid: str,
@@ -56,7 +86,7 @@ async def start_plivo_recording(
     *,
     host: str = "",
 ) -> bool:
-    """Fire Plivo Record API. Returns True if accepted (202)."""
+    """Fire Plivo Record API. Returns True if accepted (200/202)."""
     auth_id, auth_token = _plivo_auth()
     url = f"https://api.plivo.com/v1/Account/{auth_id}/Call/{call_uuid}/Record/"
     base = public_telephony_base_url(host)
@@ -77,23 +107,47 @@ async def start_plivo_recording(
         return False
 
 
+# ---------------------------------------------------------------------------
+# Plivo recording webhook — called when recording is ready
+# ---------------------------------------------------------------------------
+
 async def handle_plivo_recording(request: Request) -> PlainTextResponse:
-    """Webhook: Plivo POSTs here when recording file is ready."""
+    """Webhook: Plivo POSTs here when recording file is ready.
+
+    Instead of downloading and re-uploading, we store the Plivo-hosted
+    recording URL directly. Plivo retains recordings for 90 days.
+    """
     pool = getattr(request.app.state, "pool", None)
     payload = await _parse_plivo_payload(request)
 
+    # Plivo's Record API delivers its callback as a single form field "response"
+    # containing a JSON object with snake_case keys (record_url, call_uuid,
+    # recording_duration). Other Plivo webhooks send flat top-level params
+    # (RecordUrl, CallUUID, ...). Merge the JSON envelope so both formats work.
+    record_data = dict(payload)
+    raw_response = payload.get("response")
+    if raw_response:
+        try:
+            parsed = json.loads(raw_response)
+            if isinstance(parsed, dict):
+                record_data.update(parsed)
+        except (ValueError, TypeError):
+            pass
+
     session_call_id = (
-        payload.get("session_call_id")
+        record_data.get("session_call_id")
         or request.query_params.get("session_call_id")
         or ""
     )
-    call_uuid = payload.get("CallUUID") or payload.get("call_uuid") or ""
-    record_url = payload.get("RecordUrl") or ""
-    recording_id = payload.get("RecordingID") or ""
-    recording_duration = payload.get("RecordingDuration") or "0"
+    call_uuid = record_data.get("CallUUID") or record_data.get("call_uuid") or ""
+    record_url = record_data.get("RecordUrl") or record_data.get("record_url") or ""
+    recording_duration = (
+        record_data.get("RecordingDuration")
+        or record_data.get("recording_duration")
+        or "0"
+    )
 
     # 1. Look up call_log
-    logger.info(f"[DEBUG] session_call_id: {session_call_id}, call_uuid: {call_uuid}, record_url: {record_url}")
     call_log = None
     if session_call_id and pool:
         call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
@@ -105,68 +159,23 @@ async def handle_plivo_recording(request: Request) -> PlainTextResponse:
                        call_uuid, session_call_id)
         return PlainTextResponse("OK", status_code=200)
 
-    # 2. Download from Plivo
-    logger.info("[DEBUG] Downloading recording...")
-    audio_bytes = await _download_recording(request.app.state.session, record_url)
-    if not audio_bytes:
-        logger.warning("[DEBUG] Download failed or returned empty.")
+    if not record_url:
+        logger.warning("plivo-recording: empty RecordUrl for session_call_id={}", session_call_id)
         return PlainTextResponse("OK", status_code=200)
 
-    # 3. Upload to storage (R2 or local)
-    client_id = str(call_log["client_id"])
     scid = str(call_log["session_call_id"])
-    object_key = f"recordings/{client_id}/{scid}.mp3"
 
-    storage = os.getenv("RECORDING_STORAGE", "r2").lower()
-    logger.info(f"[DEBUG] Storage type: {storage}, object_key: {object_key}")
-    try:
-        if storage == "local":
-            _save_local(audio_bytes, scid)
-            stored_key = f"local:{scid}.mp3"
-        else:
-            upload_recording(audio_bytes, object_key)
-            stored_key = object_key
-    except Exception as e:
-        logger.error(f"[DEBUG] Upload error: {e}")
-        return PlainTextResponse("OK", status_code=200)
+    # 2. Store the Plivo recording URL directly (prefixed with "plivo:")
+    stored_key = f"plivo:{record_url}"
 
-    # 4. Update call_logs.recording_url
-    logger.info(f"[DEBUG] Updating DB with key: {stored_key}")
     try:
         await pg_db.update_call_log_recording_url(pool, scid, stored_key)
-        logger.info("[DEBUG] DB update successful")
-    except Exception as e:
-        logger.error(f"[DEBUG] DB update error: {e}")
+    except Exception as exc:
+        logger.error("Failed to save recording URL for session={}: {}", scid, exc)
+        return PlainTextResponse("OK", status_code=200)
 
-    # 5. (Optional) Delete from Plivo to free their storage
-    # await _delete_plivo_recording(session, recording_id)
-
-    logger.info("Recording stored: session_call_id={} key={} duration={}s",
-                scid, stored_key, recording_duration)
+    logger.info("Recording saved: session_call_id={} plivo_url={} duration={}s",
+                scid, record_url, recording_duration)
     return PlainTextResponse("OK", status_code=200)
 
 
-async def _download_recording(
-    session: aiohttp.ClientSession,
-    record_url: str,
-) -> bytes | None:
-    """Download recording from Plivo with Basic Auth."""
-    if not record_url:
-        return None
-    auth_id, auth_token = _plivo_auth()
-    auth = aiohttp.BasicAuth(auth_id, auth_token)
-    try:
-        async with session.get(record_url, auth=auth) as resp:
-            if resp.status == 200:
-                return await resp.read()
-            logger.error("Failed to download recording from {}: {}", record_url, resp.status)
-    except Exception as exc:
-        logger.error("Recording download error: {}", exc)
-    return None
-
-
-def _save_local(audio_bytes: bytes, session_call_id: str) -> None:
-    """Save recording to local filesystem (dev mode)."""
-    path = Path("./data/recordings")
-    path.mkdir(parents=True, exist_ok=True)
-    (path / f"{session_call_id}.mp3").write_bytes(audio_bytes)

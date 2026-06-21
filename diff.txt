@@ -1,0 +1,461 @@
+diff --git a/api/routes/campaigns.py b/api/routes/campaigns.py
+index 6a5b8ee..c46bd61 100644
+--- a/api/routes/campaigns.py
++++ b/api/routes/campaigns.py
+@@ -18,7 +18,7 @@ from db import postgres as pg_db
+ from dialer.concurrent_dialer import start_dialer, stop_dialer
+ from lead_upload.normaliser import normalise_phone
+ from lead_upload.parser import parse_upload
+-from lead_upload.validator import validate_dataframe
++from lead_upload.validator import validate_dataframe, extract_lead_fields
+ 
+ router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
+ 
+@@ -39,6 +39,15 @@ def _col_map(df: pd.DataFrame) -> dict[str, str]:
+     return {(c or "").strip().lower(): c for c in df.columns}
+ 
+ 
++async def _get_lead_schema(pool, bot, cid) -> dict:
++    if bot.get("script_config_id"):
++        cfg = await pg_db.get_script_config(pool, bot["script_config_id"], cid)
++        return cfg.get("lead_schema", {"fields": []}) if cfg else {"fields": []}
++    else:
++        script = _load_script_module(bot["route"], bot["script_id"])
++        return getattr(script, "LEAD_SCHEMA", {"fields": []})
++
++
+ @router.get("")
+ async def list_campaigns(
+     client: dict = Depends(get_client_from_token),
+@@ -84,7 +93,17 @@ async def campaign_stats(
+     if camp is None:
+         raise HTTPException(404, "Campaign not found")
+         
+-    bot = await pg_db.get_bot_config(pool, UUID(str(camp["bot_config_id"])), cid)
++    camp = dict(camp)
++    bot_record = await pg_db.get_bot_config(pool, UUID(str(camp["bot_config_id"])), cid)
++    bot = dict(bot_record) if bot_record else None
++    
++    lead_schema = {"fields": []}
++    if bot:
++        try:
++            lead_schema = await _get_lead_schema(pool, bot, cid)
++        except HTTPException:
++            pass
++        bot["lead_schema"] = lead_schema
+     camp["bot_config"] = bot
+     
+     return {"stats": camp}
+@@ -164,22 +183,14 @@ async def upload_leads(
+     if bot is None:
+         raise HTTPException(404, "Bot config not found")
+ 
+-    if bot.get("route") == "cms":
+-        if bot.get("script_config_id"):
+-            cfg = await pg_db.get_script_config(pool, bot["script_config_id"], cid)
+-            lead_schema = cfg.get("lead_schema", {"fields": []}) if cfg else {"fields": []}
+-        else:
+-            lead_schema = {"fields": []}
+-    else:
+-        script = _load_script_module(bot["route"], bot["script_id"])
+-        lead_schema = getattr(script, "LEAD_SCHEMA", {"fields": []})
++    lead_schema = await _get_lead_schema(pool, bot, cid)
+ 
+     content = await file.read()
+     import io
+ 
+     try:
+         df = parse_upload(io.BytesIO(content), file.filename or "upload.csv")
+-    except (pd.errors.EmptyDataError, pd.errors.ParserError):
++    except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
+         raise HTTPException(400, "Uploaded file is empty, malformed, or missing columns")
+     errors = validate_dataframe(df, lead_schema)
+     if errors:
+@@ -207,7 +218,7 @@ async def upload_leads(
+             next_attempt_at = next_compliant_time()
+ 
+         metadata: dict = {}
+-        for field in lead_schema.get("fields") or []:
++        for field in extract_lead_fields(lead_schema):
+             key = field.get("key")
+             csv_col = field.get("csv_column") or key
+             ncol = (csv_col or "").strip().lower()
+@@ -248,6 +259,50 @@ async def upload_leads(
+     }
+ 
+ 
++from fastapi.responses import PlainTextResponse
++
++@router.get("/{campaign_id}/leads/template", response_class=PlainTextResponse)
++async def get_lead_template(
++    campaign_id: UUID,
++    client: dict = Depends(get_client_from_token),
++    pool=Depends(get_pool),
++):
++    cid = client_id_uuid(client)
++    campaign = await pg_db.get_campaign(pool, campaign_id, cid)
++    if campaign is None:
++        raise HTTPException(404, "Campaign not found")
++
++    bot = await pg_db.get_bot_config(
++        pool, UUID(str(campaign["bot_config_id"])), cid
++    )
++    if bot is None:
++        raise HTTPException(404, "Bot config not found")
++
++    try:
++        lead_schema = await _get_lead_schema(pool, bot, cid)
++    except HTTPException:
++        lead_schema = {"fields": []}
++    
++    headers = ["phone", "name"]
++    for field in extract_lead_fields(lead_schema):
++        csv_col = field.get("csv_column") or field.get("key")
++        if csv_col and csv_col.lower() not in ("phone", "name", "lead_phone", "lead_name"):
++            headers.append(csv_col)
++            
++    import csv
++    import io
++    output = io.StringIO()
++    writer = csv.writer(output)
++    writer.writerow(headers)
++    
++    return PlainTextResponse(
++        content=output.getvalue(),
++        headers={
++            "Content-Disposition": f'attachment; filename="template_{bot["script_id"]}.csv"'
++        }
++    )
++
++
+ @router.patch("/{campaign_id}/start")
+ async def start_campaign(
+     campaign_id: UUID,
+@@ -338,3 +393,29 @@ async def stop_campaign(
+         "campaign_id": str(campaign_id),
+         "released_calling_leads": released,
+     }
++
++
++@router.post("/{campaign_id}/release-stuck-calling")
++async def release_stuck_calling(
++    campaign_id: UUID,
++    client: dict = Depends(get_client_from_token),
++    pool=Depends(get_pool),
++):
++    cid = client_id_uuid(client)
++    camp = await pg_db.get_campaign(pool, campaign_id, cid)
++    if camp is None:
++        raise HTTPException(404, "Campaign not found")
++    if camp["status"] not in ("running", "pausing", "paused"):
++        raise HTTPException(
++            409,
++            f"Cannot release stuck leads for a {camp['status']} campaign",
++        )
++    released = await pg_db.release_stuck_calling_leads(
++        pool, campaign_id, cid, ignore_wrap_grace=True
++    )
++    counters = await pg_db.reconcile_campaign_counters(pool, campaign_id, cid)
++    return {
++        "campaign_id": str(campaign_id),
++        "released": released,
++        "counters": counters,
++    }
+diff --git a/db/postgres.py b/db/postgres.py
+index 0b76245..f166e97 100644
+--- a/db/postgres.py
++++ b/db/postgres.py
+@@ -1642,7 +1642,7 @@ async def claim_leads_for_dialer(
+             ids = [r["id"] for r in rows]
+             await conn.execute(
+                 """
+-                UPDATE leads SET status = 'calling', last_attempted_at = NOW()
++                UPDATE leads SET status = 'calling', last_attempted_at = NOW(), attempts = attempts + 1
+                 WHERE id = ANY($1::uuid[]) AND client_id = $2
+                 """,
+                 ids,
+@@ -1663,6 +1663,8 @@ async def release_stuck_calling_leads(
+     pool: asyncpg.Pool,
+     campaign_id: UUID | str,
+     client_id: UUID | str,
++    *,
++    ignore_wrap_grace: bool = False,
+ ) -> int:
+     """
+     Reset leads left in ``calling`` (no live call) back to ``pending``.
+@@ -1671,51 +1673,95 @@ async def release_stuck_calling_leads(
+     await finalize_stale_in_progress_call_logs(pool, campaign_id, client_id)
+     grace = live_call_grace_minutes()
+     wrap = post_call_wrap_grace_minutes()
++    wrap_clause = (
++        ""
++        if ignore_wrap_grace
++        else """
++                       EXISTS (
++                         SELECT 1 FROM call_logs c
++                         WHERE c.lead_id = l.id
++                           AND c.ended_at IS NOT NULL
++                           AND c.ended_at > NOW() - ($4 * INTERVAL '1 minute')
++                       ) AS has_recent_wrap_up"""
++    )
++    wrap_filter = (
++        ""
++        if ignore_wrap_grace
++        else """
++                  AND NOT EXISTS (
++                    SELECT 1 FROM call_logs c
++                    WHERE c.lead_id = l.id
++                      AND c.ended_at IS NOT NULL
++                      AND c.ended_at > NOW() - ($4 * INTERVAL '1 minute')
++                  )"""
++    )
+     async with pool.acquire() as conn:
+         async with conn.transaction():
+-            live_rows = await conn.fetch(
+-                """
++            if ignore_wrap_grace:
++                live_rows = await conn.fetch(
++                    f"""
+                 SELECT l.id AS lead_id,
+                        EXISTS (
+                          SELECT 1 FROM call_logs c
+                          WHERE c.lead_id = l.id AND c.in_progress = TRUE
+                            AND c.started_at > NOW() - ($3 * INTERVAL '1 minute')
+                        ) AS has_live_call,
++                       FALSE AS has_recent_wrap_up
++                FROM leads l
++                WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
++                """,
++                    campaign_id,
++                    client_id,
++                    grace,
++                )
++            else:
++                live_rows = await conn.fetch(
++                    f"""
++                SELECT l.id AS lead_id,
+                        EXISTS (
+                          SELECT 1 FROM call_logs c
+-                         WHERE c.lead_id = l.id
+-                           AND c.ended_at IS NOT NULL
+-                           AND c.ended_at > NOW() - ($4 * INTERVAL '1 minute')
+-                       ) AS has_recent_wrap_up
++                         WHERE c.lead_id = l.id AND c.in_progress = TRUE
++                           AND c.started_at > NOW() - ($3 * INTERVAL '1 minute')
++                       ) AS has_live_call,{wrap_clause}
+                 FROM leads l
+                 WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
+                 """,
+-                campaign_id,
+-                client_id,
+-                grace,
+-                wrap,
+-            )
+-            rows = await conn.fetch(
+-                """
++                    campaign_id,
++                    client_id,
++                    grace,
++                    wrap,
++                )
++            if ignore_wrap_grace:
++                rows = await conn.fetch(
++                    f"""
+                 SELECT l.id FROM leads l
+                 WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM call_logs c
+                     WHERE c.lead_id = l.id AND c.in_progress = TRUE
+                       AND c.started_at > NOW() - ($3 * INTERVAL '1 minute')
+-                  )
++                  ){wrap_filter}
++                """,
++                    campaign_id,
++                    client_id,
++                    grace,
++                )
++            else:
++                rows = await conn.fetch(
++                    f"""
++                SELECT l.id FROM leads l
++                WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM call_logs c
+-                    WHERE c.lead_id = l.id
+-                      AND c.ended_at IS NOT NULL
+-                      AND c.ended_at > NOW() - ($4 * INTERVAL '1 minute')
+-                  )
++                    WHERE c.lead_id = l.id AND c.in_progress = TRUE
++                      AND c.started_at > NOW() - ($3 * INTERVAL '1 minute')
++                  ){wrap_filter}
+                 """,
+-                campaign_id,
+-                client_id,
+-                grace,
+-                wrap,
+-            )
++                    campaign_id,
++                    client_id,
++                    grace,
++                    wrap,
++                )
+             skipped_live = sum(1 for r in live_rows if r["has_live_call"])
+             skipped_wrap = sum(1 for r in live_rows if r["has_recent_wrap_up"])
+             logger.info(
+@@ -2079,7 +2125,7 @@ async def update_lead_fields(
+ 
+     args.extend([lead_id, client_id])
+     result = await pool.execute(
+-        f"UPDATE leads SET {', '.join(sets)} WHERE id = ${idx} AND client_id = ${idx + 1}",
++        f"UPDATE leads SET {', '.join(sets)} WHERE id = ${idx} AND client_id = ${idx + 1} AND status != 'calling'",
+         *args,
+     )
+     return result.split()[-1] != "0"
+@@ -2159,7 +2205,7 @@ async def delete_lead(
+     Callers should run ``reconcile_campaign_counters`` after this.
+     """
+     result = await pool.execute(
+-        "DELETE FROM leads WHERE id = $1 AND campaign_id = $2 AND client_id = $3",
++        "DELETE FROM leads WHERE id = $1 AND campaign_id = $2 AND client_id = $3 AND status != 'calling'",
+         lead_id,
+         campaign_id,
+         client_id,
+@@ -2187,7 +2233,7 @@ async def update_lead_status_manual(
+         SET status = $1,
+             next_attempt_at = $2,
+             scheduled_callback_at = $3
+-        WHERE id = $4 AND client_id = $5
++        WHERE id = $4 AND client_id = $5 AND status != 'calling'
+         """,
+         new_status,
+         next_attempt_at,
+diff --git a/post_call_processor.py b/post_call_processor.py
+index fc92bb5..f5eb492 100644
+--- a/post_call_processor.py
++++ b/post_call_processor.py
+@@ -146,6 +146,13 @@ async def _finalize_call_log_and_settle_budget(
+     client_id: UUID,
+     call_log: dict | None,
+ ) -> None:
++    prior_outcome = (call_log or {}).get("outcome")
++    prior_charged = (call_log or {}).get("credits_charged")
++    already_settled = (
++        prior_outcome
++        and str(prior_outcome).strip()
++        and prior_charged is not None
++    )
+     await pg_db.finalize_call_log(
+         conn,
+         session_call_id,
+@@ -159,6 +166,8 @@ async def _finalize_call_log_and_settle_budget(
+         extraction_model=extraction_model,
+         extraction_error=extraction_error,
+     )
++    if already_settled:
++        return
+     reserved = pg_db.budget_reserved_from_call_data(
+         call_log.get("call_data") if call_log else None
+     )
+@@ -167,6 +176,70 @@ async def _finalize_call_log_and_settle_budget(
+     )
+ 
+ 
++async def recover_abandoned_session(
++    pool: asyncpg.Pool,
++    session_call_id: str,
++) -> bool:
++    """Run post-call recovery after abnormal WS disconnect."""
++    from uuid import UUID
++
++    from call_transcript import _pg_context_from_call_log, _run_campaign_post_call
++
++    call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
++    if not call_log or not call_log.get("lead_id"):
++        return False
++
++    client_id = UUID(str(call_log["client_id"]))
++    lead = await pg_db.get_lead(pool, UUID(str(call_log["lead_id"])), client_id)
++    if not lead or lead.get("status") not in ("calling", "callback_scheduled"):
++        return False
++
++    resolved_ctx = _pg_context_from_call_log(call_log)
++    if not resolved_ctx:
++        return False
++
++    started = call_log.get("started_at")
++    ended = call_log.get("ended_at")
++    if isinstance(started, str):
++        started = datetime.fromisoformat(started.replace("Z", "+00:00"))
++    if isinstance(ended, str):
++        ended = datetime.fromisoformat(ended.replace("Z", "+00:00"))
++    if started:
++        end_ts = ended or datetime.now(timezone.utc)
++        duration_seconds = max(0, int((end_ts - started).total_seconds()))
++    else:
++        duration_seconds = 0
++
++    transcript = call_log.get("transcript") or []
++    if isinstance(transcript, str):
++        try:
++            transcript = json.loads(transcript)
++        except json.JSONDecodeError:
++            transcript = []
++    if not isinstance(transcript, list):
++        transcript = []
++
++    try:
++        await _run_campaign_post_call(
++            resolved_ctx=resolved_ctx,
++            session_call_id=session_call_id,
++            duration_seconds=duration_seconds,
++            transcript=transcript,
++            extraction={"intent_status": "Unknown"},
++            usage_dict={},
++            extraction_error="ws_disconnect_recovery",
++        )
++        logger.info("Recovered abandoned session {}", session_call_id)
++        return True
++    except Exception as exc:
++        logger.exception(
++            "recover_abandoned_session failed session={}: {}",
++            session_call_id,
++            exc,
++        )
++        return False
++
++
+ async def process_post_call(
+     pool: asyncpg.Pool,
+     session_call_id: str,
+@@ -201,7 +274,7 @@ async def process_post_call(
+     credits_charged = billed_minutes * credits_per_minute
+ 
+     outcome = (extraction_json or {}).get("intent_status", "Unknown")
+-    attempts = int(lead.get("attempts") or 0) + 1
++    attempts = int(lead.get("attempts") or 0)
+     max_attempts = int(lead.get("max_attempts") or campaign.get("max_attempts") or 3)
+     retry_delay = int(campaign.get("retry_delay_minutes") or 120)
+ 
+diff --git a/server.py b/server.py
+index 204b77f..a37b2d1 100644
+--- a/server.py
++++ b/server.py
+@@ -462,6 +462,18 @@ async def ws_endpoint(
+         import traceback
+         logger.error(f"Bot error: {e}\n{traceback.format_exc()}")
+         await websocket.close()
++    finally:
++        if call_id and app.state.pool is not None:
++            try:
++                call_log = await pg_db.get_call_log_by_session(app.state.pool, call_id)
++                if call_log and call_log.get("in_progress"):
++                    logger.warning(f"Cleaning up stuck in_progress call {call_id} after WS closed")
++                    await pg_db.mark_call_log_not_in_progress(app.state.pool, call_id, set_credits_charged_zero=True)
++                from post_call_processor import recover_abandoned_session
++
++                await recover_abandoned_session(app.state.pool, call_id)
++            except Exception as e:
++                logger.error(f"Failed to cleanup stuck call log: {e}")
+ 
+ 
+ @app.get("/health")

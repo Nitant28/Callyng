@@ -5,6 +5,9 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
   const [callData, setCallData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isPolling, setIsPolling] = useState(false);
+  const [recordingUrl, setRecordingUrl] = useState(null);
+  const [recordingLoading, setRecordingLoading] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
   const drawerRef = useRef(null);
 
   // Load call transcript details
@@ -56,10 +59,52 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
 
     const interval = setInterval(() => {
       fetchCallDetails(false);
-    }, 3000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [isPolling, isOpen, sessionCallId, fetchCallDetails]);
+
+  const fetchRecording = useCallback(async (resolvedSessionCallId, inProgress) => {
+    if (!resolvedSessionCallId) return;
+    setRecordingLoading(true);
+    setRecordingError(null);
+    try {
+      const recResp = await clientApi.get(
+        `/api/calls/${resolvedSessionCallId}/recording/play`,
+        { responseType: 'blob' }
+      );
+      const url = URL.createObjectURL(recResp.data);
+      setRecordingUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+    } catch (err) {
+      setRecordingUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      if (!inProgress) {
+        setRecordingError(err.response?.data?.detail || 'No recording available');
+      }
+    } finally {
+      setRecordingLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen || !callData?.session_call_id) return;
+    fetchRecording(callData.session_call_id, callData.in_progress);
+  }, [isOpen, callData?.session_call_id, callData?.recording_url, callData?.in_progress, fetchRecording]);
+
+  useEffect(() => {
+    if (isOpen) return;
+    setRecordingUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setRecordingError(null);
+    setRecordingLoading(false);
+  }, [isOpen]);
 
   const formatDuration = (seconds) => {
     if (!seconds) return '0s';
@@ -149,7 +194,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
                     <div 
                       key={index} 
                       className="flex gap-3 max-w-[85%] opacity-0 transform -translate-x-4"
-                      style={{ animation: `bubble-left 0.4s ease-out ${(index * 0.2) + 0.1}s forwards` }}
+                      style={{ animation: `bubble-left 0.4s ease-out ${Math.min(index * 0.1, 0.4)}s forwards` }}
                     >
                       <div className="w-8 h-8 rounded-full bg-primary-container dark:bg-molten-primary/10 text-primary dark:text-molten-primary flex items-center justify-center shrink-0 mt-1">
                         <span className="material-symbols-outlined text-sm">robot_2</span>
@@ -163,7 +208,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
                     <div 
                       key={index} 
                       className="flex gap-3 max-w-[85%] self-end opacity-0 transform translate-x-4"
-                      style={{ animation: `bubble-right 0.4s ease-out ${(index * 0.2) + 0.1}s forwards` }}
+                      style={{ animation: `bubble-right 0.4s ease-out ${Math.min(index * 0.1, 0.4)}s forwards` }}
                     >
                       <div className="bg-primary dark:bg-molten-primary text-on-primary dark:text-molten-bg rounded-l-xl rounded-br-xl p-3 shadow-sm inner-shadow-top text-sm">
                         {turn.content}
@@ -182,7 +227,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
 
               {/* In Progress Typing Indicator */}
               {callData.in_progress && (
-                <div className="flex gap-3 max-w-[85%] opacity-0 transform -translate-x-4" style={{ animation: `bubble-left 0.4s ease-out ${((Array.isArray(callData.transcript) ? callData.transcript.length : 0) * 0.2) + 0.1}s forwards` }}>
+                <div className="flex gap-3 max-w-[85%] opacity-0 transform -translate-x-4" style={{ animation: 'bubble-left 0.4s ease-out 0.4s forwards' }}>
                   <div className="w-8 h-8 rounded-full bg-primary-container dark:bg-molten-primary/10 text-primary dark:text-molten-primary flex items-center justify-center shrink-0 mt-1">
                     <span className="material-symbols-outlined text-sm">robot_2</span>
                   </div>
@@ -215,6 +260,24 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* Call Recording */}
+            <div className="p-4 border-t border-outline-variant dark:border-[#2A345E] bg-surface dark:bg-molten-surface shrink-0">
+              {recordingLoading ? (
+                <div className="flex justify-center items-center gap-2 text-sm text-arctic-text-muted dark:text-molten-text-muted py-2">
+                  <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+                  Loading audio...
+                </div>
+              ) : recordingUrl ? (
+                <audio controls src={recordingUrl} className="w-full h-10 outline-none" controlsList="nodownload" />
+              ) : (
+                <div className="text-center text-xs text-arctic-text-muted dark:text-molten-text-muted">
+                  {recordingError || (callData.in_progress
+                    ? 'Recording will be available after the call completes.'
+                    : 'No recording available for this call.')}
                 </div>
               )}
             </div>

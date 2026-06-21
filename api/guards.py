@@ -28,17 +28,8 @@ def require_campaign_modifiable(
         )
 
 
-def require_lead_unstarted(lead: dict) -> None:
-    """Raise 409 if the lead is not in a pending or scheduled state."""
-    allowed = {"pending", "callback_scheduled"}
-    if lead.get("status") not in allowed:
-        raise HTTPException(
-            409,
-            f"Cannot modify lead because it has already been processed (status: {lead.get('status')})",
-        )
-
-def require_lead_not_calling(lead: dict) -> None:
-    """Raise 409 if the lead is currently owned by a live call."""
+def require_lead_editable(lead: dict) -> None:
+    """Raise 409 if the lead is currently on a live call."""
     if lead.get("status") == "calling":
         raise HTTPException(
             409,

@@ -866,7 +866,7 @@ async def cmd_rerun_extraction(args):
 
         if parsed is not None and err is None:
             extraction = normalize_post_call_extraction(
-                parsed, normalization_rules=norm_rules
+                parsed, normalization_rules=norm_rules, transcript=transcript
             )
             ext_json = json.dumps(extraction, ensure_ascii=False)
             outcome = extraction.get("intent_status", "Unknown")

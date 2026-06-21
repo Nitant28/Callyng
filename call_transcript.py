@@ -17,7 +17,11 @@ from background_tasks import spawn_background_task
 from call_log_db import insert_call_log, update_call_log_extraction
 from call_metrics import UsageMetricsAccumulator
 from n8n_webhook import send_call_completed_webhook
-from post_call_extract import extract_post_call, normalize_post_call_extraction
+from post_call_extract import (
+    extract_post_call,
+    normalize_post_call_extraction,
+    prepare_transcript_for_storage,
+)
 from pricing_sts import compute_sts_cost_inr
 
 from db.redis_client import get_redis
@@ -331,7 +335,7 @@ def finalize_transcript(
         turns = snapshot_from_context(context)
         if strip_bootstrap:
             _strip_sts_bootstrap(turns)
-    return turns
+    return prepare_transcript_for_storage(turns)
 
 
 def _transcript_for_webhook(
@@ -559,6 +563,7 @@ def attach_pipeline_finalize(
                         extraction = normalize_post_call_extraction(
                             parsed,
                             normalization_rules=norm_rules,
+                            transcript=transcript,
                         )
                         update_call_log_extraction(
                             row_id,

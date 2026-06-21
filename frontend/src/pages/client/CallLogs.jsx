@@ -21,8 +21,11 @@ const CallLogs = () => {
   const [callLoading, setCallLoading] = useState(false);
 
   // Playback state
+  const [recordingUrl, setRecordingUrl] = useState(null);
+  const [recordingLoading, setRecordingLoading] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playSeconds, setPlaySeconds] = useState(84); // Default starts at 01:24
+  const [playSeconds, setPlaySeconds] = useState(0);
 
   // Load calls list
   const loadCalls = useCallback(async () => {
@@ -54,23 +57,30 @@ const CallLogs = () => {
 
   // Load detailed call/transcript when row clicked
   const handleOpenTranscript = async (call) => {
+    const sessionCallId = call.session_call_id;
     setSelectedCall(call);
     setIsDrawerOpen(true);
     setCallLoading(true);
     setIsPlaying(false);
-    setPlaySeconds(84); // Reset playhead to default 1:24
+    setPlaySeconds(84);
+    setRecordingUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setRecordingError(null);
 
+    let callDetails = null;
     try {
-      const response = await clientApi.get(`/api/calls/${call.session_call_id}`);
+      const response = await clientApi.get(`/api/calls/${sessionCallId}`);
       if (response.data && response.data.session_call_id) {
-        const call = response.data;
-        if (typeof call.transcript === 'string') {
-          try { call.transcript = JSON.parse(call.transcript); } catch { call.transcript = []; }
+        callDetails = response.data;
+        if (typeof callDetails.transcript === 'string') {
+          try { callDetails.transcript = JSON.parse(callDetails.transcript); } catch { callDetails.transcript = []; }
         }
-        if (typeof call.extraction_json === 'string') {
-          try { call.extraction_json = JSON.parse(call.extraction_json); } catch { call.extraction_json = null; }
+        if (typeof callDetails.extraction_json === 'string') {
+          try { callDetails.extraction_json = JSON.parse(callDetails.extraction_json); } catch { callDetails.extraction_json = null; }
         }
-        setCallData(call);
+        setCallData(callDetails);
       } else {
         throw new Error('Call details not returned');
       }
@@ -80,30 +90,31 @@ const CallLogs = () => {
     } finally {
       setCallLoading(false);
     }
+
+    const resolvedSessionCallId = callDetails?.session_call_id || sessionCallId;
+    setRecordingLoading(true);
+    try {
+      const recResp = await clientApi.get(`/api/calls/${resolvedSessionCallId}/recording/play`, {
+        responseType: 'blob'
+      });
+      const url = URL.createObjectURL(recResp.data);
+      setRecordingUrl(url);
+    } catch (err) {
+      setRecordingError(err.response?.data?.detail || "No recording available");
+    } finally {
+      setRecordingLoading(false);
+    }
   };
 
   const handleCloseDrawer = () => {
+    setRecordingUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     setIsDrawerOpen(false);
-    setIsPlaying(false);
   };
 
-  // Playback timer ticker simulation
-  /* TODO: Playback timer ticker simulation (Phase 4 call recordings)
-  useEffect(() => {
-    if (!isPlaying || !callData) return;
-    const maxDur = callData.duration_seconds || 252;
-    const timer = setInterval(() => {
-      setPlaySeconds(prev => {
-        if (prev >= maxDur) {
-          setIsPlaying(false);
-          return 0;
-        }
-        return prev + 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [isPlaying, callData]);
-  */
+
 
   // Formatter helpers
   const formatTime = (totalSecs) => {
@@ -136,7 +147,8 @@ const CallLogs = () => {
 
             {/* Table */}
             <div className="bg-arctic-surface dark:bg-molten-bg border border-outline-variant/50 dark:border-molten-surface rounded-lg shadow-[0_4px_20px_rgba(22,71,232,0.05)] dark:shadow-none flex-1 overflow-hidden flex flex-col transition-colors duration-300">
-              <div className="overflow-y-auto custom-scroll flex-1">
+              <div className="overflow-y-auto custom-scroll flex-1 relative">
+                {loading && <LoaderOverlay isVisible={loading} message="Loading Transcripts..." />}
                 <table className="w-full text-left border-collapse">
                   <thead className="bg-surface-container-low dark:bg-molten-surface/50 sticky top-0 z-10">
                     <tr>
@@ -148,7 +160,6 @@ const CallLogs = () => {
                     </tr>
                   </thead>
                   <tbody className="">
-                    {loading && <LoaderOverlay isVisible={loading} message="Loading Transcripts..." />}
                     {!loading && calls.map((call) => {
                         const statusColors = 
                           call.status === 'completed'
@@ -313,31 +324,20 @@ const CallLogs = () => {
                   )}
                 </div>
 
-                {/* TODO: Call Recordings play/download (Phase 3) - disabled in client view */}
-                {/* TODO: SSE live metrics / active call charts (Phase 3/4) */}
-                {/* TODO: Call recordings playback support (Phase 4 CF R2 Integration)
-                <div className="p-3 border-t border-outline-variant/50 dark:border-molten-surface bg-surface-container-lowest dark:bg-molten-bg shrink-0 flex items-center gap-3 transition-colors duration-300">
-                  <button 
-                    onClick={() => setIsPlaying(!isPlaying)}
-                    className="p-2 rounded-full bg-primary text-on-primary dark:bg-molten-primary shadow-inner hover:brightness-95 active:scale-95 transition-all cursor-pointer flex items-center justify-center"
-                  >
-                    <span className="material-symbols-outlined fill">
-                      {isPlaying ? 'pause' : 'play_arrow'}
-                    </span>
-                  </button>
-                  <div className="flex-grow h-1.5 bg-surface-container-high dark:bg-molten-surface rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-primary dark:bg-molten-primary rounded-full transition-all duration-300"
-                      style={{ width: `${(playSeconds / (selectedCall.duration_seconds || 252)) * 100}%` }}
-                    ></div>
-                  </div>
-                  <span className="font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tabular-nums">
-                    {formatTime(playSeconds)} / {formatTime(selectedCall.duration_seconds)}
-                  </span>
-                </div>
-                */}
-                <div className="text-center w-full py-4 text-xs text-arctic-text-muted dark:text-molten-text-muted shrink-0 border-t border-outline-variant/50 dark:border-molten-surface bg-surface-container-lowest dark:bg-molten-bg">
-                  Audio recordings will be available in Phase 4.
+                {/* Call Recording */}
+                <div className="p-4 border-t border-outline-variant/50 dark:border-molten-surface bg-surface-container-lowest dark:bg-molten-bg shrink-0 transition-colors duration-300">
+                  {recordingLoading ? (
+                    <div className="flex justify-center items-center gap-2 text-sm text-arctic-text-muted dark:text-molten-text-muted py-2">
+                      <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+                      Loading audio...
+                    </div>
+                  ) : recordingUrl ? (
+                    <audio controls src={recordingUrl} className="w-full h-10 outline-none" controlsList="nodownload" />
+                  ) : (
+                    <div className="text-center text-xs text-arctic-text-muted dark:text-molten-text-muted">
+                      {recordingError || "Audio recordings will be available after call completes."}
+                    </div>
+                  )}
                 </div>
               </>
             )}

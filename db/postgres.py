@@ -40,6 +40,16 @@ def post_call_wrap_grace_minutes() -> int:
     return max(mins, 1)
 
 
+def orphaned_dial_minutes() -> int:
+    """How long to wait before an in_progress call_log with no Plivo call_sid is orphaned."""
+    raw = (os.getenv("ORPHANED_DIAL_MINUTES") or "3").strip()
+    try:
+        mins = int(raw)
+    except ValueError:
+        mins = 3
+    return max(mins, 1)
+
+
 async def diagnose_claim_blockers(
     pool: asyncpg.Pool,
     campaign_id: UUID | str,
@@ -1642,7 +1652,7 @@ async def claim_leads_for_dialer(
             ids = [r["id"] for r in rows]
             await conn.execute(
                 """
-                UPDATE leads SET status = 'calling', last_attempted_at = NOW()
+                UPDATE leads SET status = 'calling', last_attempted_at = NOW(), attempts = attempts + 1
                 WHERE id = ANY($1::uuid[]) AND client_id = $2
                 """,
                 ids,
@@ -1663,59 +1673,133 @@ async def release_stuck_calling_leads(
     pool: asyncpg.Pool,
     campaign_id: UUID | str,
     client_id: UUID | str,
+    *,
+    ignore_wrap_grace: bool = False,
 ) -> int:
     """
     Reset leads left in ``calling`` (no live call) back to ``pending``.
     Fixes denorm counters. Returns number of leads released.
     """
     await finalize_stale_in_progress_call_logs(pool, campaign_id, client_id)
+    await finalize_orphaned_in_progress_call_logs(pool, campaign_id, client_id)
     grace = live_call_grace_minutes()
     wrap = post_call_wrap_grace_minutes()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            live_rows = await conn.fetch(
-                """
-                SELECT l.id AS lead_id,
-                       EXISTS (
-                         SELECT 1 FROM call_logs c
-                         WHERE c.lead_id = l.id AND c.in_progress = TRUE
-                           AND c.started_at > NOW() - ($3 * INTERVAL '1 minute')
-                       ) AS has_live_call,
+    orphan = orphaned_dial_minutes()
+    live_sid_guard_4 = """
+                       AND (
+                         (c.call_sid IS NOT NULL AND c.call_sid <> '')
+                         OR c.started_at > NOW() - ($4 * INTERVAL '1 minute')
+                       )"""
+    live_sid_guard_5 = """
+                       AND (
+                         (c.call_sid IS NOT NULL AND c.call_sid <> '')
+                         OR c.started_at > NOW() - ($5 * INTERVAL '1 minute')
+                       )"""
+    live_block_4 = """
+                    SELECT 1 FROM call_logs c
+                    WHERE c.lead_id = l.id AND c.in_progress = TRUE
+                      AND c.started_at > NOW() - ($3 * INTERVAL '1 minute')
+                      AND (
+                        (c.call_sid IS NOT NULL AND c.call_sid <> '')
+                        OR c.started_at > NOW() - ($4 * INTERVAL '1 minute')
+                      )"""
+    live_block_5 = """
+                    SELECT 1 FROM call_logs c
+                    WHERE c.lead_id = l.id AND c.in_progress = TRUE
+                      AND c.started_at > NOW() - ($3 * INTERVAL '1 minute')
+                      AND (
+                        (c.call_sid IS NOT NULL AND c.call_sid <> '')
+                        OR c.started_at > NOW() - ($5 * INTERVAL '1 minute')
+                      )"""
+    wrap_clause = (
+        ""
+        if ignore_wrap_grace
+        else """
                        EXISTS (
                          SELECT 1 FROM call_logs c
                          WHERE c.lead_id = l.id
                            AND c.ended_at IS NOT NULL
                            AND c.ended_at > NOW() - ($4 * INTERVAL '1 minute')
-                       ) AS has_recent_wrap_up
-                FROM leads l
-                WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
-                """,
-                campaign_id,
-                client_id,
-                grace,
-                wrap,
-            )
-            rows = await conn.fetch(
-                """
-                SELECT l.id FROM leads l
-                WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
-                  AND NOT EXISTS (
-                    SELECT 1 FROM call_logs c
-                    WHERE c.lead_id = l.id AND c.in_progress = TRUE
-                      AND c.started_at > NOW() - ($3 * INTERVAL '1 minute')
-                  )
+                       ) AS has_recent_wrap_up"""
+    )
+    wrap_filter = (
+        ""
+        if ignore_wrap_grace
+        else """
                   AND NOT EXISTS (
                     SELECT 1 FROM call_logs c
                     WHERE c.lead_id = l.id
                       AND c.ended_at IS NOT NULL
                       AND c.ended_at > NOW() - ($4 * INTERVAL '1 minute')
-                  )
+                  )"""
+    )
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if ignore_wrap_grace:
+                live_rows = await conn.fetch(
+                    f"""
+                SELECT l.id AS lead_id,
+                       EXISTS (
+                         SELECT 1 FROM call_logs c
+                         WHERE c.lead_id = l.id AND c.in_progress = TRUE
+                           AND c.started_at > NOW() - ($3 * INTERVAL '1 minute'){live_sid_guard_4}
+                       ) AS has_live_call,
+                       FALSE AS has_recent_wrap_up
+                FROM leads l
+                WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
                 """,
-                campaign_id,
-                client_id,
-                grace,
-                wrap,
-            )
+                    campaign_id,
+                    client_id,
+                    grace,
+                    orphan,
+                )
+            else:
+                live_rows = await conn.fetch(
+                    f"""
+                SELECT l.id AS lead_id,
+                       EXISTS (
+                         SELECT 1 FROM call_logs c
+                         WHERE c.lead_id = l.id AND c.in_progress = TRUE
+                           AND c.started_at > NOW() - ($3 * INTERVAL '1 minute'){live_sid_guard_5}
+                       ) AS has_live_call,{wrap_clause}
+                FROM leads l
+                WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
+                """,
+                    campaign_id,
+                    client_id,
+                    grace,
+                    wrap,
+                    orphan,
+                )
+            if ignore_wrap_grace:
+                rows = await conn.fetch(
+                    f"""
+                SELECT l.id FROM leads l
+                WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
+                  AND NOT EXISTS (
+                    {live_block_4}
+                  ){wrap_filter}
+                """,
+                    campaign_id,
+                    client_id,
+                    grace,
+                    orphan,
+                )
+            else:
+                rows = await conn.fetch(
+                    f"""
+                SELECT l.id FROM leads l
+                WHERE l.campaign_id = $1 AND l.client_id = $2 AND l.status = 'calling'
+                  AND NOT EXISTS (
+                    {live_block_5}
+                  ){wrap_filter}
+                """,
+                    campaign_id,
+                    client_id,
+                    grace,
+                    wrap,
+                    orphan,
+                )
             skipped_live = sum(1 for r in live_rows if r["has_live_call"])
             skipped_wrap = sum(1 for r in live_rows if r["has_recent_wrap_up"])
             logger.info(
@@ -1751,6 +1835,50 @@ async def release_stuck_calling_leads(
                 conn, campaign_id, client_id, len(rows)
             )
             return len(rows)
+
+
+async def finalize_orphaned_in_progress_call_logs(
+    pool: asyncpg.Pool,
+    campaign_id: UUID | str,
+    client_id: UUID | str,
+    *,
+    orphan_minutes: int | None = None,
+) -> int:
+    """
+    Close ``in_progress`` call_logs that never received a Plivo ``call_sid``.
+    Returns number settled via settle_unanswered_call.
+    """
+    mins = orphan_minutes if orphan_minutes is not None else orphaned_dial_minutes()
+    rows = await pool.fetch(
+        """
+        SELECT session_call_id, lead_id, campaign_id, client_id, call_data,
+               in_progress, call_sid, started_at
+        FROM call_logs
+        WHERE campaign_id = $1 AND client_id = $2 AND in_progress = TRUE
+          AND (call_sid IS NULL OR call_sid = '')
+          AND started_at < NOW() - ($3 * INTERVAL '1 minute')
+        """,
+        campaign_id,
+        client_id,
+        mins,
+    )
+    settled = 0
+    for row in rows:
+        call_log = record_to_dict(row)
+        if call_log and await settle_unanswered_call(
+            pool, call_log, retry_delay_minutes=0
+        ):
+            settled += 1
+    if settled:
+        logger.warning(
+            "Finalized {} orphaned in_progress call_log(s) for campaign {} "
+            "(no call_sid after {} min)",
+            settled,
+            campaign_id,
+            mins,
+        )
+    return settled
+
 
 async def release_all_stuck_calling_leads(pool: asyncpg.Pool) -> int:
     """Run release_stuck_calling_leads for all campaigns with calling_leads > 0."""
@@ -1850,6 +1978,31 @@ async def fetch_active_lead_for_post_call(
         """,
         lead_id,
         client_id,
+    )
+    return record_to_dict(row) if row else None
+
+
+async def fetch_premature_recover_lead_for_post_call(
+    conn: asyncpg.Connection,
+    lead_id: UUID,
+    client_id: UUID,
+    session_call_id: str,
+) -> dict | None:
+    """Lock lead wrongly moved to pending by early recover for this session."""
+    row = await conn.fetchrow(
+        """
+        SELECT l.status, l.next_attempt_at, l.scheduled_callback_at
+        FROM leads l
+        INNER JOIN call_logs cl
+            ON cl.lead_id = l.id AND cl.session_call_id = $3
+        WHERE l.id = $1 AND l.client_id = $2
+          AND l.status = 'pending'
+          AND (l.outcome IS NULL OR l.outcome IN ('Unknown', 'Busy'))
+        FOR UPDATE OF l
+        """,
+        lead_id,
+        client_id,
+        session_call_id,
     )
     return record_to_dict(row) if row else None
 
@@ -2079,7 +2232,7 @@ async def update_lead_fields(
 
     args.extend([lead_id, client_id])
     result = await pool.execute(
-        f"UPDATE leads SET {', '.join(sets)} WHERE id = ${idx} AND client_id = ${idx + 1}",
+        f"UPDATE leads SET {', '.join(sets)} WHERE id = ${idx} AND client_id = ${idx + 1} AND status != 'calling'",
         *args,
     )
     return result.split()[-1] != "0"
@@ -2159,7 +2312,7 @@ async def delete_lead(
     Callers should run ``reconcile_campaign_counters`` after this.
     """
     result = await pool.execute(
-        "DELETE FROM leads WHERE id = $1 AND campaign_id = $2 AND client_id = $3",
+        "DELETE FROM leads WHERE id = $1 AND campaign_id = $2 AND client_id = $3 AND status != 'calling'",
         lead_id,
         campaign_id,
         client_id,
@@ -2187,7 +2340,7 @@ async def update_lead_status_manual(
         SET status = $1,
             next_attempt_at = $2,
             scheduled_callback_at = $3
-        WHERE id = $4 AND client_id = $5
+        WHERE id = $4 AND client_id = $5 AND status != 'calling'
         """,
         new_status,
         next_attempt_at,

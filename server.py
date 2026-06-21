@@ -20,7 +20,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from background_tasks import bind_background_tasks, drain_background_tasks
+from background_tasks import bind_background_tasks, drain_background_tasks, spawn_background_task
 from call_log_db import init_db
 from db import postgres as pg_db
 from db import redis_client as redis_db
@@ -462,6 +462,18 @@ async def ws_endpoint(
         import traceback
         logger.error(f"Bot error: {e}\n{traceback.format_exc()}")
         await websocket.close()
+    finally:
+        if call_id and app.state.pool is not None:
+            try:
+                call_log = await pg_db.get_call_log_by_session(app.state.pool, call_id)
+                if call_log and call_log.get("in_progress"):
+                    logger.warning(f"Cleaning up stuck in_progress call {call_id} after WS closed")
+                    await pg_db.mark_call_log_not_in_progress(app.state.pool, call_id, set_credits_charged_zero=True)
+                    from post_call_processor import recover_abandoned_session
+
+                    await recover_abandoned_session(app.state.pool, call_id)
+            except Exception as e:
+                logger.error(f"Failed to cleanup stuck call log: {e}")
 
 
 @app.get("/health")

@@ -2,13 +2,55 @@
 
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 from loguru import logger
 
+from background_tasks import spawn_background_task
 from db import postgres as pg_db
+
+_DEBUG_LOG_PATH = "/home/satyam/aakashvani/.cursor/debug-d77155.log"
+
+
+def _agent_log(
+    location: str,
+    message: str,
+    data: dict,
+    *,
+    hypothesis_id: str,
+    run_id: str = "pre-fix",
+) -> None:
+    # #region agent log
+    try:
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "sessionId": "d77155",
+                        "runId": run_id,
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+
+
+def _is_intentional_api_hangup(hangup_source: str) -> bool:
+    """True when our stack hung up (goodbye marker / end_call), not callee drop."""
+    s = hangup_source.strip().lower().replace("_", " ")
+    return s in ("api", "api request")
 
 
 async def _parse_plivo_payload(request: Request) -> dict[str, Any]:
@@ -77,7 +119,7 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
         call_status = str(payload.get("CallStatus") or "").strip().lower()
         
         unanswered_statuses = ("busy", "no-answer", "cancel", "reject", "failed")
-        is_unanswered = hangup_source != "callee" or call_status in unanswered_statuses
+        is_unanswered = call_status in unanswered_statuses
         
         if is_unanswered:
             settled = await pg_db.settle_unanswered_call(pool, call_log)
@@ -89,6 +131,41 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
                 logger.info(
                     "plivo-hangup callback_scheduled session_call_id={}",
                     call_log.get("session_call_id"),
+                )
+            sid = str(call_log.get("session_call_id") or session_call_id or "")
+            normalized_source = pg_db._normalize_hangup_source(payload)
+            api_hangup = _is_intentional_api_hangup(normalized_source)
+            # #region agent log
+            _agent_log(
+                "plivo_hangup.py:recover_gate",
+                "plivo hangup recover decision",
+                {
+                    "session_call_id": sid,
+                    "in_progress": bool(call_log.get("in_progress")),
+                    "hangup_source": normalized_source,
+                    "api_hangup": api_hangup,
+                },
+                hypothesis_id="A",
+            )
+            # #endregion
+            if sid and call_log.get("in_progress") and not api_hangup:
+
+                async def _hangup_recover() -> None:
+                    try:
+                        await pg_db.mark_call_log_not_in_progress(
+                            pool, sid, set_credits_charged_zero=True
+                        )
+                        from post_call_processor import recover_abandoned_session
+
+                        await recover_abandoned_session(pool, sid)
+                    except Exception as exc:
+                        logger.error("plivo-hangup recovery failed session={}: {}", sid, exc)
+
+                spawn_background_task(_hangup_recover(), "plivo_hangup_recover")
+            elif sid and call_log.get("in_progress") and api_hangup:
+                logger.debug(
+                    "plivo-hangup skip recover: API-initiated hangup session={}",
+                    sid,
                 )
 
     return PlainTextResponse("OK", status_code=200)

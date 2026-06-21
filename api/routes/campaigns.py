@@ -18,7 +18,7 @@ from db import postgres as pg_db
 from dialer.concurrent_dialer import start_dialer, stop_dialer
 from lead_upload.normaliser import normalise_phone
 from lead_upload.parser import parse_upload
-from lead_upload.validator import validate_dataframe
+from lead_upload.validator import validate_dataframe, extract_lead_fields
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 
@@ -37,6 +37,15 @@ def _load_script_module(route: str, script_id: str):
 
 def _col_map(df: pd.DataFrame) -> dict[str, str]:
     return {(c or "").strip().lower(): c for c in df.columns}
+
+
+async def _get_lead_schema(pool, bot, cid) -> dict:
+    if bot.get("script_config_id"):
+        cfg = await pg_db.get_script_config(pool, bot["script_config_id"], cid)
+        return cfg.get("lead_schema", {"fields": []}) if cfg else {"fields": []}
+    else:
+        script = _load_script_module(bot["route"], bot["script_id"])
+        return getattr(script, "LEAD_SCHEMA", {"fields": []})
 
 
 @router.get("")
@@ -84,7 +93,17 @@ async def campaign_stats(
     if camp is None:
         raise HTTPException(404, "Campaign not found")
         
-    bot = await pg_db.get_bot_config(pool, UUID(str(camp["bot_config_id"])), cid)
+    camp = dict(camp)
+    bot_record = await pg_db.get_bot_config(pool, UUID(str(camp["bot_config_id"])), cid)
+    bot = dict(bot_record) if bot_record else None
+    
+    lead_schema = {"fields": []}
+    if bot:
+        try:
+            lead_schema = await _get_lead_schema(pool, bot, cid)
+        except HTTPException:
+            pass
+        bot["lead_schema"] = lead_schema
     camp["bot_config"] = bot
     
     return {"stats": camp}
@@ -164,22 +183,14 @@ async def upload_leads(
     if bot is None:
         raise HTTPException(404, "Bot config not found")
 
-    if bot.get("route") == "cms":
-        if bot.get("script_config_id"):
-            cfg = await pg_db.get_script_config(pool, bot["script_config_id"], cid)
-            lead_schema = cfg.get("lead_schema", {"fields": []}) if cfg else {"fields": []}
-        else:
-            lead_schema = {"fields": []}
-    else:
-        script = _load_script_module(bot["route"], bot["script_id"])
-        lead_schema = getattr(script, "LEAD_SCHEMA", {"fields": []})
+    lead_schema = await _get_lead_schema(pool, bot, cid)
 
     content = await file.read()
     import io
 
     try:
         df = parse_upload(io.BytesIO(content), file.filename or "upload.csv")
-    except (pd.errors.EmptyDataError, pd.errors.ParserError):
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
         raise HTTPException(400, "Uploaded file is empty, malformed, or missing columns")
     errors = validate_dataframe(df, lead_schema)
     if errors:
@@ -207,7 +218,7 @@ async def upload_leads(
             next_attempt_at = next_compliant_time()
 
         metadata: dict = {}
-        for field in lead_schema.get("fields") or []:
+        for field in extract_lead_fields(lead_schema):
             key = field.get("key")
             csv_col = field.get("csv_column") or key
             ncol = (csv_col or "").strip().lower()
@@ -246,6 +257,50 @@ async def upload_leads(
         "invalid_phones": invalid_phones,
         "duplicates_skipped": max(0, len(leads_to_insert) - inserted - invalid_phones),
     }
+
+
+from fastapi.responses import PlainTextResponse
+
+@router.get("/{campaign_id}/leads/template", response_class=PlainTextResponse)
+async def get_lead_template(
+    campaign_id: UUID,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    cid = client_id_uuid(client)
+    campaign = await pg_db.get_campaign(pool, campaign_id, cid)
+    if campaign is None:
+        raise HTTPException(404, "Campaign not found")
+
+    bot = await pg_db.get_bot_config(
+        pool, UUID(str(campaign["bot_config_id"])), cid
+    )
+    if bot is None:
+        raise HTTPException(404, "Bot config not found")
+
+    try:
+        lead_schema = await _get_lead_schema(pool, bot, cid)
+    except HTTPException:
+        lead_schema = {"fields": []}
+    
+    headers = ["phone", "name"]
+    for field in extract_lead_fields(lead_schema):
+        csv_col = field.get("csv_column") or field.get("key")
+        if csv_col and csv_col.lower() not in ("phone", "name", "lead_phone", "lead_name"):
+            headers.append(csv_col)
+            
+    import csv
+    import io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    
+    return PlainTextResponse(
+        content=output.getvalue(),
+        headers={
+            "Content-Disposition": f'attachment; filename="template_{bot["script_id"]}.csv"'
+        }
+    )
 
 
 @router.patch("/{campaign_id}/start")
@@ -337,4 +392,30 @@ async def stop_campaign(
         "status": new_status,
         "campaign_id": str(campaign_id),
         "released_calling_leads": released,
+    }
+
+
+@router.post("/{campaign_id}/release-stuck-calling")
+async def release_stuck_calling(
+    campaign_id: UUID,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    cid = client_id_uuid(client)
+    camp = await pg_db.get_campaign(pool, campaign_id, cid)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    if camp["status"] not in ("running", "pausing", "paused"):
+        raise HTTPException(
+            409,
+            f"Cannot release stuck leads for a {camp['status']} campaign",
+        )
+    released = await pg_db.release_stuck_calling_leads(
+        pool, campaign_id, cid, ignore_wrap_grace=True
+    )
+    counters = await pg_db.reconcile_campaign_counters(pool, campaign_id, cid)
+    return {
+        "campaign_id": str(campaign_id),
+        "released": released,
+        "counters": counters,
     }

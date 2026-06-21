@@ -14,7 +14,10 @@ def parse_upload(file: BinaryIO, filename: str) -> pd.DataFrame:
         return pd.read_excel(file, dtype=str, engine="openpyxl")
     raw = file.read()
     if isinstance(raw, bytes):
-        text = raw.decode("utf-8-sig")
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError("File is not a valid UTF-8 CSV") from exc
     else:
         text = raw
     return pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)

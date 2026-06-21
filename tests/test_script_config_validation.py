@@ -73,7 +73,7 @@ def test_validate_outcome_mapping_skipped_for_summary():
 def test_default_template_sts():
     tpl = default_template("sts")
     assert tpl["route"] == "sts"
-    assert tpl["extraction_schema"]["mode"] == "fields"
+    assert tpl["extraction_schema"]["mode"] == "both"
     assert "intent_status" in str(tpl["extraction_schema"])
 
 
@@ -120,7 +120,7 @@ def test_validate_script_config_parses_json_string_extraction_schema():
     data["extraction_schema"] = json.dumps(schema)
     validate_script_config_payload(data, partial=False)
     assert isinstance(data["extraction_schema"], dict)
-    assert data["extraction_schema"]["mode"] == "fields"
+    assert data["extraction_schema"]["mode"] == "both"
 
 
 def test_normalize_script_config_payload_route_alias():

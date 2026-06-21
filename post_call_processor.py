@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -14,6 +15,39 @@ from loguru import logger
 from db import postgres as pg_db
 from n8n_webhook import fire_event_webhook, outcome_to_event
 from script_runtime import outcome_buckets
+
+_DEBUG_LOG_PATH = "/home/satyam/aakashvani/.cursor/debug-d77155.log"
+
+
+def _agent_log(
+    location: str,
+    message: str,
+    data: dict,
+    *,
+    hypothesis_id: str,
+    run_id: str = "pre-fix",
+) -> None:
+    # #region agent log
+    try:
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "sessionId": "d77155",
+                        "runId": run_id,
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "timestamp": int(time.time() * 1000),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
 
 
@@ -45,6 +79,11 @@ def _parse_callback_time(raw: Any) -> datetime | None:
     return None
 
 
+def _matches_bucket(val: str, bucket: set[str]) -> bool:
+    v = val.casefold()
+    return any(v == x.casefold() for x in bucket)
+
+
 def _lead_transition(
     outcome: str,
     attempts: int,
@@ -58,18 +97,18 @@ def _lead_transition(
     now = datetime.now(timezone.utc)
     terminal_set, retry_set, callback_set = outcome_buckets(post_call_snapshot)
 
-    if outcome == "dnc":
+    if outcome.casefold() == "dnc":
         return "dnc", None, None, False
 
-    if outcome in terminal_set:
+    if _matches_bucket(outcome, terminal_set):
         return "completed", None, None, True
 
-    if outcome in callback_set:
+    if _matches_bucket(outcome, callback_set):
         cb = _parse_callback_time(extraction.get("callback_time"))
         next_at = cb or (now + timedelta(hours=4))
         return "callback_scheduled", next_at, next_at, True
 
-    if outcome in retry_set:
+    if _matches_bucket(outcome, retry_set):
         if attempts < max_attempts:
             return (
                 "pending",
@@ -104,7 +143,7 @@ def resolve_post_call_transition(
 ) -> tuple[str, datetime | None, datetime | None, bool]:
     """Apply post-call state machine using locked lead status as source of truth."""
     terminal_set, _, _ = outcome_buckets(post_call_snapshot)
-    terminal_outcome = outcome in terminal_set or outcome == "dnc"
+    terminal_outcome = _matches_bucket(outcome, terminal_set) or outcome.casefold() == "dnc"
 
     new_status, next_at, sched_cb, fire_webhook = _lead_transition(
         outcome,
@@ -146,6 +185,13 @@ async def _finalize_call_log_and_settle_budget(
     client_id: UUID,
     call_log: dict | None,
 ) -> None:
+    prior_outcome = (call_log or {}).get("outcome")
+    prior_charged = (call_log or {}).get("credits_charged")
+    already_settled = (
+        prior_outcome
+        and str(prior_outcome).strip()
+        and prior_charged is not None
+    )
     await pg_db.finalize_call_log(
         conn,
         session_call_id,
@@ -159,12 +205,144 @@ async def _finalize_call_log_and_settle_budget(
         extraction_model=extraction_model,
         extraction_error=extraction_error,
     )
+    if already_settled:
+        return
     reserved = pg_db.budget_reserved_from_call_data(
         call_log.get("call_data") if call_log else None
     )
     await pg_db.settle_call_budget(
         conn, campaign_id, client_id, credits_charged, reserved
     )
+
+
+async def recover_abandoned_session(
+    pool: asyncpg.Pool,
+    session_call_id: str,
+) -> bool:
+    """Run post-call recovery after abnormal WS disconnect."""
+    from uuid import UUID
+
+    from call_transcript import _pg_context_from_call_log, _run_campaign_post_call
+
+    call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
+    if not call_log or not call_log.get("lead_id"):
+        return False
+
+    hangup_json = call_log.get("plivo_hangup_json") or {}
+    if isinstance(hangup_json, str):
+        try:
+            hangup_json = json.loads(hangup_json)
+        except json.JSONDecodeError:
+            hangup_json = {}
+    hangup_source = str((hangup_json or {}).get("hangup_source") or "").strip().lower()
+    if hangup_source.replace("_", " ") in ("api", "api request"):
+        # #region agent log
+        _agent_log(
+            "post_call_processor.py:recover_skip_api",
+            "recover skipped for API-initiated hangup",
+            {"session_call_id": session_call_id, "hangup_source": hangup_source},
+            hypothesis_id="A",
+        )
+        # #endregion
+        logger.debug(
+            "recover_abandoned_session skip: API hangup session={}",
+            session_call_id,
+        )
+        return False
+
+    client_id = UUID(str(call_log["client_id"]))
+    lead = await pg_db.get_lead(pool, UUID(str(call_log["lead_id"])), client_id)
+    if not lead or lead.get("status") not in ("calling", "callback_scheduled"):
+        return False
+
+    resolved_ctx = _pg_context_from_call_log(call_log)
+    if not resolved_ctx:
+        return False
+
+    started = call_log.get("started_at")
+    ended = call_log.get("ended_at")
+    if isinstance(started, str):
+        started = datetime.fromisoformat(started.replace("Z", "+00:00"))
+    if isinstance(ended, str):
+        ended = datetime.fromisoformat(ended.replace("Z", "+00:00"))
+    if started:
+        end_ts = ended or datetime.now(timezone.utc)
+        duration_seconds = max(0, int((end_ts - started).total_seconds()))
+    else:
+        duration_seconds = 0
+
+    transcript = call_log.get("transcript") or []
+    if isinstance(transcript, str):
+        try:
+            transcript = json.loads(transcript)
+        except json.JSONDecodeError:
+            transcript = []
+    if not isinstance(transcript, list):
+        transcript = []
+
+    extraction = {"intent_status": "Unknown"}
+    extraction_error = "ws_disconnect_recovery"
+
+    if transcript:
+        try:
+            from post_call_extract import extract_post_call, normalize_post_call_extraction
+            from script_runtime import parse_post_call_snapshot
+
+            schema = None
+            norm_rules = None
+            try:
+                snapshot = parse_post_call_snapshot(call_log.get("call_data") if call_log else None)
+                if snapshot:
+                    schema = snapshot.get("extraction_schema")
+                    norm_rules = snapshot.get("normalization_rules")
+            except Exception:
+                pass
+
+            parsed, err, _ = await extract_post_call(transcript, extraction_schema=schema)
+            if parsed and not err:
+                extraction = normalize_post_call_extraction(
+                    parsed, normalization_rules=norm_rules, transcript=transcript
+                )
+                extraction_error = None
+            else:
+                extraction_error = err or "ws_recovery_extraction_failed"
+        except Exception as exc:
+            extraction_error = f"ws_recovery_error: {exc}"
+
+    # #region agent log
+    _agent_log(
+        "post_call_processor.py:recover_extraction",
+        "recover extraction result",
+        {
+            "session_call_id": session_call_id,
+            "intent_status": (extraction or {}).get("intent_status"),
+            "callback_time": (extraction or {}).get("callback_time"),
+            "transcript_turns": len(transcript),
+            "extraction_error": extraction_error,
+        },
+        hypothesis_id="B",
+    )
+    # #endregion
+
+    try:
+        await _run_campaign_post_call(
+            resolved_ctx=resolved_ctx,
+            session_call_id=session_call_id,
+            duration_seconds=duration_seconds,
+            transcript=transcript,
+            extraction=extraction,
+            usage_dict={},
+            extraction_error=extraction_error,
+        )
+        logger.info("Recovered abandoned session {}", session_call_id)
+        return True
+    except Exception as exc:
+        logger.exception(
+            "recover_abandoned_session failed session={}: {}",
+            session_call_id,
+            exc,
+        )
+        return False
 
 
 async def process_post_call(
@@ -201,7 +379,21 @@ async def process_post_call(
     credits_charged = billed_minutes * credits_per_minute
 
     outcome = (extraction_json or {}).get("intent_status", "Unknown")
-    attempts = int(lead.get("attempts") or 0) + 1
+    # #region agent log
+    _agent_log(
+        "post_call_processor.py:process_post_call",
+        "post_call starting",
+        {
+            "session_call_id": session_call_id,
+            "lead_id": str(lead_id),
+            "lead_status_before": lead.get("status"),
+            "outcome": outcome,
+            "callback_time": (extraction_json or {}).get("callback_time"),
+        },
+        hypothesis_id="C",
+    )
+    # #endregion
+    attempts = int(lead.get("attempts") or 0)
     max_attempts = int(lead.get("max_attempts") or campaign.get("max_attempts") or 3)
     retry_delay = int(campaign.get("retry_delay_minutes") or 120)
 
@@ -233,6 +425,10 @@ async def process_post_call(
                 conn, lead_id, client_id
             )
             if active is None:
+                active = await pg_db.fetch_premature_recover_lead_for_post_call(
+                    conn, lead_id, client_id, session_call_id
+                )
+            if active is None:
                 await _finalize_call_log_and_settle_budget(
                     conn,
                     session_call_id=session_call_id,
@@ -254,6 +450,18 @@ async def process_post_call(
                     lead_id,
                     session_call_id,
                 )
+                # #region agent log
+                _agent_log(
+                    "post_call_processor.py:process_post_call_skip",
+                    "post_call skipped inactive lead",
+                    {
+                        "session_call_id": session_call_id,
+                        "lead_id": str(lead_id),
+                        "outcome": outcome,
+                    },
+                    hypothesis_id="C",
+                )
+                # #endregion
             else:
                 from_status = active["status"]
                 new_status, next_at, sched_cb, fire_webhook = resolve_post_call_transition(
@@ -268,11 +476,26 @@ async def process_post_call(
                     callee_hangup=callee_hangup,
                     post_call_snapshot=post_call_snapshot,
                 )
+                # #region agent log
+                _agent_log(
+                    "post_call_processor.py:process_post_call_transition",
+                    "post_call transition resolved",
+                    {
+                        "session_call_id": session_call_id,
+                        "from_status": from_status,
+                        "new_status": new_status,
+                        "outcome": outcome,
+                        "next_attempt_at": next_at.isoformat() if next_at else None,
+                        "scheduled_callback_at": sched_cb.isoformat() if sched_cb else None,
+                    },
+                    hypothesis_id="C",
+                )
+                # #endregion
                 if (
                     new_status == "pending"
                     and next_at is not None
                     and duration_seconds < 90
-                    and outcome in retry_set
+                    and _matches_bucket(outcome, retry_set)
                 ):
                     cap_at = datetime.now(timezone.utc) + timedelta(minutes=1)
                     if next_at > cap_at:

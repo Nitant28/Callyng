@@ -60,8 +60,27 @@ export default function AdminCampaigns() {
     return botConfigs.filter(b => b.client_id === createData.client_id && b.active);
   }, [createData.client_id, botConfigs]);
 
+  const selectedClient = useMemo(() => {
+    return createData.client_id ? clientsMap[createData.client_id] : null;
+  }, [createData.client_id, clientsMap]);
+
+  const isFormValid = useMemo(() => {
+    if (!selectedClient) return false;
+    const requestedBudget = Number(createData.budget_credits) || 0;
+    if (requestedBudget <= 0) return false;
+    if (selectedClient.balance_credits <= 0) return false;
+    if (selectedClient.balance_credits < requestedBudget) return false;
+    if (!createData.bot_config_id || !createData.name) return false;
+    if (!createData.max_concurrent_calls || !createData.calls_per_minute || !createData.max_attempts) return false;
+    return true;
+  }, [selectedClient, createData]);
+
   const handleCreate = async (e) => {
     e.preventDefault();
+    if (!isFormValid) {
+      alert("Please ensure client balance is sufficient for the requested budget and all required fields are filled.");
+      return;
+    }
     try {
       await adminApi.post('/internal/campaigns', {
         client_id: createData.client_id,
@@ -279,8 +298,10 @@ export default function AdminCampaigns() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Budget (₹)</label>
-                  <input required className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" type="number" step="0.01" min="0" value={createData.budget_credits} onChange={e => setCreateData({...createData, budget_credits: e.target.value})} />
+                  <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">
+                    Budget (₹) {selectedClient && <span className={`ml-2 text-xs ${selectedClient.balance_credits < (Number(createData.budget_credits) || 0) ? 'text-error dark:text-molten-error font-bold' : 'text-primary dark:text-molten-primary'}`}>(Balance: ₹{selectedClient.balance_credits.toFixed(2)})</span>}
+                  </label>
+                  <input required className="w-full p-2 rounded-lg bg-surface dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary" type="number" step="0.01" min="0.01" value={createData.budget_credits} onChange={e => setCreateData({...createData, budget_credits: e.target.value})} />
                 </div>
                 <div>
                   <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Concurrent Calls</label>
@@ -305,7 +326,7 @@ export default function AdminCampaigns() {
               </div>
               <div className="pt-4 flex justify-end gap-2">
                 <button type="button" onClick={() => setIsCreateOpen(false)} className="px-4 py-2 rounded-lg text-on-surface-variant dark:text-molten-text border border-outline-variant dark:border-[#2A345E] hover:bg-surface-container dark:hover:bg-[#2A345E]/50 transition-colors">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-primary dark:bg-molten-primary text-on-primary rounded-lg hover:opacity-90 transition-opacity">Create</button>
+                <button type="submit" disabled={!isFormValid} className="px-4 py-2 bg-primary dark:bg-molten-primary text-on-primary rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed">Create</button>
               </div>
             </form>
           </div>

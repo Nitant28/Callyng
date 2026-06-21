@@ -23,16 +23,21 @@ def sign_payload(payload: dict, secret: str) -> str:
 
 
 def outcome_to_event(outcome: str, event_map: dict[str, str] | None = None) -> str | None:
-    if event_map and outcome in event_map:
-        return event_map[outcome]
+    oc = outcome.casefold()
+    if event_map:
+        for k, v in event_map.items():
+            if k.casefold() == oc:
+                return v
+
     mapping = {
-        "Interested": "lead_qualified",
-        "Not_Interested": "lead_not_interested",
-        "Callback_Requested": "lead_callback",
+        "interested": "lead_qualified",
+        "not_interested": "lead_not_interested",
+        "callback_requested": "lead_callback",
     }
-    if outcome in mapping:
-        return mapping[outcome]
-    if outcome in ("Busy", "Unknown", "Wrong_Requirement", "failed"):
+    if oc in mapping:
+        return mapping[oc]
+        
+    if oc in ("busy", "unknown", "wrong_requirement", "failed"):
         return "lead_failed"
     return None
 

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
-from api.guards import require_campaign_modifiable, require_lead_not_calling, require_lead_unstarted
+from api.guards import require_campaign_modifiable, require_lead_editable
 from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from lead_upload.normaliser import normalise_phone
@@ -125,7 +125,7 @@ async def edit_lead(
     require_campaign_modifiable(camp)
 
     lead = await _get_lead_or_404(pool, lead_id, cid, campaign_id)
-    require_lead_unstarted(lead)
+    require_lead_editable(lead)
 
     if body.lead_type is not None and body.lead_type not in ("cold", "warm", "hot"):
         raise HTTPException(422, "lead_type must be one of: cold, warm, hot")
@@ -217,7 +217,7 @@ async def delete_lead(
     require_campaign_modifiable(camp)
 
     lead = await _get_lead_or_404(pool, lead_id, cid, campaign_id)
-    require_lead_unstarted(lead)
+    require_lead_editable(lead)
 
     deleted = await pg_db.delete_lead(pool, lead_id, campaign_id, cid)
     if not deleted:
@@ -251,7 +251,7 @@ async def change_lead_status(
     require_campaign_modifiable(camp)
 
     lead = await _get_lead_or_404(pool, lead_id, cid, campaign_id)
-    require_lead_not_calling(lead)
+    require_lead_editable(lead)
 
     current = lead["status"]
     target = body.status

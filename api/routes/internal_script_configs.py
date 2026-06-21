@@ -289,6 +289,7 @@ async def test_script_config_extraction(
         normalized = normalize_post_call_extraction(
             parsed,
             normalization_rules=rules if rules else None,
+            transcript=body.transcript,
         )
 
     return {

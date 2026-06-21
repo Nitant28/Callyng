@@ -108,7 +108,7 @@ const Dashboard = () => {
     
     const interval = setInterval(() => {
       loadDashboardData();
-    }, 10000);
+    }, 5000);
     return () => clearInterval(interval);
   }, [campaigns, loadDashboardData]);
 

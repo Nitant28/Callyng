@@ -16,6 +16,47 @@ _DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
 _VALID_MODES = frozenset({"fields", "summary", "both"})
 
+_MIN_INTERRUPTED_ASSISTANT_CHARS = 15
+
+_GLOBAL_EXTRACTION_PREAMBLE = """Transcript reliability (critical):
+- role=assistant text is the bot's own generated speech and is MORE reliable than role=user text.
+- role=user text comes from phone speech-to-text and may mishear Hindi/Marathi (e.g. "2-3 location" heard as unrelated words).
+- When assistant explicitly confirms requirements (BHK, locations, site visit, callback) in a summary or closing turn, extract those fields from the assistant and do NOT mark Wrong_Requirement based only on a contradictory user phrase.
+- Use Wrong_Requirement only when the conversation clearly establishes the caller wants something outside scope (plot/shop/rent/wrong product) AND the assistant does not confirm valid property interest.
+- Prefer the last assistant confirmation/summary turn when resolving conflicts."""
+
+_BHK_RE = re.compile(r"(\d)\s*BHK", re.IGNORECASE)
+_ASSISTANT_CONFIRM_RE = re.compile(
+    r"नोट\s*कर|noted|आवश्यकता|requirement|sales executive",
+    re.IGNORECASE,
+)
+_LOCATION_MARKERS = (
+    "baner",
+    "बानेर",
+    "kondhwa",
+    "kondwa",
+    "कोंढवा",
+    "katraj",
+    "कात्रज",
+    "pune",
+    "पुणे",
+    "पune",
+)
+_GARBLED_USER_NOTE_RE = re.compile(
+    r"tv|टीवी|television|selling|बेच",
+    re.IGNORECASE,
+)
+_CALLBACK_CONFIRM_RE = re.compile(
+    r"ज़रूर कॉल|जरूर कॉल|तय समय पर कॉल|नक्की कॉल|कॉल करेंगे|कॉल करू",
+    re.IGNORECASE,
+)
+_CALLBACK_TIME_RE = re.compile(
+    r"(\d{1,2}[:.]\d{2}|\d{1,2}\s*(?:बजे|baje|pm|am)|"
+    r"\d+\s*(?:minute|min|मिनट)\s*(?:baad|बाद)|"
+    r"kal|कल|tomorrow|shaam|शाम)",
+    re.IGNORECASE,
+)
+
 
 def validate_extraction_schema(schema: dict[str, Any]) -> None:
     """Raise ValueError if schema is missing required structure."""
@@ -61,6 +102,203 @@ def _format_field_lines(fields: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def filter_short_interrupted_turns(
+    transcript: list[dict[str, Any]],
+    *,
+    min_chars: int = _MIN_INTERRUPTED_ASSISTANT_CHARS,
+) -> list[dict[str, Any]]:
+    """Drop very short interrupted assistant fragments (noise before merge)."""
+    out: list[dict[str, Any]] = []
+    for turn in transcript:
+        if turn.get("role") == "assistant" and turn.get("interrupted"):
+            content = (turn.get("content") or "").strip()
+            if len(content) < min_chars:
+                continue
+        out.append(dict(turn))
+    return out
+
+
+def merge_consecutive_turns(transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge adjacent turns with the same role into one turn."""
+    if not transcript:
+        return []
+    merged: list[dict[str, Any]] = []
+    for turn in transcript:
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if not role or not content:
+            continue
+        if merged and merged[-1].get("role") == role:
+            prev = merged[-1]
+            prev_content = (prev.get("content") or "").strip()
+            prev["content"] = f"{prev_content} {content}".strip()
+            if turn.get("interrupted"):
+                prev["interrupted"] = True
+            ts = turn.get("timestamp") or turn.get("ts")
+            if ts and not prev.get("timestamp") and not prev.get("ts"):
+                if "timestamp" in prev:
+                    prev["timestamp"] = ts
+                else:
+                    prev["ts"] = ts
+        else:
+            merged.append(dict(turn))
+    return merged
+
+
+def prepare_transcript_for_storage(transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter noise and merge same-role turns for stored transcripts."""
+    return merge_consecutive_turns(filter_short_interrupted_turns(transcript))
+
+
+def format_transcript_for_extraction(transcript: list[dict[str, Any]]) -> str:
+    """Format transcript with assistant-priority labeling for Groq extraction."""
+    prepared = merge_consecutive_turns(filter_short_interrupted_turns(transcript))
+    assistant_lines: list[str] = []
+    user_lines: list[str] = []
+    for idx, turn in enumerate(prepared, start=1):
+        role = turn.get("role")
+        content = (turn.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "assistant":
+            assistant_lines.append(f"[turn {idx}] {content}")
+        elif role == "user":
+            user_lines.append(f"[turn {idx}] {content}")
+    parts = [
+        "ASSISTANT (authoritative — bot's own words; prefer over user STT when they conflict):",
+    ]
+    if assistant_lines:
+        parts.extend(assistant_lines)
+    else:
+        parts.append("(none)")
+    parts.append("")
+    parts.append("USER (may contain speech-to-text errors on phone audio):")
+    if user_lines:
+        parts.extend(user_lines)
+    else:
+        parts.append("(none)")
+    return "\n".join(parts)
+
+
+def _extract_bhk_from_text(text: str) -> str | None:
+    match = _BHK_RE.search(text)
+    if not match:
+        return None
+    return f"{match.group(1)}BHK"
+
+
+def _extract_locations_from_text(text: str) -> list[str]:
+    lower = text.casefold()
+    found: list[str] = []
+    mapping = (
+        ("baner", "Baner"),
+        ("बानेर", "Baner"),
+        ("kondhwa", "Kondhwa"),
+        ("kondwa", "Kondhwa"),
+        ("कोंढवा", "Kondhwa"),
+        ("katraj", "Katraj"),
+        ("कात्रज", "Katraj"),
+    )
+    for needle, label in mapping:
+        if needle in lower and label not in found:
+            found.append(label)
+    return found
+
+
+def _assistant_confirms_property_interest(assistant_text: str) -> bool:
+    if not assistant_text.strip():
+        return False
+    has_bhk = bool(_BHK_RE.search(assistant_text))
+    has_confirm = bool(_ASSISTANT_CONFIRM_RE.search(assistant_text))
+    lower = assistant_text.casefold()
+    has_location = any(marker in lower for marker in _LOCATION_MARKERS)
+    return (has_bhk and has_confirm) or (has_bhk and has_location)
+
+
+def reconcile_extraction_with_assistant_turns(
+    parsed: dict[str, Any],
+    transcript: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Deterministic fallback when Groq overweights garbled user STT."""
+    if not transcript:
+        return parsed
+    out = dict(parsed)
+    merged = merge_consecutive_turns(transcript)
+    assistant_turns = [t for t in merged if t.get("role") == "assistant"]
+    if not assistant_turns:
+        return out
+
+    recent_text = " ".join(
+        (t.get("content") or "").strip() for t in assistant_turns[-2:]
+    )
+
+    callback_time = out.get("callback_time")
+    has_callback = callback_time is not None and str(callback_time).strip().lower() not in (
+        "",
+        "null",
+        "none",
+    )
+    if _CALLBACK_CONFIRM_RE.search(recent_text):
+        if out.get("intent_status") not in ("Callback_Requested", "Interested"):
+            out["intent_status"] = "Callback_Requested"
+            logger.info(
+                "reconcile_extraction_with_assistant_turns: assistant callback "
+                "confirmation -> Callback_Requested"
+            )
+        if not has_callback:
+            time_match = _CALLBACK_TIME_RE.search(recent_text)
+            if time_match:
+                out["callback_time"] = time_match.group(0).strip()
+                has_callback = True
+        return out
+
+    if not _assistant_confirms_property_interest(recent_text):
+        return out
+
+    bhk = _extract_bhk_from_text(recent_text)
+    if bhk:
+        current_bhk = out.get("bhk_preference")
+        if current_bhk is None or str(current_bhk).strip().lower() in (
+            "",
+            "null",
+            "none",
+        ):
+            out["bhk_preference"] = bhk
+
+    locations = _extract_locations_from_text(recent_text)
+    if locations:
+        current_loc = out.get("location_preference")
+        if current_loc is None or str(current_loc).strip().lower() in (
+            "",
+            "null",
+            "none",
+        ):
+            out["location_preference"] = ", ".join(locations)
+
+    intent = str(out.get("intent_status") or "").strip()
+    callback_time = out.get("callback_time")
+    has_callback = callback_time is not None and str(callback_time).strip().lower() not in (
+        "",
+        "null",
+        "none",
+    )
+    if intent == "Wrong_Requirement":
+        out["intent_status"] = (
+            "Callback_Requested" if has_callback else "Interested"
+        )
+        logger.info(
+            "reconcile_extraction_with_assistant_turns: Wrong_Requirement overridden "
+            "using assistant confirmation"
+        )
+
+    notes = out.get("caller_notes")
+    if isinstance(notes, str) and _GARBLED_USER_NOTE_RE.search(notes):
+        if bhk or locations:
+            out["caller_notes"] = None
+
+    return out
+
+
 def build_extraction_system_prompt(schema: dict[str, Any]) -> str:
     """Compile Groq system prompt from script EXTRACTION_SCHEMA."""
     validate_extraction_schema(schema)
@@ -68,6 +306,8 @@ def build_extraction_system_prompt(schema: dict[str, Any]) -> str:
     parts = [
         "You analyze outbound voice-call transcripts.",
         "Reply with ONE JSON object only. No markdown fences, no other text.",
+        "",
+        _GLOBAL_EXTRACTION_PREAMBLE,
         "",
     ]
 
@@ -165,6 +405,7 @@ def normalize_post_call_extraction(
     parsed: dict[str, Any],
     *,
     normalization_rules: list[Any] | None = None,
+    transcript: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Deterministic patch after Groq parse — known inconsistency patterns."""
     if normalization_rules:
@@ -209,7 +450,7 @@ def normalize_post_call_extraction(
     if "intent_status" not in out or not str(out.get("intent_status", "")).strip():
         out["intent_status"] = "Unknown"
 
-    return out
+    return reconcile_extraction_with_assistant_turns(out, transcript)
 
 
 def _strip_json_fence(text: str) -> str:
@@ -291,7 +532,7 @@ async def extract_post_call(
     if not key:
         return None, None, mdl
 
-    user_payload = json.dumps(transcript, ensure_ascii=False)
+    user_payload = format_transcript_for_extraction(transcript)
     body = {
         "model": mdl,
         "temperature": 0.1,

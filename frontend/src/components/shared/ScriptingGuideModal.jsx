@@ -2,7 +2,20 @@ import React, { useState } from 'react';
 
 const GUIDE_MARKDOWN = `# Aakashvani STS Scripting Guide
 
-This guide contains everything you need to know to write a complete, production-ready AI voice agent script for the Aakashvani system using the \`bot_template.py\` architecture. It is divided into two parts: Technical Reference and Conversational Design.
+> **AI OUTPUT INSTRUCTIONS:** 
+> Do NOT output a single monolithic python script. The user is configuring this script via the Aakashvani CMS Script Form.
+> You MUST output your response in clearly separated sections formatted exactly for the form:
+> 1. **System Instruction**: Plain text prompt.
+> 2. **Bootstrap Messages**: Valid JSON Array.
+> 3. **Lead Schema**: Valid JSON Object.
+> 4. **Extraction Schema**: Valid JSON Object.
+> 5. **Outcome Event Map**: Valid flat JSON Object (string -> string). No nested wrapper key.
+> 6. **Outcome Terminal**: Valid JSON Array of strings.
+> 7. **Outcome Retry**: Valid JSON Array of strings.
+> 8. **Outcome Callback**: Valid JSON Array of strings.
+> 9. **Goodbye Hangup Markers**: Valid JSON Array of strings.
+
+This guide contains everything you need to know to design a complete, production-ready AI voice agent for the Aakashvani system. It is divided into two parts: Technical Reference and Conversational Design.
 
 ## PART 1: TECHNICAL REFERENCE
 
@@ -28,11 +41,22 @@ When a call connects, the system provides a \`LeadContext\` object containing th
 - \`ctx.lead_city\` (str): The caller's city.
 Use these variables to personalize the \`build_system_instruction\` and \`build_bootstrap_messages\`.
 
-### 4. Post-Call Processing & Extraction Schema
-After the call, a Groq model reads the transcript and extracts structured data based on your \`EXTRACTION_SCHEMA\` JSON dictionary.
+### 4. Post-Call Processing & Extraction Schema (Required for AI)
+The AI requires an \`EXTRACTION_SCHEMA\` defined separately from your lead CSV schema. This tells the Groq LLM exactly what data to extract from the conversation transcript after the call.
+
+**Note**: The extraction mode should be set to "both" by default for all scripts so that you receive both a generated summary paragraph and structured fields.
+
+**Required AI Fields (1 strictly required):**
+1. **\`intent_status\`** (Required: True)
+   - **Format**: \`enum\` string.
+   - **Constraints**: Must exactly match backend normalization states (e.g., \`Interested\`, \`Not_Interested\`, \`Busy\`, \`Callback_Requested\`, \`Wrong_Requirement\`, \`Unknown\`).
+   - **Why**: This is required separately for the AI to properly trigger database state updates (e.g., automatically moving a lead to "Failed" if "Not_Interested").
+
+You may add any number of additional optional fields (like \`callback_time\`, \`caller_notes\`) as needed.
 \`\`\`python
 EXTRACTION_SCHEMA = {
-    "mode": "fields",
+    "mode": "both",
+    "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any property preference mentioned.",
     "fields": [
         {
             "key": "intent_status",
@@ -51,7 +75,36 @@ EXTRACTION_SCHEMA = {
     "extraction_rules": "Infer only what the transcript supports."
 }
 \`\`\`
-The AI must strictly return a JSON object matching these keys. Normalization rules in the backend map these intents to system events (e.g., \`Not_Interested\` -> lead status \`failed\`).
+The AI must strictly return a JSON object matching these keys.
+
+### 5. Outcome Mapping & Bucketing (Required)
+You MUST provide mapping logic to tell the system how to handle the \`intent_status\` values extracted above.
+
+**1. OUTCOME_EVENT_MAP (dict)**: 
+Maps specific \`intent_status\` values to external webhook event names (e.g., sending qualified leads to a CRM). You only need to map intents that require an external trigger.
+
+Output exactly this shape (a flat object, NOT wrapped in an "OUTCOME_EVENT_MAP" key):
+\`\`\`json
+{
+  "Interested": "lead_qualified",
+  "Callback_Requested": "lead_callback_scheduled"
+}
+\`\`\`
+
+**2. Bucketing Arrays (list)**:
+You must categorize EVERY possible \`intent_status\` from your Extraction Schema into exactly one of three routing arrays:
+- \`OUTCOME_TERMINAL\`: The lead is finalized (e.g., "Interested", "Not_Interested").
+- \`OUTCOME_RETRY\`: The call should be retried later (e.g., "Busy", "Unknown").
+- \`OUTCOME_CALLBACK\`: A specific callback was scheduled.
+
+Output exactly this shape for each array (e.g., for OUTCOME_TERMINAL):
+\`\`\`json
+[
+  "Interested",
+  "Not_Interested",
+  "Wrong_Requirement"
+]
+\`\`\`
 
 ---
 
@@ -114,6 +167,7 @@ QUICK START CHECKLIST:
   [ ] 5. Tune GEMINI_VAD for your language (short words need HIGH start sensitivity)
   [ ] 6. Adjust GEMINI_TEMPERATURE (0.4–0.6 for scripted agents, higher for open-ended)
   [ ] 7. Fill in EXTRACTION_SCHEMA (post-call Groq fields — see pyramid_extraction.py)
+  [ ] 8. Fill in OUTCOME_EVENT_MAP and bucketing arrays (routing for intent_status)
 """
 
 from __future__ import annotations
@@ -183,7 +237,8 @@ SCRIPT_ID = "my_bot"
 # ── Post-call extraction schema (Groq reads transcript → JSON) ─────────────────
 # See sts_scripts/pyramid_extraction.py for a full real-estate example.
 EXTRACTION_SCHEMA = {
-    "mode": "fields",
+    "mode": "both",
+    "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any property preference mentioned.",
     "fields": [
         {
             "key": "intent_status",
@@ -211,6 +266,14 @@ EXTRACTION_SCHEMA = {
         "Reply with ONE JSON object matching the field keys."
     ),
 }
+
+OUTCOME_EVENT_MAP = {
+    "Interested": "lead_qualified",
+    "Callback_Requested": "lead_callback_scheduled"
+}
+OUTCOME_TERMINAL = ["Interested", "Not_Interested", "Wrong_Requirement"]
+OUTCOME_RETRY = ["Busy", "Unknown"]
+OUTCOME_CALLBACK = ["Callback_Requested"]
 
 
 # ==============================================================================
@@ -764,11 +827,20 @@ const ScriptingGuideModal = ({ isOpen, onClose }) => {
           {activeTab === 'technical' && (
             <div className="space-y-8 animate-in fade-in duration-300">
               <section>
+                <div className="bg-primary/10 dark:bg-molten-primary/10 border-l-4 border-primary dark:border-molten-primary p-4 rounded-r-lg mb-8">
+                  <h4 className="text-lg font-bold text-primary dark:text-molten-primary mb-2 flex items-center gap-2">
+                    <span className="material-symbols-outlined">smart_toy</span>
+                    AI Output Instructions
+                  </h4>
+                  <p className="text-sm text-on-surface dark:text-molten-text">
+                    When copying this guide to an AI, the AI is instructed to <strong>NOT</strong> generate a single Python file. Instead, it will generate the distinct JSON blocks and text components exactly as required by the Admin Script Config form.
+                  </p>
+                </div>
                 <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
                   1. Script Registration & Structure
                 </h4>
                 <p className="mb-4 text-on-surface-variant dark:text-molten-text-muted leading-relaxed">
-                  Aakashvani scripts are written as Python modules using the <strong>bot_template.py</strong> architecture.
+                  Aakashvani scripts can be configured via Python modules or directly in the CMS Script Configs form.
                 </p>
                 <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
                   <ul className="list-disc pl-5 space-y-2 text-sm">
@@ -823,17 +895,28 @@ const ScriptingGuideModal = ({ isOpen, onClose }) => {
 
               <section>
                 <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  4. Post-Call Extraction & Normalization
+                  4. Post-Call Extraction Schema (Required for AI)
                 </h4>
-                <p className="mb-4 text-sm text-on-surface-variant dark:text-molten-text-muted">
-                  Aakashvani processes the raw transcript using a Groq LLM against your defined JSON schema. The resulting structured JSON is saved in the database.
-                </p>
+                <div className="mb-4 text-sm text-on-surface-variant dark:text-molten-text-muted space-y-2">
+                  <p>
+                    Aakashvani processes the raw transcript using a Groq LLM against your defined JSON schema.
+                    <strong> Note: This is required separately for the AI</strong> and is distinct from the Lead CSV Schema.
+                  </p>
+                  <p className="text-on-surface dark:text-molten-text mt-2 font-medium">Exactly 1 field is strictly required by the core system:</p>
+                  <ul className="list-disc pl-5 space-y-1">
+                    <li>
+                      <strong><code>intent_status</code></strong> (Format: <code>enum</code> string) — Must be <code>required: True</code>. Constrained to specific system values.
+                    </li>
+                  </ul>
+                  <p>You can add unlimited additional optional fields (e.g. <code>callback_time</code>, <code>caller_notes</code>).</p>
+                </div>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <div>
                     <h5 className="font-bold text-lg mb-2">EXTRACTION_SCHEMA</h5>
                     <pre className="bg-black/50 p-3 rounded text-xs overflow-x-auto text-green-400 border border-outline-variant/30 h-[250px]">
 {`EXTRACTION_SCHEMA = {
-  "mode": "fields",
+  "mode": "both",
+  "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any property preference mentioned.",
   "fields": [
     {
       "key": "intent_status",
@@ -971,7 +1054,8 @@ SCRIPT_ID = "my_bot"
 # ── Post-call extraction schema (Groq reads transcript → JSON) ─────────────────
 # See sts_scripts/pyramid_extraction.py for a full real-estate example.
 EXTRACTION_SCHEMA = {
-    "mode": "fields",
+    "mode": "both",
+    "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any property preference mentioned.",
     "fields": [
         {
             "key": "intent_status",
@@ -999,6 +1083,14 @@ EXTRACTION_SCHEMA = {
         "Reply with ONE JSON object matching the field keys."
     ),
 }
+
+OUTCOME_EVENT_MAP = {
+    "Interested": "lead_qualified",
+    "Callback_Requested": "lead_callback_scheduled"
+}
+OUTCOME_TERMINAL = ["Interested", "Not_Interested", "Wrong_Requirement"]
+OUTCOME_RETRY = ["Busy", "Unknown"]
+OUTCOME_CALLBACK = ["Callback_Requested"]
 
 
 # ==============================================================================

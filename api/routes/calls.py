@@ -6,15 +6,27 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
-import os
 from pathlib import Path
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+import aiohttp
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from db import postgres as pg_db
-from recording import generate_presigned_url
+from recording import resolve_recording_url
 
 router = APIRouter(prefix="/api/calls", tags=["calls"])
+
+
+async def _resolve_call_log(pool, session_call_id: str, client_id: UUID) -> dict | None:
+    """Look up a call log by session_call_id, falling back to latest log for a lead_id."""
+    row = await pg_db.get_call_log(pool, session_call_id, client_id)
+    if row is None:
+        try:
+            lead_uuid = UUID(session_call_id)
+            row = await pg_db.get_latest_call_log_for_lead(pool, lead_uuid, client_id)
+        except ValueError:
+            pass
+    return row
 
 
 @router.get("")
@@ -37,16 +49,7 @@ async def get_call(
     pool=Depends(get_pool),
 ):
     cid = client_id_uuid(client)
-    row = await pg_db.get_call_log(pool, session_call_id, cid)
-    
-    # Fallback if session_call_id is actually a lead_id
-    if row is None:
-        try:
-            lead_uuid = UUID(session_call_id)
-            row = await pg_db.get_latest_call_log_for_lead(pool, lead_uuid, cid)
-        except ValueError:
-            pass
-
+    row = await _resolve_call_log(pool, session_call_id, cid)
     if row is None:
         raise HTTPException(404, "Call not found")
     return dict(row)
@@ -58,9 +61,9 @@ async def get_call_recording(
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
 ):
-    """Generate a presigned URL for the call recording."""
+    """Return a playable URL for the call recording."""
     cid = client_id_uuid(client)
-    row = await pg_db.get_call_log(pool, session_call_id, cid)
+    row = await _resolve_call_log(pool, session_call_id, cid)
     if not row:
         raise HTTPException(404, "Call not found")
 
@@ -68,15 +71,62 @@ async def get_call_recording(
     if not recording_key:
         raise HTTPException(404, "No recording available for this call")
 
-    storage = os.getenv("RECORDING_STORAGE", "r2").lower()
-    if storage == "local" or recording_key.startswith("local:"):
-        # Local dev: serve file directly
+    # Local dev: serve file directly
+    if recording_key.startswith("local:"):
         filename = recording_key.removeprefix("local:")
         file_path = Path("./data/recordings") / filename
         if not file_path.exists():
             raise HTTPException(404, "Recording file not found")
         return FileResponse(file_path, media_type="audio/mpeg")
 
-    # Production: presigned R2 URL
-    url = generate_presigned_url(recording_key, expires_in=3600)
+    # Plivo-hosted or legacy R2 key — resolve_recording_url handles both
+    url = resolve_recording_url(recording_key, expires_in=3600)
     return {"url": url, "expires_in": 3600}
+
+@router.get("/{session_call_id}/recording/play")
+async def play_call_recording(
+    session_call_id: str,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    """Securely proxy the call recording audio stream."""
+    cid = client_id_uuid(client)
+    row = await _resolve_call_log(pool, session_call_id, cid)
+    if not row:
+        raise HTTPException(404, "Call not found")
+
+    recording_key = row.get("recording_url")
+    if not recording_key:
+        raise HTTPException(404, "No recording available for this call")
+
+    if recording_key.startswith("local:"):
+        filename = recording_key.removeprefix("local:")
+        file_path = Path("./data/recordings") / filename
+        if not file_path.exists():
+            raise HTTPException(404, "Recording file not found")
+        return FileResponse(file_path, media_type="audio/mpeg")
+
+    if recording_key.startswith("plivo:"):
+        plivo_url = recording_key.removeprefix("plivo:")
+        from telephony import _plivo_auth
+        auth_id, auth_token = _plivo_auth()
+        auth = aiohttp.BasicAuth(auth_id, auth_token)
+
+        async def stream_audio():
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(plivo_url, auth=auth) as resp:
+                        if resp.status != 200:
+                            raise HTTPException(resp.status, "Failed to fetch recording from provider")
+                        async for chunk in resp.content.iter_chunked(8192):
+                            yield chunk
+            except aiohttp.ClientConnectorError as exc:
+                logger.warning("recording stream connect failed: {}", exc)
+                raise HTTPException(503, "Recording provider temporarily unreachable") from exc
+
+        return StreamingResponse(stream_audio(), media_type="audio/mpeg")
+
+    # Legacy R2 key
+    from fastapi.responses import RedirectResponse
+    url = resolve_recording_url(recording_key, expires_in=3600)
+    return RedirectResponse(url)

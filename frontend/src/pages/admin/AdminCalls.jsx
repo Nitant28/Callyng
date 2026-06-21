@@ -19,6 +19,9 @@ export default function AdminCalls() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [callData, setCallData] = useState(null);
   const [callLoading, setCallLoading] = useState(false);
+  const [recordingUrl, setRecordingUrl] = useState(null);
+  const [recordingLoading, setRecordingLoading] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
 
   const fetchCalls = useCallback(async () => {
     setLoading(true);
@@ -47,6 +50,9 @@ export default function AdminCalls() {
     setIsDrawerOpen(true);
     setCallLoading(true);
     setCallData(null);
+    setRecordingUrl(null);
+    setRecordingError(null);
+    
     try {
       const response = await adminApi.get(`/internal/calls/${call.session_call_id}`);
       if (response.data?.call) {
@@ -56,6 +62,17 @@ export default function AdminCalls() {
       console.warn("API error fetching call transcript details", err);
     } finally {
       setCallLoading(false);
+    }
+
+    // Fetch recording independently
+    setRecordingLoading(true);
+    try {
+      const recResp = await adminApi.get(`/internal/calls/${call.session_call_id}/recording`);
+      setRecordingUrl(recResp.data.url);
+    } catch (err) {
+      setRecordingError(err.response?.data?.detail || "No recording available");
+    } finally {
+      setRecordingLoading(false);
     }
   };
 
@@ -281,6 +298,23 @@ export default function AdminCalls() {
                       Live transcript polling requires client API key. Admin view is static.
                     </div>
                   )}
+
+                  {/* Recording */}
+                  <div>
+                    <h4 className="font-label-lg mb-4 text-on-background dark:text-molten-text">Call Recording</h4>
+                    {recordingLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-on-surface-variant dark:text-molten-text-muted">
+                        <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+                        Loading recording...
+                      </div>
+                    ) : recordingUrl ? (
+                      <audio controls src={recordingUrl} className="w-full h-10 outline-none" controlsList="nodownload" />
+                    ) : (
+                      <div className="text-sm text-on-surface-variant dark:text-molten-text-muted italic bg-surface-container-lowest dark:bg-[#111] p-4 rounded-xl border border-outline-variant dark:border-[#2A345E]">
+                        {recordingError || "No recording available."}
+                      </div>
+                    )}
+                  </div>
 
                   {/* Transcript */}
                   <div>
