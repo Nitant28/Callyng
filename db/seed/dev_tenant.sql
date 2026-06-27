@@ -103,7 +103,7 @@ INSERT INTO bot_configs (
     '00000000-0000-4000-8000-000000000001',
     'CLI Sandbox (STS)',
     'sts',
-    'cli_sandbox_sts',
+    'pyramid_hi',
     NULL,
     1.49,
     TRUE
@@ -112,7 +112,7 @@ INSERT INTO bot_configs (
     '00000000-0000-4000-8000-000000000001',
     'CLI Sandbox (Cascaded)',
     'cascaded',
-    'cli_sandbox_cascade',
+    'prowave',
     NULL,
     1.49,
     TRUE

@@ -144,8 +144,6 @@ async def list_script_configs(
     rows = await pg_db.list_script_configs(
         pool, client_id, active_only=active_only
     )
-    # Hide seeded CLI sandboxes from the UI
-    rows = [r for r in rows if not r.get("script_id", "").startswith("cli_sandbox")]
     return {"script_configs": rows}
 
 
@@ -289,7 +287,6 @@ async def test_script_config_extraction(
         normalized = normalize_post_call_extraction(
             parsed,
             normalization_rules=rules if rules else None,
-            transcript=body.transcript,
         )
 
     return {

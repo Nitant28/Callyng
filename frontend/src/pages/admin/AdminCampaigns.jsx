@@ -381,7 +381,6 @@ export default function AdminCampaigns() {
                 <div className="flex justify-between"><span>Callback:</span> <span className="dark:text-molten-text">{selectedCampaign.callback_leads}</span></div>
                 <div className="flex justify-between"><span>Completed:</span> <span className="dark:text-molten-text">{selectedCampaign.completed_leads}</span></div>
                 <div className="flex justify-between"><span>Failed:</span> <span className="dark:text-molten-text">{selectedCampaign.failed_leads}</span></div>
-                <div className="flex justify-between"><span>DNC:</span> <span className="dark:text-molten-text">{selectedCampaign.dnc_leads}</span></div>
               </div>
 
               <h5 className="font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2 mt-4 dark:text-molten-text">Settings</h5>

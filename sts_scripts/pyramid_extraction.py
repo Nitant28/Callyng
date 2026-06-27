@@ -27,6 +27,7 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
                 "Callback_Requested",
                 "Wrong_Requirement",
                 "Unknown",
+                "Early_Disconnect",
             ],
             "required": True,
             "description": (
@@ -35,7 +36,8 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
                 "Busy: wants to end / call later with NO specific time. "
                 "Not_Interested: explicit refusal of home/project — not a logistical 'no'. "
                 "Wrong_Requirement: plot/shop/office/rent/commercial/wrong BHK. "
-                "Unknown: ambiguous or dropped call."
+                "Unknown: ambiguous or dropped call. "
+                "Early_Disconnect: callee hung up within ~30s with no clear intent."
             ),
         },
         {
@@ -78,3 +80,65 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
     ],
     "extraction_rules": PYRAMID_EXTRACTION_RULES,
 }
+
+PYRAMID_NORMALIZATION_RULES: list[dict] = [
+    # 1. callback (don't override Interested)
+    {
+        "when": {"field": "callback_time", "truthy": True},
+        "and_intent_in": ["", "Unknown", "Busy", "Wrong_Requirement"],
+        "set": {"intent_status": "Callback_Requested"},
+    },
+    # 2. property interest from extracted fields
+    {
+        "when": {"field": "bhk_preference", "truthy": True},
+        "and_intent_in": ["Wrong_Requirement", "Unknown", ""],
+        "set": {"intent_status": "Interested", "caller_notes": None},
+    },
+    {
+        "when": {"field": "location_preference", "truthy": True},
+        "and_intent_in": ["Wrong_Requirement", "Unknown", ""],
+        "set": {"intent_status": "Interested", "caller_notes": None},
+    },
+    # 3. generic site visit
+    {
+        "when": {"field": "site_visit_agreed", "truthy": True},
+        "and_intent_in": ["", "Unknown"],
+        "set": {"intent_status": "Interested"},
+    },
+]
+
+PYRAMID_CASCADE_LIVE_TOOLS = [
+    {
+        "name": "push_lead_data",
+        "description": (
+            "Call this before ending every call to save lead qualification data. "
+            "Always call this regardless of outcome."
+        ),
+        "properties": {
+            "intent_status": {
+                "type": "string",
+                "description": (
+                    "Call outcome: Interested, Not_Interested, Busy, Callback_Requested, "
+                    "Wrong_Requirement, Unknown, Early_Disconnect"
+                ),
+            },
+            "bhk_preference": {
+                "type": "string",
+                "description": "BHK preference: 2BHK, 3BHK, NULL if not collected",
+            },
+            "location_preference": {
+                "type": "string",
+                "description": "Preferred location in Pune, or NULL if not collected",
+            },
+            "callback_time": {
+                "type": "string",
+                "description": "Requested callback time if busy, else NULL",
+            },
+            "language_used": {
+                "type": "string",
+                "description": "Language used in call: Hindi, Marathi, English",
+            },
+        },
+        "required": ["intent_status", "bhk_preference", "location_preference"],
+    }
+]

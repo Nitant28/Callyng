@@ -1,13 +1,28 @@
+import { useState, useEffect } from 'react';
 import { useTheme } from '../../../hooks/useTheme';
 
 import Sidebar from './Sidebar';
 import { Link } from 'react-router-dom';
+import clientApi from '../../../api/client';
 
 const Layout = ({ children }) => {
   const { theme, toggleTheme } = useTheme();
+  const [clientName, setClientName] = useState(localStorage.getItem('client_name') || 'Client');
+
+  useEffect(() => {
+    if (clientName === 'Client') {
+      clientApi.get('/api/credits').then(res => {
+        if (res.data && res.data.client_name) {
+          setClientName(res.data.client_name);
+          localStorage.setItem('client_name', res.data.client_name);
+        }
+      }).catch(() => {});
+    }
+  }, [clientName]);
 
   const handleSignOut = () => {
     localStorage.removeItem('client_api_key');
+    localStorage.removeItem('client_name');
     window.location.href = '/login';
   };
 
@@ -24,11 +39,11 @@ const Layout = ({ children }) => {
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-primary/10 dark:bg-molten-primary/10 flex items-center justify-center text-primary dark:text-molten-primary font-bold border border-primary/20">
-                P
+              <div className="w-8 h-8 rounded-full bg-primary/10 dark:bg-molten-primary/10 flex items-center justify-center text-primary dark:text-molten-primary font-bold border border-primary/20 uppercase">
+                {clientName.charAt(0)}
               </div>
               <span className="font-label-md text-label-md font-bold text-on-surface dark:text-molten-text">
-                Prowave
+                {clientName}
               </span>
             </div>
           </div>

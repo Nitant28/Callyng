@@ -106,6 +106,16 @@ Output exactly this shape for each array (e.g., for OUTCOME_TERMINAL):
 ]
 \`\`\`
 
+### 6. Post-Call Flow Architecture
+The post-call pipeline follows a strict sequence:
+1. **Transcript**: Call ends and audio is transcribed.
+2. **LLM Extraction**: \`extraction_schema\` is fed to the LLM to extract JSON.
+3. **Normalization Rules**: \`normalization_rules\` deterministically correct/enrich the extracted JSON.
+4. **Outcome Routing**: The \`intent_status\` is routed via your \`outcome_terminal\`, \`outcome_retry\`, or \`outcome_callback\` buckets.
+5. **State Update**: The lead is transitioned to \`completed\` or \`callback_scheduled\` (retry-bucket outcomes also use the callback card, not pending).
+
+For a deep dive into configuration and examples, see [guides/admin_script_guide.md](file:///home/satyam/aakashvani/guides/admin_script_guide.md).
+
 ---
 
 ## PART 2: CONVERSATIONAL DESIGN
@@ -859,7 +869,7 @@ const ScriptingGuideModal = ({ isOpen, onClose }) => {
                   <div>
                     <h5 className="font-bold text-lg mb-2">Gemini Variables</h5>
                     <ul className="space-y-3 text-sm bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
-                      <li><strong className="text-primary dark:text-molten-primary">SCRIPT_ID:</strong> A unique string identifier (e.g. <code>"pyramid_hindi"</code>).</li>
+                      <li><strong className="text-primary dark:text-molten-primary">SCRIPT_ID:</strong> A unique string identifier (e.g. <code>"pyramid_hi"</code>).</li>
                       <li><strong className="text-primary dark:text-molten-primary">GEMINI_MODEL:</strong> Use <code>"models/gemini-3.1-flash-live-preview"</code> for the lowest latency.</li>
                       <li><strong className="text-primary dark:text-molten-primary">GEMINI_VOICE:</strong> E.g., <code>"Aoede"</code>, <code>"Charon"</code>, <code>"Sulafat"</code>.</li>
                       <li><strong className="text-primary dark:text-molten-primary">GEMINI_LANGUAGE:</strong> E.g., <code>Language.HI_IN</code> or <code>Language.EN_IN</code>.</li>
@@ -946,7 +956,8 @@ const ScriptingGuideModal = ({ isOpen, onClose }) => {
                       <ul className="list-disc pl-5 space-y-1 text-sm">
                         <li><code>Not_Interested</code> → marks lead as <strong>failed</strong>.</li>
                         <li><code>Callback_Requested</code> → marks lead as <strong>callback_scheduled</strong>.</li>
-                        <li><code>Busy</code> → marks lead as <strong>pending</strong> (for retry).</li>
+                        <li><code>Busy</code> → marks lead as <strong>callback_scheduled</strong> (for retry).</li>
+                        <li><code>Early_Disconnect</code> → marks lead as <strong>callback_scheduled</strong> (short hangup).</li>
                         <li><code>Interested</code> → marks lead as <strong>completed</strong>.</li>
                       </ul>
                       <p className="text-sm mt-4 text-primary dark:text-molten-primary"><strong>Note:</strong> Always include <code>intent_status</code> in your schema if you want automated lead transitions.</p>

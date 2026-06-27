@@ -19,10 +19,9 @@ router = APIRouter(prefix="/api/campaigns", tags=["leads"])
 # ── Allowed manual status transitions ────────────────────────────────────────
 
 _MANUAL_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"failed", "dnc", "callback_scheduled", "completed"},
-    "callback_scheduled": {"pending", "failed", "dnc", "completed"},
+    "pending": {"failed", "callback_scheduled", "completed"},
+    "callback_scheduled": {"pending", "failed", "completed"},
     "failed": {"pending", "completed"},
-    "dnc": {"pending", "completed"},
     "completed": {"pending"},
 }
 
@@ -273,6 +272,16 @@ async def change_lead_status(
             f"Allowed targets: {', '.join(sorted(allowed_targets))}",
         )
 
+    attempts = int(lead.get("attempts") or 0)
+    max_attempts = int(lead.get("max_attempts") or 3)
+    
+    if target == "callback_scheduled" and attempts >= max_attempts:
+        raise HTTPException(
+            409,
+            "Cannot schedule a callback for a lead that has reached its maximum attempts. "
+            "Please move it to 'Pending' first to reset its attempt counter."
+        )
+
     # Compute next_attempt_at and scheduled_callback_at based on target
     next_attempt_at: datetime | None = None
     scheduled_callback_at: datetime | None = None
@@ -291,6 +300,7 @@ async def change_lead_status(
         target,
         next_attempt_at=next_attempt_at,
         scheduled_callback_at=scheduled_callback_at,
+        reset_to_fresh=(target == "pending"),
     )
     if not updated:
         raise HTTPException(404, "Lead not found")

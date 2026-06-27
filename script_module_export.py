@@ -53,18 +53,8 @@ def _end_label(value: EndSensitivity) -> str:
 
 
 def _default_normalization_rules() -> list[dict[str, Any]]:
-    return [
-        {
-            "when": {"field": "site_visit_agreed", "truthy": True},
-            "and_intent_in": ["", "Unknown"],
-            "set": {"intent_status": "Interested"},
-        },
-        {
-            "when": {"field": "callback_time", "truthy": True},
-            "and_intent_in": ["", "Unknown", "Busy", "Wrong_Requirement"],
-            "set": {"intent_status": "Callback_Requested"},
-        },
-    ]
+    from sts_scripts.pyramid_extraction import PYRAMID_NORMALIZATION_RULES
+    return PYRAMID_NORMALIZATION_RULES
 
 
 def _default_outcome_event_map() -> dict[str, str]:
@@ -75,40 +65,6 @@ def _default_outcome_event_map() -> dict[str, str]:
             out[value] = evt
     return out
 
-
-def _default_cascade_live_tools() -> list[dict[str, Any]]:
-    return [
-        {
-            "name": "push_lead_data",
-            "description": (
-                "Call this before ending every call to save lead qualification data. "
-                "Always call this regardless of outcome."
-            ),
-            "properties": {
-                "intent_status": {
-                    "type": "string",
-                    "description": "Whether lead is interested: Yes, No, Busy, Callback, Unclear",
-                },
-                "bhk_preference": {
-                    "type": "string",
-                    "description": "BHK preference: 2BHK, 3BHK, NULL if not collected",
-                },
-                "location_preference": {
-                    "type": "string",
-                    "description": "Preferred location in Pune, or NULL if not collected",
-                },
-                "callback_time": {
-                    "type": "string",
-                    "description": "Requested callback time if busy, else NULL",
-                },
-                "language_used": {
-                    "type": "string",
-                    "description": "Language used in call: Hindi, Marathi, English",
-                },
-            },
-            "required": ["intent_status", "bhk_preference", "location_preference"],
-        }
-    ]
 
 
 def _base_payload(route: str, module_stem: str) -> dict[str, Any]:
@@ -189,7 +145,7 @@ def export_cascade_module(module_stem: str) -> dict[str, Any]:
             "cascade_llm_model": "llama-3.3-70b-versatile",
             "cascade_tts_provider": "cartesia",
             "cascade_tts_voice": "sonic-3",
-            "cascade_live_tools": _default_cascade_live_tools(),
+            "cascade_live_tools": list(getattr(mod, "CASCADE_LIVE_TOOLS", [])),
             "extraction_schema": dict(mod.EXTRACTION_SCHEMA),
             "lead_schema": dict(getattr(mod, "LEAD_SCHEMA", PYRAMID_LEAD_SCHEMA)),
         }

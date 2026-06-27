@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import time
 from typing import Any
 
 from fastapi import Request
@@ -12,39 +10,6 @@ from loguru import logger
 
 from background_tasks import spawn_background_task
 from db import postgres as pg_db
-
-_DEBUG_LOG_PATH = "/home/satyam/aakashvani/.cursor/debug-d77155.log"
-
-
-def _agent_log(
-    location: str,
-    message: str,
-    data: dict,
-    *,
-    hypothesis_id: str,
-    run_id: str = "pre-fix",
-) -> None:
-    # #region agent log
-    try:
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "d77155",
-                        "runId": run_id,
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(time.time() * 1000),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
 
 
 def _is_intentional_api_hangup(hangup_source: str) -> bool:
@@ -122,7 +87,14 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
         is_unanswered = call_status in unanswered_statuses
         
         if is_unanswered:
-            settled = await pg_db.settle_unanswered_call(pool, call_log)
+            from call_outcomes import outcome_from_plivo_status
+            base_out = outcome_from_plivo_status(call_status)
+            delay = 120
+            if call_log.get("campaign_id") and call_log.get("client_id"):
+                camp = await pg_db.get_campaign(pool, call_log["campaign_id"], call_log["client_id"])
+                if camp and camp.get("retry_delay_minutes") is not None:
+                    delay = int(camp["retry_delay_minutes"])
+            settled = await pg_db.settle_unanswered_call(pool, call_log, retry_delay_minutes=delay, base_outcome=base_out)
             if settled:
                 logger.info("plivo-hangup settled unanswered session={}", call_log.get("session_call_id"))
         else:
@@ -135,19 +107,6 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
             sid = str(call_log.get("session_call_id") or session_call_id or "")
             normalized_source = pg_db._normalize_hangup_source(payload)
             api_hangup = _is_intentional_api_hangup(normalized_source)
-            # #region agent log
-            _agent_log(
-                "plivo_hangup.py:recover_gate",
-                "plivo hangup recover decision",
-                {
-                    "session_call_id": sid,
-                    "in_progress": bool(call_log.get("in_progress")),
-                    "hangup_source": normalized_source,
-                    "api_hangup": api_hangup,
-                },
-                hypothesis_id="A",
-            )
-            # #endregion
             if sid and call_log.get("in_progress") and not api_hangup:
 
                 async def _hangup_recover() -> None:

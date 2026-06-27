@@ -59,7 +59,7 @@ _SNAPSHOT_COLUMNS = (
 
 _DEFAULT_OUTCOME_TERMINAL = ["Interested", "Not_Interested"]
 _DEFAULT_OUTCOME_RETRY = ["Busy", "Unknown", "Wrong_Requirement"]
-_DEFAULT_OUTCOME_CALLBACK = ["Callback_Requested"]
+_DEFAULT_OUTCOME_CALLBACK = ["Callback_Requested", "Early_Disconnect"]
 
 _DEFAULT_EXTRACTION_SCHEMA: dict[str, Any] = {
     "mode": "fields",
@@ -318,7 +318,7 @@ def default_template(route: str) -> dict[str, Any]:
         GEMINI_VAD, GOODBYE_HANGUP_MARKERS,
         build_bootstrap_messages, build_system_instruction,
     )
-    from sts_scripts.pyramid_extraction import PYRAMID_EXTRACTION_SCHEMA
+    from sts_scripts.pyramid_extraction import PYRAMID_EXTRACTION_SCHEMA, PYRAMID_NORMALIZATION_RULES
 
     ctx = LeadContext(
         lead_name="{lead_name}",
@@ -349,7 +349,7 @@ def default_template(route: str) -> dict[str, Any]:
         "cascade_live_tools": [],
         "extraction_schema": deepcopy(PYRAMID_EXTRACTION_SCHEMA),
         "lead_schema": {"fields": []},
-        "normalization_rules": [],
+        "normalization_rules": PYRAMID_NORMALIZATION_RULES,
         "outcome_event_map": {
             "Interested": "lead_qualified",
             "Not_Interested": "lead_not_interested",

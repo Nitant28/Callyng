@@ -35,3 +35,4 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]

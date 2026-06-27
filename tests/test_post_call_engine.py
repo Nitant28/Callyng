@@ -11,7 +11,6 @@ from post_call_extract import (
     format_transcript_for_extraction,
     merge_consecutive_turns,
     normalize_post_call_extraction,
-    reconcile_extraction_with_assistant_turns,
 )
 from sts_scripts.pyramid_extraction import PYRAMID_EXTRACTION_SCHEMA
 from post_call_processor import _lead_transition
@@ -77,9 +76,9 @@ def test_lead_transition_respects_snapshot_retry_set():
         extraction={},
         post_call_snapshot=snapshot,
     )
-    assert status == "pending"
+    assert status == "callback_scheduled"
     assert next_at is not None
-    assert sched_cb is None
+    assert sched_cb is not None
     assert fire is False
 
 
@@ -148,53 +147,57 @@ def test_build_extraction_system_prompt_includes_global_preamble():
     prompt = build_extraction_system_prompt(PYRAMID_EXTRACTION_SCHEMA)
     assert "Transcript reliability (critical)" in prompt
     assert "role=assistant text is the bot's own generated speech" in prompt
-    assert "STT conflict" in prompt
+    # STT conflict is now only in PYRAMID_EXTRACTION_RULES, not the global preamble
 
 
-def test_reconcile_overrides_wrong_requirement_from_assistant_summary():
+def test_pyramid_rules_fix_wrong_requirement_when_fields_present():
+    from sts_scripts.pyramid_extraction import PYRAMID_NORMALIZATION_RULES
+
     parsed = {
         "intent_status": "Wrong_Requirement",
-        "bhk_preference": None,
-        "location_preference": None,
+        "bhk_preference": "3BHK",
+        "location_preference": "Baner",
         "caller_notes": "Asked about selling a TV instead of property purchase",
     }
-    out = reconcile_extraction_with_assistant_turns(
-        parsed, HINDI_STT_CONFLICT_TRANSCRIPT
+    out = normalize_post_call_extraction(
+        parsed, normalization_rules=PYRAMID_NORMALIZATION_RULES
     )
     assert out["intent_status"] == "Interested"
     assert out["bhk_preference"] == "3BHK"
-    assert "Baner" in out["location_preference"]
+    assert out["location_preference"] == "Baner"
     assert out["caller_notes"] is None
 
 
-def test_normalize_post_call_extraction_reconciles_with_transcript():
+def test_reconcile_callback_from_assistant_confirmation():
+    from sts_scripts.pyramid_extraction import PYRAMID_NORMALIZATION_RULES
+    parsed = {"intent_status": "Busy", "callback_time": "8:20"}
+    out = normalize_post_call_extraction(
+        parsed, normalization_rules=PYRAMID_NORMALIZATION_RULES
+    )
+    assert out["intent_status"] == "Callback_Requested"
+    assert out.get("callback_time") == "8:20"
+
+
+def test_normalize_without_rules_never_reads_transcript():
     parsed = {
         "intent_status": "Wrong_Requirement",
         "bhk_preference": None,
         "location_preference": None,
         "caller_notes": "Selling TV",
     }
-    out = normalize_post_call_extraction(
-        parsed,
-        normalization_rules=None,
-        transcript=HINDI_STT_CONFLICT_TRANSCRIPT,
-    )
-    assert out["intent_status"] == "Interested"
-    assert out["bhk_preference"] == "3BHK"
+    out = normalize_post_call_extraction(parsed, normalization_rules=[])
+    assert out["intent_status"] == "Wrong_Requirement"
+    assert out["bhk_preference"] is None
 
 
-def test_reconcile_callback_from_assistant_confirmation():
-    transcript = [
-        {
-            "role": "user",
-            "content": "जी, क्या आप मेरे को 8:20 को कॉल कर सकते हैं क्या?",
-        },
-        {
-            "role": "assistant",
-            "content": "हम 8:20 पर ज़रूर कॉल करेंगे — तय समय पर कॉल करेंगे, धन्यवाद!",
-        },
-    ]
-    parsed = {"intent_status": "Busy", "callback_time": None}
-    out = normalize_post_call_extraction(parsed, transcript=transcript)
-    assert out["intent_status"] == "Callback_Requested"
-    assert out.get("callback_time")
+def test_resolve_lead_retry_or_failed():
+    from db.postgres import resolve_lead_retry_or_failed
+
+    status, next_at, outcome1 = resolve_lead_retry_or_failed(2, 3, 120, base_outcome="Busy")
+    assert status == "callback_scheduled"
+    assert next_at is not None
+    assert outcome1 == "Busy"
+    status2, next_at2, outcome2 = resolve_lead_retry_or_failed(3, 3, 120)
+    assert status2 == "failed"
+    assert next_at2 is None
+    assert outcome2 == "Max_Attempts_Reached"

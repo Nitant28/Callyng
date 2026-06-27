@@ -140,7 +140,7 @@ When the client presses **Start**:
 2. When they answer, an **AI voice** greets them — often by name — and follows the script.
 3. The conversation is recorded as a **live transcript** (visible in the dashboard while the call is in progress).
 4. When the call ends, AI reads the transcript and extracts structured fields (e.g. “Interested: Yes”, “Budget: 80L”, “Callback: tomorrow 4pm”).
-5. The lead’s status updates (completed, callback scheduled, failed, do-not-call, etc.).
+5. The lead’s status updates (completed, callback scheduled, failed, , etc.).
 6. If configured, a **webhook** fires to n8n → client’s CRM gets updated automatically.
 
 ### Step 6 — Review results
@@ -240,7 +240,7 @@ Every call produces an **outcome** that updates the lead’s status:
 | **Callback requested** | Lead asked to be called back later | Scheduled for retry |
 | **No answer / busy** | Could not connect | Retried (up to max attempts) |
 | **Failed** | Max retries exhausted | Failed ✗ |
-| **Do not call (DNC)** | Lead opted out | Permanently blocked |
+| ** ()** | Lead opted out | Permanently blocked |
 
 The system automatically retries no-answers based on campaign settings (delay between attempts, maximum attempts).
 
@@ -253,7 +253,7 @@ Aakashvani is designed for **legal, responsible outbound calling** in India:
 | Rule | How we enforce it |
 |------|-------------------|
 | **Calling hours** | No calls before 9 AM or after 9 PM IST |
-| **Do-not-call** | Internal opt-out list; DNC outcomes block future dials |
+| **** | Internal opt-out list;  outcomes block future dials |
 | **Caller ID** | Always shows a registered Plivo number |
 | **Consent** | Clients must declare lead consent source; we store only necessary data |
 | **Data privacy (DPDP Act 2023)** | Per-client data isolation; deletion on request supported |
@@ -321,7 +321,7 @@ Admins use a separate **admin key** (never shared with clients).
 | **Draft** | Campaign state before going live — leads can still be edited |
 | **STS** | Speech-to-Speech — fast, single-model AI voice |
 | **Cascaded** | Multi-step AI voice (listen → think → speak) |
-| **DNC** | Do Not Call — lead opted out permanently |
+| **** |  — lead opted out permanently |
 | **IST** | Indian Standard Time — all calling windows use this timezone |
 | **E.164** | International phone format (e.g. +919876543210) |
 
@@ -341,7 +341,7 @@ The dialer pauses automatically. Top up credits and resume.
 **Q: Can the bot handle Hindi and Marathi?**
 Yes. Both voice routes support Indian languages. Route selection is optimized per use case by our team.
 
-**Q: Do you call DND (Do Not Disturb) numbers?**
+**Q: Do you call  (Do Not Disturb) numbers?**
 No. We maintain opt-out lists and enforce compliance checks before every dial.
 
 **Q: How fast can you onboard a new client?**
@@ -490,7 +490,7 @@ flowchart TB
 ## Repository structure
 
 ```
-aakashvani/
+aakashvani
 ├── server.py                 # FastAPI entry point — routes, lifespan, CORS
 ├── bot_sts.py                # Gemini Live Pipecat pipeline
 ├── bot_cascade.py            # Sarvam→Groq→Cartesia Pipecat pipeline
@@ -502,18 +502,18 @@ aakashvani/
 ├── telephony.py              # Plivo outbound call helper
 ├── plivo_hangup.py           # Hangup webhook handling
 ├── recording.py              # Plivo recording → R2 upload
-├── compliance.py             # 9am–9pm IST, internal DND
+├── compliance.py             # 9am–9pm IST, internal 
 ├── n8n_webhook.py            # HMAC-signed outbound webhooks
 ├── script_runtime.py         # 3-tier script resolution
 ├── script_prefetch.py        # Redis-backed config prefetch
 ├── background_tasks.py       # Async task queue (extraction, webhooks)
 ├── call_log_db.py            # SQLite fallback (Phase 0)
 │
-├── api/
+├── api
 │   ├── auth.py               # Bearer + admin key validation
 │   ├── guards.py             # Campaign modifiability checks
 │   ├── script_config_validation.py
-│   └── routes/
+│   └── routes
 │       ├── campaigns.py      # Client campaign CRUD + upload + start/stop
 │       ├── leads.py          # Draft lead management
 │       ├── calls.py          # Call list + live polling
@@ -521,14 +521,14 @@ aakashvani/
 │       ├── internal.py       # Admin: clients, bots, campaigns, webhooks
 │       └── internal_script_configs.py  # CMS CRUD, revisions, test dial
 │
-├── dialer/
+├── dialer
 │   ├── concurrent_dialer.py  # Campaign loop, FOR UPDATE SKIP LOCKED
 │   ├── cost_guard.py         # Pre-dial budget checks
 │   ├── plivo_balance.py      # USD balance cache
 │   ├── dialer_lock.py        # Redis distributed lock
 │   └── maintenance.py        # Stale call_log sweeper
 │
-├── db/
+├── db
 │   ├── postgres.py           # ~2200 lines asyncpg query layer
 │   ├── redis_client.py
 │   ├── warmup_state.py       # Gemini prewarm Redis signals
@@ -764,7 +764,6 @@ stateDiagram-v2
     pending --> calling: Dialer claims (FOR UPDATE SKIP LOCKED)
     calling --> completed: Terminal outcome
     calling --> failed: Max attempts exhausted
-    calling --> dnc: Do-not-call outcome
     calling --> callback_scheduled: Callback requested
     calling --> pending: Retry (no answer / busy)
 
@@ -773,7 +772,7 @@ stateDiagram-v2
 
     completed --> [*]
     failed --> [*]
-    dnc --> [*]
+     --> [*]
 ```
 
 **Post-call transition logic:** `post_call_processor.py::_lead_transition()` uses configurable outcome buckets from script config (terminal, retry, callback sets).
@@ -1093,10 +1092,9 @@ Full contracts: [guides/aakash_arch.md](aakash_arch.md)
 
 ```python
 # compliance.py — runs before every dial
-def is_call_allowed(phone: str) -> tuple[bool, str]:
+def is_call_allowed() -> tuple[bool, str]:
     # 1. Check 9:00 AM – 9:00 PM IST window
-    # 2. Check internal DND list (INTERNAL_DND_NUMBERS env)
-    # 3. Return (allowed, reason)
+    # 2. Return (allowed, reason)
 ```
 
 If blocked by time window, lead is deferred to `next_attempt_at = next_compliant_time()` without burning an attempt.
@@ -1204,7 +1202,7 @@ from pipecat.runner.types import WebSocketRunnerArguments
 │  Queue       PostgreSQL FOR UPDATE SKIP LOCKED              │
 │  Routes      sts (Gemini) | cascaded (Sarvam+Groq+Cartesia) │
 │  Billing     ceiling minutes × credits_per_minute           │
-│  Compliance  9am–9pm IST, internal DND                      │
+│  Compliance  9am–9pm IST, internal                       │
 │  CRM         n8n webhooks, HMAC signed                      │
 └─────────────────────────────────────────────────────────────┘
 ```

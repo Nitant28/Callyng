@@ -77,7 +77,6 @@ def _status_color(status: str) -> str:
         "pending": _DIM,
         "calling": _GREEN,
         "failed": _RED,
-        "dnc": _RED,
         "callback_scheduled": _YELLOW,
     }
     color = colors.get(status, "")
@@ -402,7 +401,6 @@ async def cmd_show_campaign(args):
         _kv("Callback", camp.get("callback_leads"), indent=4)
         _kv("Completed", camp.get("completed_leads"), indent=4)
         _kv("Failed", camp.get("failed_leads"), indent=4)
-        _kv("DNC", camp.get("dnc_leads"), indent=4)
 
         print(f"\n  {_BOLD}Dialer Config:{_RESET}")
         _kv("Max Concurrent", camp.get("max_concurrent_calls"), indent=4)
@@ -866,7 +864,7 @@ async def cmd_rerun_extraction(args):
 
         if parsed is not None and err is None:
             extraction = normalize_post_call_extraction(
-                parsed, normalization_rules=norm_rules, transcript=transcript
+                parsed, normalization_rules=norm_rules
             )
             ext_json = json.dumps(extraction, ensure_ascii=False)
             outcome = extraction.get("intent_status", "Unknown")
@@ -968,7 +966,7 @@ async def cmd_force_outcome(args):
     pool = await _get_pool()
     try:
         valid_outcomes = {"Interested", "Not_Interested", "Busy", "Callback_Requested",
-                          "Wrong_Requirement", "Unknown", "dnc"}
+                          "Wrong_Requirement", "Unknown"}
         if args.outcome not in valid_outcomes:
             print(f"{_RED}Invalid outcome: {args.outcome}{_RESET}", file=sys.stderr)
             print(f"  Valid: {', '.join(sorted(valid_outcomes))}", file=sys.stderr)
