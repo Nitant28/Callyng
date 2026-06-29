@@ -671,7 +671,7 @@ const CampaignDetail = () => {
           <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-gutter mb-stack-lg">
             {/* Pending */}
             <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.1s' }}>
-              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Pending</p>
+              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Pending / Retry</p>
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="text-headline-md font-bold tabular-nums">{(campaign.pending_leads || 0).toLocaleString()}</span>
                 <span className="text-label-sm text-secondary">{pendingPercent.toFixed(1)}%</span>
@@ -1035,15 +1035,21 @@ const CampaignDetail = () => {
                                   </span>
                                 );
                               } else if (lead.status === 'pending') {
-                                const pendingLabel = (lead.attempts || 0) === 0
-                                  ? 'Awaiting first call'
-                                  : `Pending · ${lead.attempts || 0}/${lead.max_attempts || 3}`;
-                                statusElement = (
-                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted text-xs font-semibold border border-outline-variant/30">
-                                    <span className="material-symbols-outlined text-[14px]">hourglass_top</span>
-                                    {pendingLabel}
-                                  </span>
-                                );
+                                if ((lead.attempts || 0) > 0) {
+                                  statusElement = (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-semibold border border-amber-500/20">
+                                      <span className="material-symbols-outlined text-[14px]">refresh</span>
+                                      Retry · {lead.attempts}/{lead.max_attempts || 3}
+                                    </span>
+                                  );
+                                } else {
+                                  statusElement = (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted text-xs font-semibold border border-outline-variant/30">
+                                      <span className="material-symbols-outlined text-[14px]">hourglass_top</span>
+                                      Awaiting first call
+                                    </span>
+                                  );
+                                }
                               } else {
                                 statusElement = (
                                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted text-xs font-semibold border border-outline-variant/30 capitalize">
@@ -1381,7 +1387,7 @@ const CampaignDetail = () => {
                   }
 
                   return [
-                    { value: 'pending', label: 'Pending' },
+                    { value: 'pending', label: 'Pending / Retry' },
                     { value: 'failed', label: 'Failed' },
                     { value: 'completed', label: 'Completed' },
                     { value: 'callback_scheduled', label: 'Callback Scheduled' }

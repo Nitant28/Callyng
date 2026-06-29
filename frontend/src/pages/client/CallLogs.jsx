@@ -55,8 +55,6 @@ const CallLogs = () => {
     setSelectedCall(call);
     setIsDrawerOpen(true);
     setCallLoading(true);
-    setIsPlaying(false);
-    setPlaySeconds(84);
     setRecordingUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return null;

@@ -1,89 +1,252 @@
 import React, { useState } from 'react';
 
-const GUIDE_MARKDOWN = `# Aakashvani STS Scripting Guide
+const GUIDE_MARKDOWN = `# Aakashvani CMS Script Template — AI Generation Guide
 
-> **AI OUTPUT INSTRUCTIONS:** 
-> Do NOT output a single monolithic python script. The user is configuring this script via the Aakashvani CMS Script Form.
-> You MUST output your response in clearly separated sections formatted exactly for the form:
-> 1. **System Instruction**: Plain text prompt.
-> 2. **Bootstrap Messages**: Valid JSON Array.
-> 3. **Lead Schema**: Valid JSON Object.
-> 4. **Extraction Schema**: Valid JSON Object.
-> 5. **Outcome Event Map**: Valid flat JSON Object (string -> string). No nested wrapper key.
-> 6. **Outcome Terminal**: Valid JSON Array of strings.
-> 7. **Outcome Retry**: Valid JSON Array of strings.
-> 8. **Outcome Callback**: Valid JSON Array of strings.
-> 9. **Goodbye Hangup Markers**: Valid JSON Array of strings.
+> **AI OUTPUT INSTRUCTIONS (CRITICAL — follow exactly):**
+> You are generating a COMPLETE bot configuration for the Aakashvani CMS Script Config form.
+> Do NOT output a Python script. Do NOT wrap everything in a single code block.
+> You MUST output your response as **7 clearly separated, labeled sections** — one per form field.
+> Each section must be copy-pasteable directly into the corresponding CMS form field.
 
-This guide contains everything you need to know to design a complete, production-ready AI voice agent for the Aakashvani system. It is divided into two parts: Technical Reference and Conversational Design.
+---
 
-## PART 1: TECHNICAL REFERENCE
+## OUTPUT FORMAT — You MUST produce ALL 7 sections below:
 
-### 1. File Structure & Registration
-Scripts are written as Python modules (e.g., \`sts_scripts/my_bot.py\`). They export several constants and functions that the Aakashvani server reads to configure the Gemini Live session and the post-call extraction engine.
-- **Naming**: Snake_case filename (e.g., \`my_bot.py\`). Registered via \`.env\` using \`STS_SCRIPT=my_bot\`.
+### ▸ SECTION 1: System Instruction Template
+**Form field:** \`system_instruction_template\` (plain text, supports {lead_name}, {lead_phone}, {lead_city} template variables)
 
-### 2. Required Configuration Fields
-You must define the following constants in your script:
-- \`SCRIPT_ID\` (str): Unique identifier for the script (e.g., \`"pyramid_bilingual"\`).
-- \`GEMINI_MODEL\` (str): \`"models/gemini-3.1-flash-live-preview"\`.
-- \`GEMINI_VOICE\` (str): Target voice (e.g., \`"Aoede"\`, \`"Charon"\`, \`"Sulafat"\`).
-- \`GEMINI_LANGUAGE\` (Language): Primary language (e.g., \`Language.HI_IN\`, \`Language.EN_IN\`).
-- \`GEMINI_TEMPERATURE\` (float): Usually \`0.4\` to \`0.6\` for scripted agents.
-- \`GEMINI_VAD\` (GeminiVADParams): Voice Activity Detection tuning.
-  - Indian languages require \`start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH\` and \`end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW\`.
-- \`GOODBYE_HANGUP_MARKERS\` (tuple of str): Substrings that trigger an auto-hangup if the bot forgets to use the \`end_call\` tool.
+Output the full system instruction as plain text. This is the master prompt that controls the AI agent's behavior on every call. Use the template variables {lead_name}, {lead_phone}, {lead_city} where appropriate — they are injected at call time.
 
-### 3. Lead Data Schema
-When a call connects, the system provides a \`LeadContext\` object containing the caller's data.
-- \`ctx.lead_name\` (str): The caller's name.
-- \`ctx.lead_phone\` (str): The caller's phone number.
-- \`ctx.lead_city\` (str): The caller's city.
-Use these variables to personalize the \`build_system_instruction\` and \`build_bootstrap_messages\`.
+**Required structure (follow this order):**
 
-### 4. Post-Call Processing & Extraction Schema (Required for AI)
-The AI requires an \`EXTRACTION_SCHEMA\` defined separately from your lead CSV schema. This tells the Groq LLM exactly what data to extract from the conversation transcript after the call.
+\`\`\`
+# AUDIO PROFILE: [Agent Name]
+## "[Campaign / Product Name]"
 
-**Note**: The extraction mode should be set to "both" by default for all scripts so that you receive both a generated summary paragraph and structured fields.
+## THE SCENE
+[Describe setting, emotional tone, mood. This shapes Gemini's vocal delivery.]
+[Example: "Diya is in a warm, professional office on a calm weekday morning. She is placing a friendly outbound call to {lead_name} about [topic]. Tone: helpful and low-pressure — a trusted advisor, not a pushy closer."]
 
-**Required AI Fields (1 strictly required):**
-1. **\`intent_status\`** (Required: True)
-   - **Format**: \`enum\` string.
-   - **Constraints**: Must exactly match backend normalization states (e.g., \`Interested\`, \`Not_Interested\`, \`Busy\`, \`Callback_Requested\`, \`Wrong_Requirement\`, \`Unknown\`).
-   - **Why**: This is required separately for the AI to properly trigger database state updates (e.g., automatically moving a lead to "Failed" if "Not_Interested").
+### DIRECTOR'S NOTES
+[Vocal direction as if briefing a voice actor.]
+[Example: Style: Warm, confident, unhurried. Light fillers like "हाँ", "अच्छा" are fine. Pace: Moderate.]
 
-You may add any number of additional optional fields (like \`callback_time\`, \`caller_notes\`) as needed.
-\`\`\`python
-EXTRACTION_SCHEMA = {
-    "mode": "both",
-    "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any property preference mentioned.",
-    "fields": [
-        {
-            "key": "intent_status",
-            "type": "enum",
-            "values": ["Interested", "Not_Interested", "Busy", "Callback_Requested", "Wrong_Requirement"],
-            "required": True,
-            "description": "The final intent of the caller."
-        },
-        {
-            "key": "callback_time",
-            "type": "string",
-            "required": False,
-            "description": "Specific time requested for callback, if any."
-        }
-    ],
-    "extraction_rules": "Infer only what the transcript supports."
+---
+
+## AGENT PERSONA
+[Who is the agent? Name, role, company, what they're calling about.]
+[Example: "Your name is Diya. You are a relationship manager at XYZ Corp, calling {lead_name} about a 2 BHK flat in Bhukum, Pune."]
+
+## LANGUAGE
+RESPOND IN [OUTPUT_LANGUAGE]. YOU MUST RESPOND UNMISTAKABLY IN [OUTPUT_LANGUAGE].
+[Add code-switching rules, e.g. "Loanwords like OK/WhatsApp are fine but full sentences must be in Hindi."]
+
+---
+
+## CONVERSATIONAL RULES
+
+**Rule 1 — Opening (one-time):**
+[The very first thing the agent says. Single short sentence ending with a question.]
+[Example: "नमस्ते, क्या {lead_name} जी से बात हो रही है?"]
+Wait for their response before proceeding to Rule 2.
+
+**Rule 2 — Introduction (one-time, only after Rule 1 confirmed):**
+[Introduce agent and reason for calling. One sentence. Then pause.]
+
+**Rule 3 — Qualifying question (one-time, only after Rule 2):**
+[A single open question to establish intent/interest.]
+Ask one question — then stop and wait.
+
+**Rule 4 — Conversational loop (repeat as needed):**
+Topics to cover: [list topics — e.g. location, pricing, features, timeline]
+One question at a time. Listen first, then respond.
+
+**Rule 5 — Closing pitch (when caller seems satisfied):**
+[Soft, low-pressure suggestion toward desired outcome — e.g. site visit, demo, callback.]
+If they say no, do not repeat the same question — move on respectfully.
+
+---
+
+## SPECIAL SITUATIONS
+
+**BUSY:**
+[What to say — ask for specific callback time]
+
+**NOT INTERESTED:**
+[Graceful goodbye — warm, no pressure, thank them]
+
+**CALLBACK REQUEST:**
+[Confirm a specific time]
+
+**BROCHURE / INFO REQUEST:**
+[Confirm WhatsApp/email and promise to send]
+
+**WRONG REQUIREMENT:**
+[Acknowledge, note their requirement, polite goodbye]
+
+**TRUST / "WHERE DID YOU GET MY NUMBER":**
+[Explain data source, restate identity, invite questions]
+
+**AUDIO ISSUE (ONE-TIME ONLY — maximum once per call):**
+First time only: briefly mention line is unclear. After that, never mention audio again.
+
+---
+
+## HANDLING UNCLEAR INPUT
+
+RULES (non-negotiable):
+- Never go silent — always say the next sentence.
+- Never repeat audio issue line after first time.
+- Never respond entirely in English — stay in [OUTPUT_LANGUAGE].
+- Never loop same question more than twice — assume and move forward.
+
+RESPONSE GUIDE:
+1. Short affirmatives ("हाँ", "जी", "yes", "ok"): treat as green light — proceed.
+2. Garbled / partial: gentle assumption, rephrase simply.
+3. Complete silence: soft nudge, then one question.
+
+---
+
+## KNOWLEDGE BASE / DOMAIN FACTS
+[List ONLY verified facts as bullet points]
+If you don't know a detail, say: "I'll check and call back in 5 minutes."
+Never fabricate facts.
+
+---
+
+## GUARDRAILS
+- One question at a time — unmistakably never ask two questions in one breath.
+- Listen first, respond second.
+- [Add domain-specific guardrails]
+- If caller says "no" to something, do not ask again.
+- Never go silent mid-call.
+- Audio issue line: maximum once per call.
+
+---
+
+## CALL ENDING (goodbye + end_call tool)
+When terminal conditions are met: first speak matching goodbye warmly,
+then IMMEDIATELY call end_call once. Do not call it mid-conversation.
+
+END the call ONLY when:
+(1) Last CLEARLY UNDERSTOOD user turn matches a terminal case
+(2) At least 4–5 meaningful caller turns have occurred
+(3) This turn is delivering the matching goodbye
+
+DO NOT end when:
+- Last turn is ambiguous, one word, or STT glitch
+- Caller asked a question or requested info
+- Any doubt — ask one clarifying question first
+
+## CALL METADATA (internal — do not read aloud)
+- Callee: {lead_phone}
+- City: {lead_city}
+\`\`\`
+
+---
+
+### ▸ SECTION 2: Bootstrap Messages
+**Form field:** \`bootstrap_messages_json\` (valid JSON Array)
+
+This fires the moment the call connects. It's a synthetic "user" message that instructs Gemini to say the opening line. Must be a JSON array of message objects.
+
+**Format:**
+\`\`\`json
+[
+  {
+    "role": "user",
+    "content": "The call has just connected. {lead_name} has answered. Execute Rule 1 from your conversational rules: say ONLY the Rule 1 opening sentence, addressing {lead_name} by name, in a warm voice — then stop and wait for their response. Do not say anything else."
+  }
+]
+\`\`\`
+
+**Rules:**
+- Always a JSON array with at least one object
+- Each object must have "role" (always "user") and "content" (string)
+- Use {lead_name}, {lead_phone}, {lead_city} as template variables
+- Keep it short and directive — tell Gemini exactly what ONE thing to say
+
+---
+
+### ▸ SECTION 3: Lead Schema
+**Form field:** \`lead_schema\` (valid JSON Object)
+
+Defines the CSV column structure for lead uploads. The system always provides lead_name, lead_phone, lead_city by default.
+
+**Format:**
+\`\`\`json
+{
+  "fields": [
+    { "key": "budget", "label": "Budget Range", "type": "string", "required": false },
+    { "key": "property_type", "label": "Property Type", "type": "string", "required": false }
+  ]
 }
 \`\`\`
-The AI must strictly return a JSON object matching these keys.
 
-### 5. Outcome Mapping & Bucketing (Required)
-You MUST provide mapping logic to tell the system how to handle the \`intent_status\` values extracted above.
+**Rules:**
+- Must be a JSON object with a "fields" array
+- Each field: key (string), label (string), type (string), required (boolean)
+- Use \`{ "fields": [] }\` if no extra lead columns are needed beyond the defaults
 
-**1. OUTCOME_EVENT_MAP (dict)**: 
-Maps specific \`intent_status\` values to external webhook event names (e.g., sending qualified leads to a CRM). You only need to map intents that require an external trigger.
+---
 
-Output exactly this shape (a flat object, NOT wrapped in an "OUTCOME_EVENT_MAP" key):
+### ▸ SECTION 4: Extraction Schema
+**Form field:** \`extraction_schema\` (valid JSON Object)
+**CRITICAL: mode MUST always be "both"**
+
+This tells the post-call Groq LLM what structured data to extract from the call transcript AND to generate a summary.
+
+**Format:**
+\`\`\`json
+{
+  "mode": "both",
+  "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any key preferences mentioned.",
+  "fields": [
+    {
+      "key": "intent_status",
+      "type": "enum",
+      "values": ["Interested", "Not_Interested", "Busy", "Callback_Requested", "Wrong_Requirement", "Unknown"],
+      "required": true,
+      "description": "The final intent of the caller."
+    },
+    {
+      "key": "caller_notes",
+      "type": "string",
+      "required": false,
+      "description": "Other useful facts mentioned by the caller, or the literal NULL."
+    }
+  ],
+  "extraction_rules": "Infer only what the transcript supports. Reply with ONE JSON object matching the field keys."
+}
+\`\`\`
+
+**Hard constraints:**
+- \`mode\` → MUST be \`"both"\` (generates summary paragraph + structured fields)
+- \`intent_status\` field → MUST be present, type MUST be \`"enum"\`, \`required\` MUST be \`true\`
+- Valid field types: \`"string"\`, \`"enum"\`, \`"boolean"\`, \`"datetime"\`
+- Enum fields MUST have a non-empty \`"values"\` array
+- Each field key must be unique
+- You can add unlimited additional optional fields (e.g. callback_time, budget_range, preferred_location, site_visit_agreed)
+- \`summary_prompt\` → required when mode is "both"; tells the LLM how to summarize
+- \`extraction_rules\` → optional guidance string for the LLM
+
+**IMPORTANT — Outcome Routing (done separately in CMS):**
+The admin will drag-and-drop each \`intent_status\` enum value into one of three outcome buckets in the CMS UI:
+- **Terminal** → Lead completed (no more calls)
+- **Retry** → Retry later automatically
+- **Callback** → Callback at scheduled time
+
+Every intent_status value must be mapped to exactly one bucket. The AI does NOT need to output these arrays — the admin configures them via the drag-and-drop UI after pasting the extraction schema.
+
+---
+
+### ▸ SECTION 5: Outcome Event Map
+**Form field:** \`outcome_event_map\` (valid flat JSON Object — string → string)
+
+Maps specific \`intent_status\` values to webhook event names fired to external automation (e.g. n8n, CRM).
+You only need to map intents that require an external trigger.
+
+**Format (flat object, NOT wrapped in any key):**
 \`\`\`json
 {
   "Interested": "lead_qualified",
@@ -91,676 +254,135 @@ Output exactly this shape (a flat object, NOT wrapped in an "OUTCOME_EVENT_MAP" 
 }
 \`\`\`
 
-**2. Bucketing Arrays (list)**:
-You must categorize EVERY possible \`intent_status\` from your Extraction Schema into exactly one of three routing arrays:
-- \`OUTCOME_TERMINAL\`: The lead is finalized (e.g., "Interested", "Not_Interested").
-- \`OUTCOME_RETRY\`: The call should be retried later (e.g., "Busy", "Unknown").
-- \`OUTCOME_CALLBACK\`: A specific callback was scheduled.
+**Rules:**
+- Keys MUST be valid values from your intent_status enum
+- Values are the webhook event name strings
+- Not every intent needs a mapping — only those that trigger external actions
+- Use \`{}\` if no webhook events are needed
 
-Output exactly this shape for each array (e.g., for OUTCOME_TERMINAL):
+---
+
+### ▸ SECTION 6: Normalization Rules
+**Form field:** \`normalization_rules\` (valid JSON Array)
+
+Deterministic correction rules applied AFTER AI extraction but BEFORE outcome bucketing. These encode reliable domain logic to fix known LLM inconsistencies — e.g. if the caller gave a callback time but the LLM set intent_status to "Unknown", the rule overrides it to "Callback_Requested".
+
+**Format:**
 \`\`\`json
 [
-  "Interested",
-  "Not_Interested",
-  "Wrong_Requirement"
+  {
+    "when": { "field": "callback_time", "truthy": true },
+    "and_intent_in": ["", "Unknown", "Busy"],
+    "set": { "intent_status": "Callback_Requested" }
+  },
+  {
+    "when": { "field": "site_visit_agreed", "truthy": true },
+    "and_intent_in": ["", "Unknown"],
+    "set": { "intent_status": "Interested" }
+  }
 ]
 \`\`\`
 
-### 6. Post-Call Flow Architecture
-The post-call pipeline follows a strict sequence:
-1. **Transcript**: Call ends and audio is transcribed.
-2. **LLM Extraction**: \`extraction_schema\` is fed to the LLM to extract JSON.
-3. **Normalization Rules**: \`normalization_rules\` deterministically correct/enrich the extracted JSON.
-4. **Outcome Routing**: The \`intent_status\` is routed via your \`outcome_terminal\`, \`outcome_retry\`, or \`outcome_callback\` buckets.
-5. **State Update**: The lead is transitioned to \`completed\` or \`callback_scheduled\` (retry-bucket outcomes also use the callback card, not pending).
+**Rule structure:**
+Each rule is a JSON object with:
+- \`when\` (required): Condition to match.
+  - \`field\` (string): The extraction field to check.
+  - \`truthy\` (boolean): If true, fires when the field has a non-empty, non-null value. If false, fires when field is empty/null.
+  - OR \`eq\` (any): Fires when the field exactly equals this value.
+- \`and_intent_in\` (optional, array of strings): Only fires if the current \`intent_status\` is one of these values. Use \`""\` for empty/missing intent. Omit to fire regardless of current intent.
+- \`set\` (required, object): Key-value pairs to overwrite in the extracted data. Use \`null\` to clear a field.
 
-For a deep dive into configuration and examples, see [guides/admin_script_guide.md](file:///home/satyam/aakashvani/guides/admin_script_guide.md).
+**Truthy evaluation:**
+- Boolean \`true\` → truthy
+- Non-empty strings (excluding "null", "none", "false", "0", "no") → truthy
+- Everything else → falsy
+
+**Rules:**
+- Rules are applied in order — later rules can override earlier ones
+- Use \`[]\` if no normalization is needed
+- Common patterns: callback_time present → set Callback_Requested; site_visit_agreed → set Interested; bhk_preference present → override Wrong_Requirement to Interested
 
 ---
 
-## PART 2: CONVERSATIONAL DESIGN
+### ▸ SECTION 7: Goodbye Hangup Markers
+**Form field:** \`goodbye_markers\` (valid JSON Array of strings)
 
-### 1. Core Principles
-- **One Question, One Breath:** Never ask two questions in the same turn.
-- **Listen First:** Validate the caller's input before pushing the next step.
-- **Natural Code-Switching:** Use "Hinglish" or "Marathlish" if the audience is Indian. Pure formal Hindi/Marathi sounds robotic.
-- **Emotional Intelligence:** Map out how to react to user tones (e.g., if stressed, soften voice and don't push).
+Substrings that trigger an auto-hangup if the bot forgets to call the \`end_call\` tool. This is a safety fallback.
 
-### 2. System Instruction Structure
-The \`build_system_instruction(ctx: LeadContext) -> str\` function returns the main prompt. It must include:
-- **The Scene & Persona**: Who the agent is, their mood, and the setting.
-- **Language Rules**: Explicit instructions on code-switching.
-- **Emotional Intelligence**: "If caller sounds rushed: soften immediately, offer to keep it to one quick question or call back."
-- **Call Flow (Rules)**: Numbered steps (Rule 1, Rule 2, etc.) for the conversational loop.
-- **Guardrails**: Hard boundaries (e.g., "Never quote price over the phone.").
-- **Call End Protocol**: Instructions on when to say a warm goodbye and immediately call the \`end_call\` tool.
-
-### 3. Bootstrap Messages
-The \`build_bootstrap_messages(ctx: LeadContext) -> list[dict]\` function jumpstarts the conversation. It returns a synthetic user message telling the bot to say its opening line:
-\`\`\`python
-def build_bootstrap_messages(ctx: LeadContext) -> list[dict]:
-    return [{
-        "role": "user",
-        "content": f"The call has just connected. {ctx.lead_name} has answered. Say ONLY 'Hello... {ctx.lead_name} ji bol rahe hain?' in a warm voice, then stop."
-    }]
+**Format:**
+\`\`\`json
+[
+  "आपका दिन शुभ हो",
+  "din shubh ho",
+  "मैं अभी भेज देती हूँ",
+  "abhi bhej deti hun",
+  "ज़रूरत नोट कर ली"
+]
 \`\`\`
 
-### 4. Example: Emotional Responses (from Pyramid Bilingual)
-- **Hesitation:** Do not push. "No rush at all -- just sharing info so you have the full picture."
-- **Budget Worry:** Never quote a price. "Pricing depends on the exact floorplan. Seeing it in person makes more sense."
-- **Annoyance:** Stay calm. "Understood completely. Sorry for the inconvenience. Have a great day!"
+**Rules:**
+- Use substrings, not full sentences (more robust to paraphrasing)
+- Add both Devanagari AND romanized versions for reliability
+- Do NOT add mid-conversation phrases or you'll get early hangups
+- Must cover goodbye phrases for: not interested, busy/callback, brochure sent, wrong requirement
 
 ---
 
-## PART 3: BOILERPLATE TEMPLATE
-Below is the master \`bot_template.py\`. Use this exact structure for all new agents.
+## FORM FIELDS NOT GENERATED BY AI (set manually in CMS)
 
-\`\`\`python
-"""
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                     AAKASHVANI — MASTER STS SCRIPT TEMPLATE                ║
-║                                                                              ║
-║  Copy this file to sts_scripts/<your_script_name>.py                        ║
-║  Set STS_SCRIPT=<your_script_name> in .env                                  ║
-║  Then run: just dev  or  just dev-sts                                        ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+These are configured directly in the CMS form, not output by AI:
 
-NAMING RULES (enforced by server.py):
-  - Filename must be snake_case, start with a letter: my_bot.py → STS_SCRIPT=my_bot
-  - No hyphens, no uppercase, no spaces
+| Field | Tab | Constraints |
+|-------|-----|-------------|
+| \`client_id\` | General | Select from dropdown |
+| \`script_id\` | General | Lowercase snake_case, starts with letter: \`^[a-z][a-z0-9_]*$\` |
+| \`route\` | General | \`"sts"\` or \`"cascaded"\` |
+| \`active\` | General | Boolean checkbox |
+| \`gemini_model\` | Models | Default: \`"models/gemini-3.1-flash-live-preview"\` |
+| \`gemini_voice\` | Models | One of: Aoede, Charon, Fenrir, Kore, Puck, Sulafat, Leda, Orus, Zephyr, Autonoe |
+| \`gemini_language\` | Models | BCP-47 code: hi-IN, mr-IN, en-IN, en-US, ta-IN, te-IN, kn-IN, bn-IN, gu-IN, pa-IN |
+| \`gemini_temperature\` | Models | 0.0–2.0. Recommended: 0.4–0.6 for scripts |
+| \`vad_start_sensitivity\` | Models | \`"HIGH"\` (recommended) or \`"LOW"\` |
+| \`vad_end_sensitivity\` | Models | \`"LOW"\` (recommended) or \`"HIGH"\` |
+| \`vad_silence_duration_ms\` | Models | Integer, default 800. Recommended: 400–650 |
+| \`vad_prefix_padding_ms\` | Models | Integer, default 300. Recommended: 200 |
+| \`outcome_terminal\` | Post-call | Drag-and-drop in CMS — intent values where lead is finalized |
+| \`outcome_retry\` | Post-call | Drag-and-drop in CMS — intent values that trigger auto-retry |
+| \`outcome_callback\` | Post-call | Drag-and-drop in CMS — intent values that schedule a callback |
 
-QUICK START CHECKLIST:
-  [ ] 1. Fill in AGENT IDENTITY (persona, language, voice)
-  [ ] 2. Fill in SYSTEM INSTRUCTION (scene, rules, facts, guardrails)
-  [ ] 3. Fill in GOODBYE_HANGUP_MARKERS (phrases that trigger auto-hangup)
-  [ ] 4. Fill in build_bootstrap_messages() (what fires on call connect)
-  [ ] 5. Tune GEMINI_VAD for your language (short words need HIGH start sensitivity)
-  [ ] 6. Adjust GEMINI_TEMPERATURE (0.4–0.6 for scripted agents, higher for open-ended)
-  [ ] 7. Fill in EXTRACTION_SCHEMA (post-call Groq fields — see pyramid_extraction.py)
-  [ ] 8. Fill in OUTCOME_EVENT_MAP and bucketing arrays (routing for intent_status)
-"""
-
-from __future__ import annotations
-
-# ── Standard imports (do not remove) ──────────────────────────────────────────
-from lead_context import LeadContext
-from pipecat.services.google.gemini_live.llm import GeminiVADParams
-from pipecat.transcriptions.language import Language
-from google.genai.types import EndSensitivity, StartSensitivity
-
-# ==============================================================================
-# PASTE SETTINGS REFERENCE HERE
-# Copy the contents of gemini_live_settings_reference.py here for quick access
-# while editing this file. It will be ignored at runtime (it's just comments).
-# ==============================================================================
-
-
-# ==============================================================================
-# SECTION 1 — AGENT IDENTITY
-# These values configure the Gemini Live session at connect time.
-# Changing them requires a server restart (they're read once per call).
-# ==============================================================================
-
-# ── Model ──────────────────────────────────────────────────────────────────────
-# "models/gemini-3.1-flash-live-preview"  → fastest, lowest latency (~0.5s)
-# "models/gemini-2.0-flash-live-001"      → stable alias if preview is unavailable
-GEMINI_MODEL = "models/gemini-3.1-flash-live-preview"
-
-# ── Voice ──────────────────────────────────────────────────────────────────────
-# Available voices (as of 2026): Aoede, Charon, Fenrir, Kore, Puck,
-#                                 Sulafat, Leda, Orus, Zephyr, Autonoe
-# Tip: Try multiple voices for your language — quality varies significantly.
-# Hindi recommendation: Sulafat (warm female), Aoede (neutral female)
-GEMINI_VOICE = "Aoede"
-
-# ── Language ───────────────────────────────────────────────────────────────────
-# Must match what the caller will speak AND your system instruction language.
-# Mismatch = poor transcription quality.
-#
-# Common values:
-#   Language.HI_IN   → Hindi (India)
-#   Language.MR_IN   → Marathi (India)
-#   Language.EN_IN   → English (India accent)
-#   Language.EN_US   → English (US)
-#   Language.EN_GB   → English (UK)
-#   Language.TA_IN   → Tamil
-#   Language.TE_IN   → Telugu
-#   Language.KN_IN   → Kannada
-#   Language.BN_IN   → Bengali
-#   Language.GU_IN   → Gujarati
-#   Language.PA_IN   → Punjabi
-GEMINI_LANGUAGE = Language.HI_IN
-
-# ── Temperature ────────────────────────────────────────────────────────────────
-# Controls response randomness.
-# 0.0 = fully deterministic (same input → same output, robotic)
-# 0.4–0.6 = recommended for sales/support scripts (warm but predictable)
-# 0.7–0.9 = more creative/varied (better for open-ended coaching, tutoring)
-# 1.0 = maximum creativity (may go off-script)
-GEMINI_TEMPERATURE = 0.5
-
-# ── Script ID (used in call logs) ──────────────────────────────────────────────
-# Set this to something descriptive. Appears in call_logs.db under the route column.
-SCRIPT_ID = "my_bot"
-
-
-# ── Post-call extraction schema (Groq reads transcript → JSON) ─────────────────
-# See sts_scripts/pyramid_extraction.py for a full real-estate example.
-EXTRACTION_SCHEMA = {
-    "mode": "both",
-    "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any property preference mentioned.",
-    "fields": [
-        {
-            "key": "intent_status",
-            "type": "enum",
-            "values": [
-                "Interested",
-                "Not_Interested",
-                "Busy",
-                "Callback_Requested",
-                "Wrong_Requirement",
-                "Unknown",
-            ],
-            "required": True,
-            "description": "Call outcome intent.",
-        },
-        {
-            "key": "caller_notes",
-            "type": "string",
-            "required": False,
-            "description": "Other useful facts, or the literal NULL.",
-        },
-    ],
-    "extraction_rules": (
-        "Infer only what the transcript supports. "
-        "Reply with ONE JSON object matching the field keys."
-    ),
-}
-
-OUTCOME_EVENT_MAP = {
-    "Interested": "lead_qualified",
-    "Callback_Requested": "lead_callback_scheduled"
-}
-OUTCOME_TERMINAL = ["Interested", "Not_Interested", "Wrong_Requirement"]
-OUTCOME_RETRY = ["Busy", "Unknown"]
-OUTCOME_CALLBACK = ["Callback_Requested"]
-
-
-# ==============================================================================
-# SECTION 2 — VOICE ACTIVITY DETECTION (VAD)
-# Controls when Gemini considers the user to be speaking.
-# This is SERVER-SIDE — runs on Google's infrastructure, not locally.
-#
-# CRITICAL for Indian languages: short affirmatives like हाँ, हो, हा, जी
-# are ~150–200ms bursts. Default settings swallow them entirely.
-# Use HIGH start sensitivity + LOW end sensitivity for these languages.
-# ==============================================================================
-
-GEMINI_VAD = GeminiVADParams(
-    # START_SENSITIVITY_HIGH  → fires on soft/short speech onset  ← recommended for Indian languages
-    # START_SENSITIVITY_LOW   → only fires on louder/longer onset
-    # START_SENSITIVITY_UNSPECIFIED → Google default
-    start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
-
-    # END_SENSITIVITY_LOW  → waits longer before closing turn (better for short words) ← recommended
-    # END_SENSITIVITY_HIGH → cuts turn quickly after speech stops
-    # END_SENSITIVITY_UNSPECIFIED → Google default
-    end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
-
-    # Milliseconds of audio BEFORE detected onset to include in the turn.
-    # Default: ~500ms. Lower for short words (200ms), higher for noisy environments (400ms).
-    prefix_padding_ms=200,
-
-    # Milliseconds of silence after speech before turn is considered complete.
-    # Default: ~600ms. Lower = snappier but may cut off slow speakers.
-    silence_duration_ms=400,
-
-    # Set disabled=True to turn off VAD entirely and drive turn-taking manually.
-    # disabled=None,
-)
-
-
-# ==============================================================================
-# SECTION 3 — GOODBYE HANGUP MARKERS
-# When the bot says any of these phrases, the system waits ~2s then hangs up.
-# This is a FALLBACK — the bot should call end_call() tool first.
-# Add the last line(s) of each goodbye scenario here.
-#
-# Rules:
-#   - Use substrings, not full sentences (more robust to minor paraphrasing)
-#   - Add both Devanagari and romanized versions for reliability
-#   - Do NOT add mid-conversation phrases or you'll get early hangups
-# ==============================================================================
-
-GOODBYE_HANGUP_MARKERS = (
-    # NOT INTERESTED goodbye
-    "आपका दिन शुभ हो",
-    "din shubh ho",
-
-    # BUSY / CALLBACK goodbye
-    "सटीक समय बता दीजिए",
-
-    # BROCHURE SENT goodbye
-    "मैं अभी भेज देती हूँ",
-    "abhi bhej deti hun",
-
-    # WRONG REQUIREMENT goodbye
-    "ज़रूरत नोट कर ली",
-    "जरूरत नोट कर ली",
-
-    # Add your own below:
-    # "your goodbye phrase here",
-)
-
-
-# ==============================================================================
-# SECTION 4 — BOOTSTRAP MESSAGE
-# This fires the moment the call connects. It's a synthetic "user" message
-# that instructs Gemini to say the opening line.
-#
-# Google best practice: "Include information about the user to have Live API
-# personalize that greeting."
-#
-# Keep it short and directive — tell Gemini exactly what one thing to say,
-# then stop. Do NOT ask it to do the whole call here.
-# ==============================================================================
-
-def build_bootstrap_messages(ctx: LeadContext) -> list[dict]:
-    """
-    Fires once on call connect. Tells Gemini to say only the opening line.
-    ctx is populated from the POST /start body:
-      ctx.lead_name  → "Rahul"
-      ctx.lead_phone → "+919123866924"
-      ctx.lead_city  → "Pune"
-    """
-    lead_name = ctx.lead_name
-    return [
-        {
-            "role": "user",
-            "content": (
-                f"The call has just connected. {lead_name} has answered. "
-                f"Execute Rule 1 from your conversational rules: say ONLY "
-                f"the Rule 1 opening sentence, addressing {lead_name} by name, "
-                f"in a warm voice — then stop and wait for their response. "
-                f"Do not say anything else."
-            ),
-        }
-    ]
-
-
-# ==============================================================================
-# SECTION 5 — SYSTEM INSTRUCTION
-# The main prompt. Follows Google's recommended structure:
-#   1. Agent Persona
-#   2. Language instruction
-#   3. Conversational Rules (one-time steps → loop → tool calls)
-#   4. Special situations
-#   5. Handling unclear input
-#   6. Domain facts / knowledge base
-#   7. Guardrails
-#   8. Call ending rules
-#
-# Google best practice: "Separate each agent into a distinct SI."
-# Google best practice: "Use the word 'unmistakably' to guide precision."
-# Google best practice: "Specify tool calls within a flow in distinct sentences."
-#
-# IMPORTANT: system_instruction stays in LiveConnectConfig, NOT in the context
-# window — so it is NOT evicted by context window compression. Put stable
-# facts and rules here. Dynamic per-call data goes in build_bootstrap_messages().
-# ==============================================================================
-
-def build_system_instruction(ctx: LeadContext) -> str:
-    """
-    Returns the system instruction string for this call.
-    ctx values can be interpolated for personalization.
-    This is set once at session connect — changing mid-call has no effect.
-    """
-    lead_name = ctx.lead_name
-
-    return f"""
-# AUDIO PROFILE: [Agent Name]
-## "[Campaign / Product Name]"
-
-## THE SCENE
-# Describe the setting and emotional tone. This shapes Gemini's vocal delivery.
-# Example: "[Agent] is in a warm, professional office on a calm weekday morning.
-# She is placing a friendly outbound call to {lead_name} about [topic].
-# Tone: helpful and low-pressure — a trusted advisor, not a pushy closer."
-
-[REPLACE: describe the scene and emotional tone here]
-
-### DIRECTOR'S NOTES
-# How should the agent sound? Give vocal direction as if briefing a voice actor.
-# Example: Style: Warm, confident, unhurried. Light fillers are fine ("हाँ", "अच्छा").
-# Pace: Moderate; a small breath between sentences.
-
-[REPLACE: vocal direction here]
+**However, the AI SHOULD suggest recommended values for model/VAD settings and recommended outcome bucket assignments as a summary table after the 7 sections.**
 
 ---
 
-## AGENT PERSONA
-# Who is the agent? Name, role, what they're calling about.
-# If you want a specific accent, specify the output language here too.
-# Example: "Your name is Diya. You are a relationship manager at XYZ Corp,
-# calling {lead_name} about a 2 BHK flat in Bhukum, Pune."
+## LEAD CONTEXT VARIABLES
 
-[REPLACE: agent persona here]
+These template variables are injected at call time and can be used in \`system_instruction_template\` and \`bootstrap_messages_json\`:
 
-## LANGUAGE
-# Google best practice: include this exact pattern for non-English languages.
-# Replace OUTPUT_LANGUAGE with your language name.
-RESPOND IN [OUTPUT_LANGUAGE]. YOU MUST RESPOND UNMISTAKABLY IN [OUTPUT_LANGUAGE].
-[Add any code-switching rules, e.g. "Loanwords like OK/WhatsApp are fine but full sentences must be in [language]."]
+| Variable | Description | Example |
+|----------|-------------|---------|
+| \`{lead_name}\` | Caller's name | "Rahul" |
+| \`{lead_phone}\` | Caller's E.164 phone | "+919876543210" |
+| \`{lead_city}\` | Caller's city | "Pune" |
 
 ---
 
-## CONVERSATIONAL RULES
-# Google best practice: "Put rules in the order you expect the model to follow.
-# Delineate between one-time elements and conversational loops."
-# Google best practice: "Specify tool calls in distinct sentences."
+## QUICK CHECKLIST FOR AI OUTPUT
 
-**Rule 1 — Opening (one-time):**
-# The very first thing the agent says. Should be a single short sentence.
-# End with a question that requires a response before proceeding.
-# Example: "नमस्ते, क्या {lead_name} जी से बात हो रही है?"
-[REPLACE: opening line here]
-Wait for their response before proceeding to Rule 2.
-
-**Rule 2 — Introduction (one-time, only after Rule 1 confirmed):**
-# Introduce the agent and reason for calling. One sentence. Then pause.
-[REPLACE: introduction line here]
-
-**Rule 3 — Qualifying question (one-time, only after Rule 2 confirmed):**
-# A single open question to establish intent/interest.
-[REPLACE: qualifying question here]
-Ask one question — then stop and wait.
-
-**Rule 4 — Conversational loop (repeat as needed):**
-# The main body of the call. List the topics the agent can cover.
-# Remind: one question at a time, never two questions in one breath.
-Topics to cover: [REPLACE: list your topics — e.g. location, pricing, features, timeline]
-One question at a time. Listen first, then respond.
-
-**Rule 5 — Closing pitch (when caller seems satisfied):**
-# A soft, low-pressure suggestion toward the desired outcome.
-# Example: site visit, demo booking, callback scheduling.
-[REPLACE: closing pitch here]
-If they say no, do not repeat the same question — move on respectfully.
-
----
-
-## SPECIAL SITUATIONS
-# Handle these explicitly so Gemini doesn't improvise on edge cases.
-# Google best practice: "If x happens, do y — provide specific examples."
-
-**BUSY:**
-[REPLACE: what to say when caller says they're busy — ask for a specific callback time]
-
-**NOT INTERESTED:**
-[REPLACE: graceful goodbye — warm, no pressure, thank them for their time]
-
-**CALLBACK REQUEST:**
-[REPLACE: confirm a specific time — "सटीक समय बता दीजिए" style]
-
-**BROCHURE / INFO REQUEST:**
-[REPLACE: confirm WhatsApp/email and promise to send]
-
-**WRONG REQUIREMENT:**
-[REPLACE: acknowledge, note their requirement, polite goodbye]
-
-**TRUST / "WHERE DID YOU GET MY NUMBER":**
-[REPLACE: explain data source, restate agent identity, invite questions]
-
-**AUDIO ISSUE (ONE-TIME ONLY — maximum once per call):**
-First time only: briefly mention the line is unclear and ask them to speak louder.
-After that, never mention audio/network again — use HANDLING UNCLEAR INPUT instead.
-Do not end the call due to audio issues.
-
----
-
-## HANDLING UNCLEAR INPUT
-# What to do when VAD fires but transcription is ambiguous or very short.
-# Google best practice: never go silent — always say the next sentence.
-
-RULES (non-negotiable):
-- Never go silent — always say the next sentence.
-- Never repeat the audio issue line after the first time.
-- Never respond entirely in English — stay in [OUTPUT_LANGUAGE].
-- Never loop the same question more than twice — assume and move forward.
-
-RESPONSE GUIDE:
-1. Short affirmatives ("हाँ", "जी", "yes", "ok", "hmm", "ठीक"): treat as green light — proceed.
-2. Garbled / partial: make a gentle assumption, rephrase the last question simply.
-3. Complete silence after bot speaks: soft nudge ("सुन पा रहे हैं?"), then one question.
-
----
-
-## KNOWLEDGE BASE / DOMAIN FACTS
-# List ONLY verified facts. Gemini will hallucinate if not grounded here.
-# Google best practice: "Provide starting commands and information."
-# Do NOT include anything you're not 100% sure about.
-
-[REPLACE: paste your product/service facts here as bullet points]
-# Example:
-# - Product: 2 BHK apartments, 768–816 sq ft
-# - Location: Bhukum, Paud Road, near Bharat Petrol Pump
-# - Possession: Late 2027
-# - Distances: Hinjawadi IT Park ~20 min
-
-If you don't know a detail, say:
-"मैं एक्ज़ैक्ट डिटेल चेक करके पाँच मिनट में वापस कॉल करती हूँ।"
-Never fabricate facts.
-
----
-
-## GUARDRAILS
-# Hard rules. Use "unmistakably" for the most critical ones.
-# Google best practice: "Provide specific examples of what not to do."
-
-- One question at a time — unmistakably never ask two questions in one breath.
-- Listen first, respond second.
-- [REPLACE: add your domain-specific guardrails]
-- If caller says "no" to something, do not ask the same question again.
-- Never go silent mid-call — always have the next sentence ready.
-- Audio issue line: maximum once per call.
-- If the last user turn is ambiguous or one word — clarify before ending the call.
-
----
-
-## CALL ENDING (goodbye + end_call tool)
-# Google best practice: "Specify tool calls in distinct sentences."
-# The end_call tool is defined in call_limits.py and registered in bot_sts.py.
-
-When terminal conditions are met: first speak the matching goodbye line warmly,
-then IMMEDIATELY call end_call once. Do not call it mid-conversation.
-Do not mention CRM or saving data.
-
-END the call ONLY when:
-(1) The last CLEARLY UNDERSTOOD user turn matches a terminal case:
-    Not_Interested = explicit property/product refusal (not just "no more questions")
-    Busy = caller explicitly says they can't talk now
-    Callback = caller gave a specific time to call back
-    Wrong_Requirement = caller needs something outside your scope
-(2) At least 4–5 meaningful caller turns have occurred.
-(3) This turn is delivering the matching goodbye — don't repeat a goodbye already said.
-
-DO NOT end when:
-- Last turn is ambiguous, one word, or STT glitch
-- Caller asked a question or requested info
-- You just asked "any more questions?" and got a short "no" → suggest closing action instead
-- Any doubt — ask one clarifying question first
-
-When in doubt: keep talking. A slightly long call is better than a wrong hangup.
-
-## CALL METADATA (internal — do not read aloud)
-- Callee: {ctx.lead_phone!r}
-- City: {ctx.lead_city!r}
-"""
-# =============================================================================
-# GEMINI LIVE — COMPLETE SETTINGS REFERENCE
-# Pipecat 1.1.0 + google-genai
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# GeminiVADParams
-# Controls server-side Voice Activity Detection (runs on Google's servers, not local)
-# Usage: vad=GeminiVADParams(...) inside GeminiLiveLLMService.Settings
-# -----------------------------------------------------------------------------
-#
-# disabled: bool | None
-#   Set True to turn off Gemini's VAD entirely. You'd then need to drive
-#   turn-taking manually. Default: None (VAD on)
-#
-# start_sensitivity: StartSensitivity | None
-#   How aggressively Gemini detects the START of speech.
-#   START_SENSITIVITY_HIGH  → fires on soft/short sounds like "हा", "हो", "हाँ"  ← use this
-#   START_SENSITIVITY_LOW   → only fires on louder, longer speech onset
-#   START_SENSITIVITY_UNSPECIFIED → Google default (somewhere in between)
-#
-# end_sensitivity: EndSensitivity | None
-#   How aggressively Gemini detects the END of speech (turn boundary).
-#   END_SENSITIVITY_HIGH → cuts the turn quickly after speech stops
-#   END_SENSITIVITY_LOW  → waits longer before closing the turn (better for short words) ← use this
-#   END_SENSITIVITY_UNSPECIFIED → Google default
-#
-# prefix_padding_ms: int | None
-#   Milliseconds of audio BEFORE detected speech onset to include in the turn.
-#   Higher = captures lead-in sounds but eats short words if set too high.
-#   Default Google value is ~500ms. Recommended for short Hindi/Marathi words: 200ms
-#
-# silence_duration_ms: int | None
-#   Milliseconds of silence after speech before the turn is considered complete.
-#   Lower = snappier response but may cut off slow speakers.
-#   Default Google value is ~600ms. Recommended: 400ms
-#
-# RECOMMENDED CONFIG FOR SHORT HINDI/MARATHI AFFIRMATIVES (हा, हो, हाँ, जी):
-# from google.genai.types import StartSensitivity, EndSensitivity
-# GEMINI_VAD = GeminiVADParams(
-#     start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
-#     end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
-#     prefix_padding_ms=200,
-#     silence_duration_ms=400,
-# )
-
-# -----------------------------------------------------------------------------
-# GeminiLiveLLMService.Settings
-# Top-level Pipecat wrapper settings — passed at service init time
-# -----------------------------------------------------------------------------
-#
-# model: str
-#   Gemini model to use.
-#   "models/gemini-3.1-flash-live-preview"  ← current fast model
-#   "models/gemini-2.0-flash-live-001"      ← stable alias if available
-#
-# temperature: float
-#   Randomness of responses. 0.0 = deterministic, 1.0 = creative.
-#   Recommended for sales scripts: 0.4–0.6
-#
-# max_tokens: int
-#   Max output tokens per turn. Keep reasonable to avoid runaway responses.
-#
-# top_p: float
-#   Nucleus sampling. Controls diversity. 0.9 is a safe default.
-#
-# top_k: int
-#   Top-k sampling. Limits token selection pool per step.
-#
-# frequency_penalty: float
-#   Penalizes repeating the same tokens. Helps avoid repetitive filler phrases.
-#
-# presence_penalty: float
-#   Penalizes tokens already used anywhere in context. Encourages topic variety.
-#
-# seed: int
-#   Fixed seed for reproducible outputs. Useful for testing, not production.
-#
-# voice: str
-#   TTS voice name.
-#   Hindi voices:   "Sulafat", "Aoede", "Charon", "Fenrir", "Kore", "Puck"
-#   Test voices at: https://cloud.google.com/text-to-speech/docs/voices
-#
-# language: Language | str
-#   Language for STT transcription and TTS generation.
-#   Language.HI_IN  → Hindi
-#   Language.MR_IN  → Marathi
-#   Pass as pipecat Language enum or raw string "hi-IN", "mr-IN"
-#
-# modalities: GeminiModalities
-#   What output types Gemini returns. For STS: AUDIO only.
-#   GeminiModalities.AUDIO
-#   GeminiModalities.TEXT
-#   GeminiModalities.AUDIO_AND_TEXT  ← useful for debugging (logs what Gemini says)
-#
-# media_resolution: GeminiMediaResolution
-#   Only relevant if sending images/video. Ignore for audio-only STS.
-#
-# vad: GeminiVADParams | None
-#   See GeminiVADParams section above.
-#   Set to None to disable VAD entirely.
-#
-# context_window_compression: ContextWindowCompressionParams | dict
-#   Sliding window compression for long calls. When prompt tokens hit
-#   trigger_tokens, Google drops oldest turns and retains ~half.
-#   system_instruction is always preserved (it's on LiveConnectConfig).
-#   {"enabled": True, "trigger_tokens": 20000}  ← default in bot_sts.py
-#   Lower trigger_tokens = more aggressive compression = cheaper but less memory
-#
-# thinking: ThinkingConfig | dict
-#   Enables chain-of-thought reasoning before responding.
-#   Improves complex decisions (e.g. not-interested vs no-more-questions).
-#   COSTS LATENCY — not recommended for real-time STS unless response time > 2s is ok.
-#   {"thinking_budget": 1024}  ← token budget for thinking
-#
-# enable_affective_dialog: bool
-#   Gemini adapts its tone to the emotional content of user speech.
-#   Sounds frustrated → Diya softens. Sounds excited → Diya matches energy.
-#   Recommended: True for sales/support bots.
-#
-# proactivity: ProactivityConfig | dict
-#   Allows Gemini to speak unprompted — e.g. nudge after long silence.
-#   Complements the "don't go silent" guardrail in the system prompt.
-#   Check ProactivityConfig fields before enabling; behaviour can be surprising.
-#
-# filter_incomplete_user_turns: bool
-#   Filters turns where user started speaking but didn't complete a thought.
-#   Set False to let through very short turns like "हा", "जी", "यस".
-#   Recommended: False when using START_SENSITIVITY_HIGH
-#
-# user_turn_completion_config: UserTurnCompletionConfig
-#   Fine-grained control over when a user turn is considered "done".
-#   Interacts with VAD end_sensitivity. Check Pipecat source for fields.
-
-# -----------------------------------------------------------------------------
-# LiveConnectConfig — raw Google API fields
-# Not all are surfaced by Pipecat Settings; pass extras via settings.extra={}
-# -----------------------------------------------------------------------------
-#
-# session_resumption: SessionResumptionConfig
-#   Lets a session survive a WebSocket drop and resume mid-call.
-#   Useful for Indian mobile networks with frequent brief drops.
-#   Not yet in Pipecat Settings — would need custom _connect() override.
-#
-# safety_settings: list[SafetySetting]
-#   Adjust content safety thresholds per harm category.
-#   Useful if Gemini over-refuses on property/financial terms.
-#   Pass via settings.extra if not surfaced directly.
-#
-# explicit_vad_signal: bool
-#   If True, you drive VAD signals manually instead of letting Gemini do it.
-#   Only use if you're implementing your own turn detection.
-#
-# history_config: HistoryConfig
-#   Controls how conversation history is managed within the session.
-#
-# realtime_input_config: RealtimeInputConfig
-#   Low-level control over the realtime audio input stream.
-#   VAD params ultimately flow through here under the hood.
-\`\`\`
+- [ ] Section 1: System Instruction — complete prompt with scene, persona, language, rules, situations, guardrails, call ending
+- [ ] Section 2: Bootstrap Messages — JSON array with opening directive
+- [ ] Section 3: Lead Schema — JSON object with fields array
+- [ ] Section 4: Extraction Schema — JSON with mode="both", intent_status enum (required), summary_prompt
+- [ ] Section 5: Outcome Event Map — flat JSON object mapping intents to webhook events
+- [ ] Section 6: Normalization Rules — JSON array of deterministic correction rules (or [] if none)
+- [ ] Section 7: Goodbye Markers — JSON array of hangup trigger substrings
+- [ ] extraction_schema.mode is "both"
+- [ ] Suggested model settings table (voice, language, temperature, VAD)
+- [ ] Suggested outcome bucket assignments (which intents → terminal / retry / callback)
 `;
 
 const ScriptingGuideModal = ({ isOpen, onClose }) => {
   const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState('technical');
+  const [activeTab, setActiveTab] = useState('fields');
 
   if (!isOpen) return null;
 
@@ -768,6 +390,214 @@ const ScriptingGuideModal = ({ isOpen, onClose }) => {
     navigator.clipboard.writeText(GUIDE_MARKDOWN);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const fieldSections = [
+    {
+      num: 1,
+      title: 'System Instruction Template',
+      field: 'system_instruction_template',
+      tab: 'Prompts',
+      type: 'Plain Text',
+      icon: 'description',
+      color: 'blue',
+      required: true,
+      description: 'The master prompt controlling the AI agent\u2019s behavior. Supports {lead_name}, {lead_phone}, {lead_city} template variables.',
+      structure: [
+        'THE SCENE & DIRECTOR\'S NOTES \u2014 setting, mood, vocal direction',
+        'AGENT PERSONA \u2014 name, role, company, purpose',
+        'LANGUAGE \u2014 output language with code-switching rules',
+        'CONVERSATIONAL RULES \u2014 Rule 1-5 (opening \u2192 loop \u2192 close)',
+        'SPECIAL SITUATIONS \u2014 busy, not interested, callback, brochure, wrong requirement, trust, audio',
+        'HANDLING UNCLEAR INPUT \u2014 response guide for ambiguous turns',
+        'KNOWLEDGE BASE \u2014 verified domain facts only',
+        'GUARDRAILS \u2014 hard boundaries the agent must never cross',
+        'CALL ENDING \u2014 goodbye protocol + end_call tool usage',
+      ],
+    },
+    {
+      num: 2,
+      title: 'Bootstrap Messages',
+      field: 'bootstrap_messages_json',
+      tab: 'Prompts',
+      type: 'JSON Array',
+      icon: 'play_circle',
+      color: 'green',
+      required: true,
+      description: 'Synthetic first message injected on call connect. Tells Gemini exactly what opening line to say.',
+      example: `[
+  {
+    "role": "user",
+    "content": "The call has just connected. {lead_name} has answered. Execute Rule 1: say ONLY the opening sentence addressing {lead_name} by name, in a warm voice \u2014 then stop and wait."
+  }
+]`,
+      rules: [
+        'Must be a JSON array with at least one object',
+        'Each object: { "role": "user", "content": "..." }',
+        'Use {lead_name}, {lead_phone}, {lead_city} as template variables',
+        'Keep it short \u2014 tell Gemini exactly ONE thing to say',
+      ],
+    },
+    {
+      num: 3,
+      title: 'Lead Schema',
+      field: 'lead_schema',
+      tab: 'Advanced',
+      type: 'JSON Object',
+      icon: 'person',
+      color: 'purple',
+      required: false,
+      description: 'Defines extra CSV columns for lead uploads beyond the defaults (lead_name, lead_phone, lead_city).',
+      example: `{
+  "fields": [
+    { "key": "budget", "label": "Budget Range", "type": "string", "required": false }
+  ]
+}`,
+      rules: [
+        'Must be a JSON object with a "fields" array',
+        'Use { "fields": [] } if no extra columns needed',
+        'Each field: key, label, type (string), required (boolean)',
+      ],
+    },
+    {
+      num: 4,
+      title: 'Extraction Schema',
+      field: 'extraction_schema',
+      tab: 'Post-call',
+      type: 'JSON Object',
+      icon: 'analytics',
+      color: 'red',
+      required: true,
+      description: 'Tells the post-call Groq LLM what structured data to extract from the transcript + how to summarize.',
+      example: `{
+  "mode": "both",
+  "summary_prompt": "Summarise this call in 2-3 sentences.",
+  "fields": [
+    {
+      "key": "intent_status",
+      "type": "enum",
+      "values": ["Interested", "Not_Interested", "Busy",
+                 "Callback_Requested", "Wrong_Requirement",
+                 "Unknown"],
+      "required": true,
+      "description": "Final caller intent."
+    },
+    {
+      "key": "caller_notes",
+      "type": "string",
+      "required": false,
+      "description": "Other useful facts, or the literal NULL."
+    }
+  ],
+  "extraction_rules": "Infer only what the transcript supports."
+}`,
+      rules: [
+        'mode MUST be "both" (summary + structured fields)',
+        'intent_status enum field is REQUIRED with required: true',
+        'Valid field types: "string", "enum", "boolean", "datetime"',
+        'Enum fields must have a non-empty "values" array',
+        'Each field key must be unique',
+        'summary_prompt is required when mode is "both"',
+        'Add optional fields as needed (callback_time, budget, site_visit_agreed, etc.)',
+      ],
+      note: 'After pasting, the admin will drag-and-drop each intent_status value into outcome buckets (Terminal / Retry / Callback) in the CMS UI.',
+    },
+    {
+      num: 5,
+      title: 'Outcome Event Map',
+      field: 'outcome_event_map',
+      tab: 'Post-call',
+      type: 'JSON Object (flat)',
+      icon: 'webhook',
+      color: 'amber',
+      required: false,
+      description: 'Maps intent_status values \u2192 webhook event names for external automation (CRM, n8n).',
+      example: `{
+  "Interested": "lead_qualified",
+  "Callback_Requested": "lead_callback_scheduled"
+}`,
+      rules: [
+        'Flat JSON object: string \u2192 string (no nesting)',
+        'Keys must be valid intent_status enum values',
+        'Only map intents that trigger external webhook actions',
+        'Use {} if no webhook events needed',
+      ],
+    },
+    {
+      num: 6,
+      title: 'Normalization Rules',
+      field: 'normalization_rules',
+      tab: 'Post-call',
+      type: 'JSON Array',
+      icon: 'auto_fix_high',
+      color: 'purple',
+      required: false,
+      description: 'Deterministic correction rules applied AFTER AI extraction, BEFORE outcome bucketing. Fixes known LLM inconsistencies.',
+      example: `[
+  {
+    "when": { "field": "callback_time", "truthy": true },
+    "and_intent_in": ["", "Unknown", "Busy"],
+    "set": { "intent_status": "Callback_Requested" }
+  },
+  {
+    "when": { "field": "site_visit_agreed", "truthy": true },
+    "and_intent_in": ["", "Unknown"],
+    "set": { "intent_status": "Interested" }
+  }
+]`,
+      rules: [
+        '"when": { "field": "<key>", "truthy": true/false } \u2014 fires when field is non-empty (or empty if false)',
+        '"when": { "field": "<key>", "eq": <value> } \u2014 fires when field equals exact value',
+        '"and_intent_in": [...] \u2014 optional guard, only fires if current intent_status is in this list (use "" for empty)',
+        '"set": { "key": "value" } \u2014 overwrite extracted fields (use null to clear a field)',
+        'Rules apply in order \u2014 later rules can override earlier ones',
+        'Use [] if no normalization is needed',
+      ],
+    },
+    {
+      num: 7,
+      title: 'Goodbye Hangup Markers',
+      field: 'goodbye_markers',
+      tab: 'Advanced',
+      type: 'JSON Array',
+      icon: 'call_end',
+      color: 'rose',
+      required: true,
+      description: 'Substring triggers for auto-hangup if bot forgets to call end_call tool. Safety fallback.',
+      example: `[
+  "\u0906\u092a\u0915\u093e \u0926\u093f\u0928 \u0936\u0941\u092d \u0939\u094b",
+  "din shubh ho",
+  "\u092e\u0948\u0902 \u0905\u092d\u0940 \u092d\u0947\u091c \u0926\u0947\u0924\u0940 \u0939\u0942\u0901",
+  "abhi bhej deti hun"
+]`,
+      rules: [
+        'Use substrings, not full sentences',
+        'Add both Devanagari AND romanized versions',
+        'Do NOT add mid-conversation phrases',
+        'Cover: not interested, busy/callback, brochure, wrong requirement goodbyes',
+      ],
+    },
+  ];
+
+  const modelSettings = [
+    { field: 'gemini_model', label: 'Model', default: 'models/gemini-3.1-flash-live-preview', note: 'Fastest, lowest latency' },
+    { field: 'gemini_voice', label: 'Voice', default: 'Aoede', note: 'Options: Aoede, Charon, Fenrir, Kore, Puck, Sulafat, Leda, Orus, Zephyr, Autonoe' },
+    { field: 'gemini_language', label: 'Language', default: 'hi-IN', note: 'hi-IN, mr-IN, en-IN, en-US, ta-IN, te-IN, kn-IN, bn-IN, gu-IN, pa-IN' },
+    { field: 'gemini_temperature', label: 'Temperature', default: '0.5', note: '0.4\u20130.6 for scripts, 0.7\u20130.9 for open-ended' },
+    { field: 'vad_start_sensitivity', label: 'VAD Start', default: 'HIGH', note: 'HIGH for Indian languages (captures short words)' },
+    { field: 'vad_end_sensitivity', label: 'VAD End', default: 'LOW', note: 'LOW waits longer before closing turn' },
+    { field: 'vad_silence_duration_ms', label: 'Silence (ms)', default: '400\u2013650', note: 'Lower = snappier but may cut off slow speakers' },
+    { field: 'vad_prefix_padding_ms', label: 'Prefix Pad (ms)', default: '200', note: 'Audio before detected speech onset' },
+  ];
+
+  const colorMap = {
+    blue: { bg: 'bg-blue-500/10', border: 'border-blue-500', text: 'text-blue-500', dot: 'bg-blue-500' },
+    green: { bg: 'bg-emerald-500/10', border: 'border-emerald-500', text: 'text-emerald-500', dot: 'bg-emerald-500' },
+    purple: { bg: 'bg-purple-500/10', border: 'border-purple-500', text: 'text-purple-500', dot: 'bg-purple-500' },
+    red: { bg: 'bg-red-500/10', border: 'border-red-500', text: 'text-red-500', dot: 'bg-red-500' },
+    amber: { bg: 'bg-amber-500/10', border: 'border-amber-500', text: 'text-amber-500', dot: 'bg-amber-500' },
+    emerald: { bg: 'bg-emerald-500/10', border: 'border-emerald-500', text: 'text-emerald-500', dot: 'bg-emerald-500' },
+    rose: { bg: 'bg-rose-500/10', border: 'border-rose-500', text: 'text-rose-500', dot: 'bg-rose-500' },
   };
 
   return (
@@ -778,18 +608,18 @@ const ScriptingGuideModal = ({ isOpen, onClose }) => {
           <div className="flex justify-between items-center px-6 py-4">
             <h3 className="font-headline-md text-on-surface dark:text-molten-text flex items-center gap-2">
               <span className="material-symbols-outlined text-primary dark:text-molten-primary">menu_book</span>
-              Aakashvani Master Scripting Guide
+              Script Template Field Guide
             </h3>
             <div className="flex items-center gap-3">
               <button 
                 onClick={handleCopy}
-                title="Copies the full markdown guide for pasting to an AI"
+                title="Copies the full AI prompt guide \u2014 paste it into any AI to generate all 7 form sections"
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 text-primary dark:bg-molten-primary/10 dark:text-molten-primary rounded-lg text-sm font-medium hover:bg-primary/20 dark:hover:bg-molten-primary/20 transition-colors"
               >
                 <span className="material-symbols-outlined text-[18px]">
                   {copied ? 'check' : 'content_copy'}
                 </span>
-                {copied ? 'Copied Full Guide!' : 'Copy for AI'}
+                {copied ? 'Copied!' : 'Copy for AI'}
               </button>
               <button 
                 onClick={onClose} 
@@ -802,868 +632,531 @@ const ScriptingGuideModal = ({ isOpen, onClose }) => {
           
           {/* Tabs */}
           <div className="flex px-6 gap-6 text-sm font-medium">
-            <button
-              onClick={() => setActiveTab('technical')}
-              className={`pb-3 px-1 border-b-2 transition-colors ${
-                activeTab === 'technical' 
-                  ? 'border-primary text-primary dark:border-molten-primary dark:text-molten-primary' 
-                  : 'border-transparent text-on-surface-variant hover:text-on-surface dark:text-molten-text-muted dark:hover:text-molten-text'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[18px]">integration_instructions</span>
-                Technical Reference
-              </div>
-            </button>
-            <button
-              onClick={() => setActiveTab('conversational')}
-              className={`pb-3 px-1 border-b-2 transition-colors ${
-                activeTab === 'conversational' 
-                  ? 'border-primary text-primary dark:border-molten-primary dark:text-molten-primary' 
-                  : 'border-transparent text-on-surface-variant hover:text-on-surface dark:text-molten-text-muted dark:hover:text-molten-text'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[18px]">forum</span>
-                Conversational Design
-              </div>
-            </button>
+            {[
+              { key: 'fields', label: 'AI Output Fields', icon: 'format_list_numbered' },
+              { key: 'model', label: 'Model & VAD Settings', icon: 'tune' },
+              { key: 'rules', label: 'Outcome & Normalization', icon: 'rule' },
+              { key: 'design', label: 'Prompt Design', icon: 'forum' },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`pb-3 px-1 border-b-2 transition-colors ${
+                  activeTab === tab.key
+                    ? 'border-primary text-primary dark:border-molten-primary dark:text-molten-primary' 
+                    : 'border-transparent text-on-surface-variant hover:text-on-surface dark:text-molten-text-muted dark:hover:text-molten-text'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
+                  {tab.label}
+                </div>
+              </button>
+            ))}
           </div>
         </div>
 
         {/* Content */}
-        <div className="overflow-y-auto px-8 py-6 space-y-8 text-on-surface dark:text-molten-text bg-arctic-surface dark:bg-[#1A1A24]">
+        <div className="overflow-y-auto px-8 py-6 space-y-6 text-on-surface dark:text-molten-text bg-arctic-surface dark:bg-[#1A1A24]">
           
-          {activeTab === 'technical' && (
-            <div className="space-y-8 animate-in fade-in duration-300">
-              <section>
-                <div className="bg-primary/10 dark:bg-molten-primary/10 border-l-4 border-primary dark:border-molten-primary p-4 rounded-r-lg mb-8">
-                  <h4 className="text-lg font-bold text-primary dark:text-molten-primary mb-2 flex items-center gap-2">
-                    <span className="material-symbols-outlined">smart_toy</span>
-                    AI Output Instructions
-                  </h4>
-                  <p className="text-sm text-on-surface dark:text-molten-text">
-                    When copying this guide to an AI, the AI is instructed to <strong>NOT</strong> generate a single Python file. Instead, it will generate the distinct JSON blocks and text components exactly as required by the Admin Script Config form.
-                  </p>
-                </div>
-                <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  1. Script Registration & Structure
+          {activeTab === 'fields' && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              {/* Intro banner */}
+              <div className="bg-primary/10 dark:bg-molten-primary/10 border-l-4 border-primary dark:border-molten-primary p-4 rounded-r-lg">
+                <h4 className="text-lg font-bold text-primary dark:text-molten-primary mb-1 flex items-center gap-2">
+                  <span className="material-symbols-outlined">smart_toy</span>
+                  AI Must Output All 7 Sections
                 </h4>
-                <p className="mb-4 text-on-surface-variant dark:text-molten-text-muted leading-relaxed">
-                  Aakashvani scripts can be configured via Python modules or directly in the CMS Script Configs form.
+                <p className="text-sm text-on-surface dark:text-molten-text">
+                  When you <strong>Copy for AI</strong>, the prompt instructs the AI to generate each form field as a separate, labeled section. 
+                  Each section is directly copy-pasteable into the corresponding CMS form field.
                 </p>
-                <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
-                  <ul className="list-disc pl-5 space-y-2 text-sm">
-                    <li><strong>Naming:</strong> Use snake_case starting with a letter (e.g., <code>my_script.py</code>).</li>
-                    <li><strong>Registration:</strong> Add your script to the environment using <code>STS_SCRIPT=my_script</code> in your <code>.env</code> file.</li>
-                    <li><strong>Variables:</strong> The server reads variables from your module to configure the Gemini Live session at connect time.</li>
-                  </ul>
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  2. Required Configuration Fields
-                </h4>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <div>
-                    <h5 className="font-bold text-lg mb-2">Gemini Variables</h5>
-                    <ul className="space-y-3 text-sm bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
-                      <li><strong className="text-primary dark:text-molten-primary">SCRIPT_ID:</strong> A unique string identifier (e.g. <code>"pyramid_hi"</code>).</li>
-                      <li><strong className="text-primary dark:text-molten-primary">GEMINI_MODEL:</strong> Use <code>"models/gemini-3.1-flash-live-preview"</code> for the lowest latency.</li>
-                      <li><strong className="text-primary dark:text-molten-primary">GEMINI_VOICE:</strong> E.g., <code>"Aoede"</code>, <code>"Charon"</code>, <code>"Sulafat"</code>.</li>
-                      <li><strong className="text-primary dark:text-molten-primary">GEMINI_LANGUAGE:</strong> E.g., <code>Language.HI_IN</code> or <code>Language.EN_IN</code>.</li>
-                      <li><strong className="text-primary dark:text-molten-primary">GEMINI_TEMPERATURE:</strong> Recommend <code>0.4</code> to <code>0.6</code> for strict compliance.</li>
-                    </ul>
-                  </div>
-                  <div>
-                    <h5 className="font-bold text-lg mb-2">Voice Activity Detection (VAD)</h5>
-                    <p className="text-sm mb-2 text-on-surface-variant dark:text-molten-text-muted">Critical for capturing short responses in Indian languages ("haan", "ji").</p>
-                    <ul className="space-y-3 text-sm bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
-                      <li><strong className="text-primary dark:text-molten-primary">start_sensitivity:</strong> Must be <code>START_SENSITIVITY_HIGH</code>.</li>
-                      <li><strong className="text-primary dark:text-molten-primary">end_sensitivity:</strong> Must be <code>END_SENSITIVITY_LOW</code>.</li>
-                      <li><strong className="text-primary dark:text-molten-primary">prefix_padding_ms:</strong> <code>200ms</code>.</li>
-                      <li><strong className="text-primary dark:text-molten-primary">silence_duration_ms:</strong> <code>400ms - 650ms</code>.</li>
-                    </ul>
-                  </div>
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  3. Lead Context & Data Schema
-                </h4>
-                <p className="mb-4 text-sm text-on-surface-variant dark:text-molten-text-muted">
-                  The <code>LeadContext</code> object is injected into dynamic functions upon connection. Use these fields to personalize the prompt.
+                <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mt-2">
+                  <strong>Note:</strong> Outcome routing (terminal / retry / callback buckets) is configured via <strong>drag-and-drop</strong> in the CMS Post-call tab after pasting the extraction schema. The AI only needs to suggest which intents go where.
                 </p>
-                <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E] text-sm font-mono overflow-x-auto text-green-400">
-                  ctx.lead_name   // Caller's name (e.g., "Rahul")<br/>
-                  ctx.lead_phone  // Caller's E.164 phone (e.g., "+919876543210")<br/>
-                  ctx.lead_city   // Caller's city (e.g., "Pune")
-                </div>
-              </section>
+              </div>
 
-              <section>
-                <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  4. Post-Call Extraction Schema (Required for AI)
-                </h4>
-                <div className="mb-4 text-sm text-on-surface-variant dark:text-molten-text-muted space-y-2">
-                  <p>
-                    Aakashvani processes the raw transcript using a Groq LLM against your defined JSON schema.
-                    <strong> Note: This is required separately for the AI</strong> and is distinct from the Lead CSV Schema.
-                  </p>
-                  <p className="text-on-surface dark:text-molten-text mt-2 font-medium">Exactly 1 field is strictly required by the core system:</p>
-                  <ul className="list-disc pl-5 space-y-1">
-                    <li>
-                      <strong><code>intent_status</code></strong> (Format: <code>enum</code> string) — Must be <code>required: True</code>. Constrained to specific system values.
-                    </li>
-                  </ul>
-                  <p>You can add unlimited additional optional fields (e.g. <code>callback_time</code>, <code>caller_notes</code>).</p>
-                </div>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <div>
-                    <h5 className="font-bold text-lg mb-2">EXTRACTION_SCHEMA</h5>
-                    <pre className="bg-black/50 p-3 rounded text-xs overflow-x-auto text-green-400 border border-outline-variant/30 h-[250px]">
-{`EXTRACTION_SCHEMA = {
-  "mode": "both",
-  "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any property preference mentioned.",
-  "fields": [
-    {
-      "key": "intent_status",
-      "type": "enum",
-      "values": [
-        "Interested", 
-        "Not_Interested", 
-        "Callback_Requested"
-      ],
-      "required": True,
-      "description": "Final caller intent."
-    },
-    {
-      "key": "callback_time",
-      "type": "string",
-      "required": False
-    }
-  ],
-  "extraction_rules": "Infer only facts."
-}`}
-                    </pre>
-                  </div>
-                  <div>
-                    <h5 className="font-bold text-lg mb-2">Normalization</h5>
-                    <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E] h-[250px] overflow-y-auto">
-                      <p className="text-sm mb-2">The system maps specific <code>intent_status</code> enum values to system lead states:</p>
-                      <ul className="list-disc pl-5 space-y-1 text-sm">
-                        <li><code>Not_Interested</code> → marks lead as <strong>failed</strong>.</li>
-                        <li><code>Callback_Requested</code> → marks lead as <strong>callback_scheduled</strong>.</li>
-                        <li><code>Busy</code> → marks lead as <strong>callback_scheduled</strong> (for retry).</li>
-                        <li><code>Early_Disconnect</code> → marks lead as <strong>callback_scheduled</strong> (short hangup).</li>
-                        <li><code>Interested</code> → marks lead as <strong>completed</strong>.</li>
-                      </ul>
-                      <p className="text-sm mt-4 text-primary dark:text-molten-primary"><strong>Note:</strong> Always include <code>intent_status</code> in your schema if you want automated lead transitions.</p>
+              {/* Field cards */}
+              {fieldSections.map(section => {
+                const c = colorMap[section.color] || colorMap.blue;
+                return (
+                  <div key={section.num} className={`border rounded-lg overflow-hidden ${c.border}/30 dark:${c.border}/20`}>
+                    {/* Card header */}
+                    <div className={`px-5 py-3 ${c.bg} flex items-center justify-between`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-7 h-7 rounded-full ${c.dot} flex items-center justify-center text-white text-xs font-bold`}>
+                          {section.num}
+                        </div>
+                        <div>
+                          <h5 className={`font-bold ${c.text}`}>{section.title}</h5>
+                          <div className="flex items-center gap-2 text-xs text-on-surface-variant dark:text-molten-text-muted mt-0.5">
+                            <code className="bg-black/10 dark:bg-white/10 px-1.5 py-0.5 rounded">{section.field}</code>
+                            <span>&bull;</span>
+                            <span>{section.type}</span>
+                            <span>&bull;</span>
+                            <span className="text-on-surface-variant dark:text-molten-text-muted">{section.tab} tab</span>
+                          </div>
+                        </div>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-xs font-bold ${section.required ? 'bg-red-500/15 text-red-600 dark:text-red-400' : 'bg-gray-500/15 text-gray-600 dark:text-gray-400'}`}>
+                        {section.required ? 'REQUIRED' : 'OPTIONAL'}
+                      </span>
+                    </div>
+                    {/* Card body */}
+                    <div className="px-5 py-4 bg-surface-container-lowest dark:bg-[#141210] space-y-3">
+                      <p className="text-sm text-on-surface-variant dark:text-molten-text-muted">{section.description}</p>
+                      
+                      {/* Structure list (for system instruction) */}
+                      {section.structure && (
+                        <div>
+                          <h6 className="text-xs font-bold text-on-surface dark:text-molten-text mb-2 uppercase tracking-wide">Required Structure</h6>
+                          <ol className="list-decimal pl-5 space-y-1 text-xs text-on-surface-variant dark:text-molten-text-muted">
+                            {section.structure.map((item, i) => (
+                              <li key={i}>{item}</li>
+                            ))}
+                          </ol>
+                        </div>
+                      )}
+
+                      {/* Example */}
+                      {section.example && (
+                        <div>
+                          <h6 className="text-xs font-bold text-on-surface dark:text-molten-text mb-1 uppercase tracking-wide">Example</h6>
+                          <pre className="bg-black/50 p-3 rounded text-xs overflow-x-auto text-green-400 border border-outline-variant/30 max-h-[200px]">
+                            {section.example}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* Rules */}
+                      {section.rules && (
+                        <div>
+                          <h6 className="text-xs font-bold text-on-surface dark:text-molten-text mb-1 uppercase tracking-wide">Constraints</h6>
+                          <ul className="space-y-1 text-xs">
+                            {section.rules.map((rule, i) => (
+                              <li key={i} className="flex items-start gap-2 text-on-surface-variant dark:text-molten-text-muted">
+                                <span className="material-symbols-outlined text-[14px] mt-0.5 text-primary dark:text-molten-primary shrink-0">chevron_right</span>
+                                {rule}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {/* Extra note (e.g. drag-and-drop for extraction schema) */}
+                      {section.note && (
+                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                          <span className="material-symbols-outlined text-[16px] mt-0.5 shrink-0">info</span>
+                          {section.note}
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  5. Boilerplate Template
-                </h4>
-                <p className="mb-4 text-sm text-on-surface-variant dark:text-molten-text-muted">
-                  Below is the master <code>bot_template.py</code>. Use this exact structure for all new agents.
-                </p>
-                <div className="bg-black/50 p-4 rounded-lg border border-outline-variant/30 max-h-[600px] overflow-y-auto">
-                  <pre className="text-xs font-mono text-green-400 whitespace-pre-wrap">
-                    {`"""
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                     AAKASHVANI — MASTER STS SCRIPT TEMPLATE                ║
-║                                                                              ║
-║  Copy this file to sts_scripts/<your_script_name>.py                        ║
-║  Set STS_SCRIPT=<your_script_name> in .env                                  ║
-║  Then run: just dev  or  just dev-sts                                        ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-
-NAMING RULES (enforced by server.py):
-  - Filename must be snake_case, start with a letter: my_bot.py → STS_SCRIPT=my_bot
-  - No hyphens, no uppercase, no spaces
-
-QUICK START CHECKLIST:
-  [ ] 1. Fill in AGENT IDENTITY (persona, language, voice)
-  [ ] 2. Fill in SYSTEM INSTRUCTION (scene, rules, facts, guardrails)
-  [ ] 3. Fill in GOODBYE_HANGUP_MARKERS (phrases that trigger auto-hangup)
-  [ ] 4. Fill in build_bootstrap_messages() (what fires on call connect)
-  [ ] 5. Tune GEMINI_VAD for your language (short words need HIGH start sensitivity)
-  [ ] 6. Adjust GEMINI_TEMPERATURE (0.4–0.6 for scripted agents, higher for open-ended)
-  [ ] 7. Fill in EXTRACTION_SCHEMA (post-call Groq fields — see pyramid_extraction.py)
-"""
-
-from __future__ import annotations
-
-# ── Standard imports (do not remove) ──────────────────────────────────────────
-from lead_context import LeadContext
-from pipecat.services.google.gemini_live.llm import GeminiVADParams
-from pipecat.transcriptions.language import Language
-from google.genai.types import EndSensitivity, StartSensitivity
-
-# ==============================================================================
-# PASTE SETTINGS REFERENCE HERE
-# Copy the contents of gemini_live_settings_reference.py here for quick access
-# while editing this file. It will be ignored at runtime (it's just comments).
-# ==============================================================================
-
-
-# ==============================================================================
-# SECTION 1 — AGENT IDENTITY
-# These values configure the Gemini Live session at connect time.
-# Changing them requires a server restart (they're read once per call).
-# ==============================================================================
-
-# ── Model ──────────────────────────────────────────────────────────────────────
-# "models/gemini-3.1-flash-live-preview"  → fastest, lowest latency (~0.5s)
-# "models/gemini-2.0-flash-live-001"      → stable alias if preview is unavailable
-GEMINI_MODEL = "models/gemini-3.1-flash-live-preview"
-
-# ── Voice ──────────────────────────────────────────────────────────────────────
-# Available voices (as of 2026): Aoede, Charon, Fenrir, Kore, Puck,
-#                                 Sulafat, Leda, Orus, Zephyr, Autonoe
-# Tip: Try multiple voices for your language — quality varies significantly.
-# Hindi recommendation: Sulafat (warm female), Aoede (neutral female)
-GEMINI_VOICE = "Aoede"
-
-# ── Language ───────────────────────────────────────────────────────────────────
-# Must match what the caller will speak AND your system instruction language.
-# Mismatch = poor transcription quality.
-#
-# Common values:
-#   Language.HI_IN   → Hindi (India)
-#   Language.MR_IN   → Marathi (India)
-#   Language.EN_IN   → English (India accent)
-#   Language.EN_US   → English (US)
-#   Language.EN_GB   → English (UK)
-#   Language.TA_IN   → Tamil
-#   Language.TE_IN   → Telugu
-#   Language.KN_IN   → Kannada
-#   Language.BN_IN   → Bengali
-#   Language.GU_IN   → Gujarati
-#   Language.PA_IN   → Punjabi
-GEMINI_LANGUAGE = Language.HI_IN
-
-# ── Temperature ────────────────────────────────────────────────────────────────
-# Controls response randomness.
-# 0.0 = fully deterministic (same input → same output, robotic)
-# 0.4–0.6 = recommended for sales/support scripts (warm but predictable)
-# 0.7–0.9 = more creative/varied (better for open-ended coaching, tutoring)
-# 1.0 = maximum creativity (may go off-script)
-GEMINI_TEMPERATURE = 0.5
-
-# ── Script ID (used in call logs) ──────────────────────────────────────────────
-# Set this to something descriptive. Appears in call_logs.db under the route column.
-SCRIPT_ID = "my_bot"
-
-
-# ── Post-call extraction schema (Groq reads transcript → JSON) ─────────────────
-# See sts_scripts/pyramid_extraction.py for a full real-estate example.
-EXTRACTION_SCHEMA = {
-    "mode": "both",
-    "summary_prompt": "Summarise this call in 2-3 sentences. Focus on the lead's interest level and any property preference mentioned.",
-    "fields": [
-        {
-            "key": "intent_status",
-            "type": "enum",
-            "values": [
-                "Interested",
-                "Not_Interested",
-                "Busy",
-                "Callback_Requested",
-                "Wrong_Requirement",
-                "Unknown",
-            ],
-            "required": True,
-            "description": "Call outcome intent.",
-        },
-        {
-            "key": "caller_notes",
-            "type": "string",
-            "required": False,
-            "description": "Other useful facts, or the literal NULL.",
-        },
-    ],
-    "extraction_rules": (
-        "Infer only what the transcript supports. "
-        "Reply with ONE JSON object matching the field keys."
-    ),
-}
-
-OUTCOME_EVENT_MAP = {
-    "Interested": "lead_qualified",
-    "Callback_Requested": "lead_callback_scheduled"
-}
-OUTCOME_TERMINAL = ["Interested", "Not_Interested", "Wrong_Requirement"]
-OUTCOME_RETRY = ["Busy", "Unknown"]
-OUTCOME_CALLBACK = ["Callback_Requested"]
-
-
-# ==============================================================================
-# SECTION 2 — VOICE ACTIVITY DETECTION (VAD)
-# Controls when Gemini considers the user to be speaking.
-# This is SERVER-SIDE — runs on Google's infrastructure, not locally.
-#
-# CRITICAL for Indian languages: short affirmatives like हाँ, हो, हा, जी
-# are ~150–200ms bursts. Default settings swallow them entirely.
-# Use HIGH start sensitivity + LOW end sensitivity for these languages.
-# ==============================================================================
-
-GEMINI_VAD = GeminiVADParams(
-    # START_SENSITIVITY_HIGH  → fires on soft/short speech onset  ← recommended for Indian languages
-    # START_SENSITIVITY_LOW   → only fires on louder/longer onset
-    # START_SENSITIVITY_UNSPECIFIED → Google default
-    start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
-
-    # END_SENSITIVITY_LOW  → waits longer before closing turn (better for short words) ← recommended
-    # END_SENSITIVITY_HIGH → cuts turn quickly after speech stops
-    # END_SENSITIVITY_UNSPECIFIED → Google default
-    end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
-
-    # Milliseconds of audio BEFORE detected onset to include in the turn.
-    # Default: ~500ms. Lower for short words (200ms), higher for noisy environments (400ms).
-    prefix_padding_ms=200,
-
-    # Milliseconds of silence after speech before turn is considered complete.
-    # Default: ~600ms. Lower = snappier but may cut off slow speakers.
-    silence_duration_ms=400,
-
-    # Set disabled=True to turn off VAD entirely and drive turn-taking manually.
-    # disabled=None,
-)
-
-
-# ==============================================================================
-# SECTION 3 — GOODBYE HANGUP MARKERS
-# When the bot says any of these phrases, the system waits ~2s then hangs up.
-# This is a FALLBACK — the bot should call end_call() tool first.
-# Add the last line(s) of each goodbye scenario here.
-#
-# Rules:
-#   - Use substrings, not full sentences (more robust to minor paraphrasing)
-#   - Add both Devanagari and romanized versions for reliability
-#   - Do NOT add mid-conversation phrases or you'll get early hangups
-# ==============================================================================
-
-GOODBYE_HANGUP_MARKERS = (
-    # NOT INTERESTED goodbye
-    "आपका दिन शुभ हो",
-    "din shubh ho",
-
-    # BUSY / CALLBACK goodbye
-    "सटीक समय बता दीजिए",
-
-    # BROCHURE SENT goodbye
-    "मैं अभी भेज देती हूँ",
-    "abhi bhej deti hun",
-
-    # WRONG REQUIREMENT goodbye
-    "ज़रूरत नोट कर ली",
-    "जरूरत नोट कर ली",
-
-    # Add your own below:
-    # "your goodbye phrase here",
-)
-
-
-# ==============================================================================
-# SECTION 4 — BOOTSTRAP MESSAGE
-# This fires the moment the call connects. It's a synthetic "user" message
-# that instructs Gemini to say the opening line.
-#
-# Google best practice: "Include information about the user to have Live API
-# personalize that greeting."
-#
-# Keep it short and directive — tell Gemini exactly what one thing to say,
-# then stop. Do NOT ask it to do the whole call here.
-# ==============================================================================
-
-def build_bootstrap_messages(ctx: LeadContext) -> list[dict]:
-    """
-    Fires once on call connect. Tells Gemini to say only the opening line.
-    ctx is populated from the POST /start body:
-      ctx.lead_name  → "Rahul"
-      ctx.lead_phone → "+919123866924"
-      ctx.lead_city  → "Pune"
-    """
-    lead_name = ctx.lead_name
-    return [
-        {
-            "role": "user",
-            "content": (
-                f"The call has just connected. {lead_name} has answered. "
-                f"Execute Rule 1 from your conversational rules: say ONLY "
-                f"the Rule 1 opening sentence, addressing {lead_name} by name, "
-                f"in a warm voice — then stop and wait for their response. "
-                f"Do not say anything else."
-            ),
-        }
-    ]
-
-
-# ==============================================================================
-# SECTION 5 — SYSTEM INSTRUCTION
-# The main prompt. Follows Google's recommended structure:
-#   1. Agent Persona
-#   2. Language instruction
-#   3. Conversational Rules (one-time steps → loop → tool calls)
-#   4. Special situations
-#   5. Handling unclear input
-#   6. Domain facts / knowledge base
-#   7. Guardrails
-#   8. Call ending rules
-#
-# Google best practice: "Separate each agent into a distinct SI."
-# Google best practice: "Use the word 'unmistakably' to guide precision."
-# Google best practice: "Specify tool calls within a flow in distinct sentences."
-#
-# IMPORTANT: system_instruction stays in LiveConnectConfig, NOT in the context
-# window — so it is NOT evicted by context window compression. Put stable
-# facts and rules here. Dynamic per-call data goes in build_bootstrap_messages().
-# ==============================================================================
-
-def build_system_instruction(ctx: LeadContext) -> str:
-    """
-    Returns the system instruction string for this call.
-    ctx values can be interpolated for personalization.
-    This is set once at session connect — changing mid-call has no effect.
-    """
-    lead_name = ctx.lead_name
-
-    return f"""
-# AUDIO PROFILE: [Agent Name]
-## "[Campaign / Product Name]"
-
-## THE SCENE
-# Describe the setting and emotional tone. This shapes Gemini's vocal delivery.
-# Example: "[Agent] is in a warm, professional office on a calm weekday morning.
-# She is placing a friendly outbound call to {lead_name} about [topic].
-# Tone: helpful and low-pressure — a trusted advisor, not a pushy closer."
-
-[REPLACE: describe the scene and emotional tone here]
-
-### DIRECTOR'S NOTES
-# How should the agent sound? Give vocal direction as if briefing a voice actor.
-# Example: Style: Warm, confident, unhurried. Light fillers are fine ("हाँ", "अच्छा").
-# Pace: Moderate; a small breath between sentences.
-
-[REPLACE: vocal direction here]
-
----
-
-## AGENT PERSONA
-# Who is the agent? Name, role, what they're calling about.
-# If you want a specific accent, specify the output language here too.
-# Example: "Your name is Diya. You are a relationship manager at XYZ Corp,
-# calling {lead_name} about a 2 BHK flat in Bhukum, Pune."
-
-[REPLACE: agent persona here]
-
-## LANGUAGE
-# Google best practice: include this exact pattern for non-English languages.
-# Replace OUTPUT_LANGUAGE with your language name.
-RESPOND IN [OUTPUT_LANGUAGE]. YOU MUST RESPOND UNMISTAKABLY IN [OUTPUT_LANGUAGE].
-[Add any code-switching rules, e.g. "Loanwords like OK/WhatsApp are fine but full sentences must be in [language]."]
-
----
-
-## CONVERSATIONAL RULES
-# Google best practice: "Put rules in the order you expect the model to follow.
-# Delineate between one-time elements and conversational loops."
-# Google best practice: "Specify tool calls in distinct sentences."
-
-**Rule 1 — Opening (one-time):**
-# The very first thing the agent says. Should be a single short sentence.
-# End with a question that requires a response before proceeding.
-# Example: "नमस्ते, क्या {lead_name} जी से बात हो रही है?"
-[REPLACE: opening line here]
-Wait for their response before proceeding to Rule 2.
-
-**Rule 2 — Introduction (one-time, only after Rule 1 confirmed):**
-# Introduce the agent and reason for calling. One sentence. Then pause.
-[REPLACE: introduction line here]
-
-**Rule 3 — Qualifying question (one-time, only after Rule 2 confirmed):**
-# A single open question to establish intent/interest.
-[REPLACE: qualifying question here]
-Ask one question — then stop and wait.
-
-**Rule 4 — Conversational loop (repeat as needed):**
-# The main body of the call. List the topics the agent can cover.
-# Remind: one question at a time, never two questions in one breath.
-Topics to cover: [REPLACE: list your topics — e.g. location, pricing, features, timeline]
-One question at a time. Listen first, then respond.
-
-**Rule 5 — Closing pitch (when caller seems satisfied):**
-# A soft, low-pressure suggestion toward the desired outcome.
-# Example: site visit, demo booking, callback scheduling.
-[REPLACE: closing pitch here]
-If they say no, do not repeat the same question — move on respectfully.
-
----
-
-## SPECIAL SITUATIONS
-# Handle these explicitly so Gemini doesn't improvise on edge cases.
-# Google best practice: "If x happens, do y — provide specific examples."
-
-**BUSY:**
-[REPLACE: what to say when caller says they're busy — ask for a specific callback time]
-
-**NOT INTERESTED:**
-[REPLACE: graceful goodbye — warm, no pressure, thank them for their time]
-
-**CALLBACK REQUEST:**
-[REPLACE: confirm a specific time — "सटीक समय बता दीजिए" style]
-
-**BROCHURE / INFO REQUEST:**
-[REPLACE: confirm WhatsApp/email and promise to send]
-
-**WRONG REQUIREMENT:**
-[REPLACE: acknowledge, note their requirement, polite goodbye]
-
-**TRUST / "WHERE DID YOU GET MY NUMBER":**
-[REPLACE: explain data source, restate agent identity, invite questions]
-
-**AUDIO ISSUE (ONE-TIME ONLY — maximum once per call):**
-First time only: briefly mention the line is unclear and ask them to speak louder.
-After that, never mention audio/network again — use HANDLING UNCLEAR INPUT instead.
-Do not end the call due to audio issues.
-
----
-
-## HANDLING UNCLEAR INPUT
-# What to do when VAD fires but transcription is ambiguous or very short.
-# Google best practice: never go silent — always say the next sentence.
-
-RULES (non-negotiable):
-- Never go silent — always say the next sentence.
-- Never repeat the audio issue line after the first time.
-- Never respond entirely in English — stay in [OUTPUT_LANGUAGE].
-- Never loop the same question more than twice — assume and move forward.
-
-RESPONSE GUIDE:
-1. Short affirmatives ("हाँ", "जी", "yes", "ok", "hmm", "ठीक"): treat as green light — proceed.
-2. Garbled / partial: make a gentle assumption, rephrase the last question simply.
-3. Complete silence after bot speaks: soft nudge ("सुन पा रहे हैं?"), then one question.
-
----
-
-## KNOWLEDGE BASE / DOMAIN FACTS
-# List ONLY verified facts. Gemini will hallucinate if not grounded here.
-# Google best practice: "Provide starting commands and information."
-# Do NOT include anything you're not 100% sure about.
-
-[REPLACE: paste your product/service facts here as bullet points]
-# Example:
-# - Product: 2 BHK apartments, 768–816 sq ft
-# - Location: Bhukum, Paud Road, near Bharat Petrol Pump
-# - Possession: Late 2027
-# - Distances: Hinjawadi IT Park ~20 min
-
-If you don't know a detail, say:
-"मैं एक्ज़ैक्ट डिटेल चेक करके पाँच मिनट में वापस कॉल करती हूँ।"
-Never fabricate facts.
-
----
-
-## GUARDRAILS
-# Hard rules. Use "unmistakably" for the most critical ones.
-# Google best practice: "Provide specific examples of what not to do."
-
-- One question at a time — unmistakably never ask two questions in one breath.
-- Listen first, respond second.
-- [REPLACE: add your domain-specific guardrails]
-- If caller says "no" to something, do not ask the same question again.
-- Never go silent mid-call — always have the next sentence ready.
-- Audio issue line: maximum once per call.
-- If the last user turn is ambiguous or one word — clarify before ending the call.
-
----
-
-## CALL ENDING (goodbye + end_call tool)
-# Google best practice: "Specify tool calls in distinct sentences."
-# The end_call tool is defined in call_limits.py and registered in bot_sts.py.
-
-When terminal conditions are met: first speak the matching goodbye line warmly,
-then IMMEDIATELY call end_call once. Do not call it mid-conversation.
-Do not mention CRM or saving data.
-
-END the call ONLY when:
-(1) The last CLEARLY UNDERSTOOD user turn matches a terminal case:
-    Not_Interested = explicit property/product refusal (not just "no more questions")
-    Busy = caller explicitly says they can't talk now
-    Callback = caller gave a specific time to call back
-    Wrong_Requirement = caller needs something outside your scope
-(2) At least 4–5 meaningful caller turns have occurred.
-(3) This turn is delivering the matching goodbye — don't repeat a goodbye already said.
-
-DO NOT end when:
-- Last turn is ambiguous, one word, or STT glitch
-- Caller asked a question or requested info
-- You just asked "any more questions?" and got a short "no" → suggest closing action instead
-- Any doubt — ask one clarifying question first
-
-When in doubt: keep talking. A slightly long call is better than a wrong hangup.
-
-## CALL METADATA (internal — do not read aloud)
-- Callee: {ctx.lead_phone!r}
-- City: {ctx.lead_city!r}
-"""
-# =============================================================================
-# GEMINI LIVE — COMPLETE SETTINGS REFERENCE
-# Pipecat 1.1.0 + google-genai
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# GeminiVADParams
-# Controls server-side Voice Activity Detection (runs on Google's servers, not local)
-# Usage: vad=GeminiVADParams(...) inside GeminiLiveLLMService.Settings
-# -----------------------------------------------------------------------------
-#
-# disabled: bool | None
-#   Set True to turn off Gemini's VAD entirely. You'd then need to drive
-#   turn-taking manually. Default: None (VAD on)
-#
-# start_sensitivity: StartSensitivity | None
-#   How aggressively Gemini detects the START of speech.
-#   START_SENSITIVITY_HIGH  → fires on soft/short sounds like "हा", "हो", "हाँ"  ← use this
-#   START_SENSITIVITY_LOW   → only fires on louder, longer speech onset
-#   START_SENSITIVITY_UNSPECIFIED → Google default (somewhere in between)
-#
-# end_sensitivity: EndSensitivity | None
-#   How aggressively Gemini detects the END of speech (turn boundary).
-#   END_SENSITIVITY_HIGH → cuts the turn quickly after speech stops
-#   END_SENSITIVITY_LOW  → waits longer before closing the turn (better for short words) ← use this
-#   END_SENSITIVITY_UNSPECIFIED → Google default
-#
-# prefix_padding_ms: int | None
-#   Milliseconds of audio BEFORE detected speech onset to include in the turn.
-#   Higher = captures lead-in sounds but eats short words if set too high.
-#   Default Google value is ~500ms. Recommended for short Hindi/Marathi words: 200ms
-#
-# silence_duration_ms: int | None
-#   Milliseconds of silence after speech before the turn is considered complete.
-#   Lower = snappier response but may cut off slow speakers.
-#   Default Google value is ~600ms. Recommended: 400ms
-#
-# RECOMMENDED CONFIG FOR SHORT HINDI/MARATHI AFFIRMATIVES (हा, हो, हाँ, जी):
-# from google.genai.types import StartSensitivity, EndSensitivity
-# GEMINI_VAD = GeminiVADParams(
-#     start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
-#     end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
-#     prefix_padding_ms=200,
-#     silence_duration_ms=400,
-# )
-
-# -----------------------------------------------------------------------------
-# GeminiLiveLLMService.Settings
-# Top-level Pipecat wrapper settings — passed at service init time
-# -----------------------------------------------------------------------------
-#
-# model: str
-#   Gemini model to use.
-#   "models/gemini-3.1-flash-live-preview"  ← current fast model
-#   "models/gemini-2.0-flash-live-001"      ← stable alias if available
-#
-# temperature: float
-#   Randomness of responses. 0.0 = deterministic, 1.0 = creative.
-#   Recommended for sales scripts: 0.4–0.6
-#
-# max_tokens: int
-#   Max output tokens per turn. Keep reasonable to avoid runaway responses.
-#
-# top_p: float
-#   Nucleus sampling. Controls diversity. 0.9 is a safe default.
-#
-# top_k: int
-#   Top-k sampling. Limits token selection pool per step.
-#
-# frequency_penalty: float
-#   Penalizes repeating the same tokens. Helps avoid repetitive filler phrases.
-#
-# presence_penalty: float
-#   Penalizes tokens already used anywhere in context. Encourages topic variety.
-#
-# seed: int
-#   Fixed seed for reproducible outputs. Useful for testing, not production.
-#
-# voice: str
-#   TTS voice name.
-#   Hindi voices:   "Sulafat", "Aoede", "Charon", "Fenrir", "Kore", "Puck"
-#   Test voices at: https://cloud.google.com/text-to-speech/docs/voices
-#
-# language: Language | str
-#   Language for STT transcription and TTS generation.
-#   Language.HI_IN  → Hindi
-#   Language.MR_IN  → Marathi
-#   Pass as pipecat Language enum or raw string "hi-IN", "mr-IN"
-#
-# modalities: GeminiModalities
-#   What output types Gemini returns. For STS: AUDIO only.
-#   GeminiModalities.AUDIO
-#   GeminiModalities.TEXT
-#   GeminiModalities.AUDIO_AND_TEXT  ← useful for debugging (logs what Gemini says)
-#
-# media_resolution: GeminiMediaResolution
-#   Only relevant if sending images/video. Ignore for audio-only STS.
-#
-# vad: GeminiVADParams | None
-#   See GeminiVADParams section above.
-#   Set to None to disable VAD entirely.
-#
-# context_window_compression: ContextWindowCompressionParams | dict
-#   Sliding window compression for long calls. When prompt tokens hit
-#   trigger_tokens, Google drops oldest turns and retains ~half.
-#   system_instruction is always preserved (it's on LiveConnectConfig).
-#   {"enabled": True, "trigger_tokens": 20000}  ← default in bot_sts.py
-#   Lower trigger_tokens = more aggressive compression = cheaper but less memory
-#
-# thinking: ThinkingConfig | dict
-#   Enables chain-of-thought reasoning before responding.
-#   Improves complex decisions (e.g. not-interested vs no-more-questions).
-#   COSTS LATENCY — not recommended for real-time STS unless response time > 2s is ok.
-#   {"thinking_budget": 1024}  ← token budget for thinking
-#
-# enable_affective_dialog: bool
-#   Gemini adapts its tone to the emotional content of user speech.
-#   Sounds frustrated → Diya softens. Sounds excited → Diya matches energy.
-#   Recommended: True for sales/support bots.
-#
-# proactivity: ProactivityConfig | dict
-#   Allows Gemini to speak unprompted — e.g. nudge after long silence.
-#   Complements the "don't go silent" guardrail in the system prompt.
-#   Check ProactivityConfig fields before enabling; behaviour can be surprising.
-#
-# filter_incomplete_user_turns: bool
-#   Filters turns where user started speaking but didn't complete a thought.
-#   Set False to let through very short turns like "हा", "जी", "यस".
-#   Recommended: False when using START_SENSITIVITY_HIGH
-#
-# user_turn_completion_config: UserTurnCompletionConfig
-#   Fine-grained control over when a user turn is considered "done".
-#   Interacts with VAD end_sensitivity. Check Pipecat source for fields.
-
-# -----------------------------------------------------------------------------
-# LiveConnectConfig — raw Google API fields
-# Not all are surfaced by Pipecat Settings; pass extras via settings.extra={}
-# -----------------------------------------------------------------------------
-#
-# session_resumption: SessionResumptionConfig
-#   Lets a session survive a WebSocket drop and resume mid-call.
-#   Useful for Indian mobile networks with frequent brief drops.
-#   Not yet in Pipecat Settings — would need custom _connect() override.
-#
-# safety_settings: list[SafetySetting]
-#   Adjust content safety thresholds per harm category.
-#   Useful if Gemini over-refuses on property/financial terms.
-#   Pass via settings.extra if not surfaced directly.
-#
-# explicit_vad_signal: bool
-#   If True, you drive VAD signals manually instead of letting Gemini do it.
-#   Only use if you're implementing your own turn detection.
-#
-# history_config: HistoryConfig
-#   Controls how conversation history is managed within the session.
-#
-# realtime_input_config: RealtimeInputConfig
-#   Low-level control over the realtime audio input stream.
-#   VAD params ultimately flow through here under the hood.`}
-                  </pre>
-                </div>
-              </section>
-
+                );
+              })}
             </div>
           )}
 
-          {activeTab === 'conversational' && (
-            <div className="space-y-8 animate-in fade-in duration-300">
-              <section>
-                <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  1. The Anatomy of a Robust Agent
+          {activeTab === 'model' && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              <div className="bg-primary/10 dark:bg-molten-primary/10 border-l-4 border-primary dark:border-molten-primary p-4 rounded-r-lg">
+                <h4 className="text-lg font-bold text-primary dark:text-molten-primary mb-1 flex items-center gap-2">
+                  <span className="material-symbols-outlined">tune</span>
+                  Model & VAD Settings
                 </h4>
-                <p className="mb-4 text-on-surface-variant dark:text-molten-text-muted leading-relaxed">
-                  Writing a conversational prompt is about directing a persona's <strong>emotional intelligence</strong> rather than hardcoding a rigid decision tree.
+                <p className="text-sm text-on-surface dark:text-molten-text">
+                  These are configured directly in the CMS <strong>Models</strong> tab, not generated by AI. The AI should suggest recommended values.
                 </p>
+              </div>
+
+              <div className="bg-surface-container-lowest dark:bg-[#141210] rounded-lg border border-outline-variant dark:border-[#2A345E] overflow-hidden">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="bg-surface dark:bg-[#1C1810] border-b border-outline-variant dark:border-[#2A345E]">
+                      <th className="px-4 py-3 font-bold text-on-surface-variant dark:text-molten-text-muted text-xs uppercase tracking-wide">Field</th>
+                      <th className="px-4 py-3 font-bold text-on-surface-variant dark:text-molten-text-muted text-xs uppercase tracking-wide">Default</th>
+                      <th className="px-4 py-3 font-bold text-on-surface-variant dark:text-molten-text-muted text-xs uppercase tracking-wide">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modelSettings.map((s, i) => (
+                      <tr key={s.field} className={`border-b border-outline-variant/50 dark:border-[#2A345E]/50 ${i % 2 === 0 ? '' : 'bg-surface dark:bg-[#1C1810]/50'}`}>
+                        <td className="px-4 py-3">
+                          <code className="text-xs bg-black/10 dark:bg-white/10 px-1.5 py-0.5 rounded font-bold">{s.field}</code>
+                          <div className="text-xs text-on-surface-variant dark:text-molten-text-muted mt-0.5">{s.label}</div>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-primary dark:text-molten-primary font-bold">{s.default}</td>
+                        <td className="px-4 py-3 text-xs text-on-surface-variant dark:text-molten-text-muted">{s.note}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <section>
+                <h4 className="text-lg font-bold mb-3 text-primary dark:text-molten-primary">Available Voices</h4>
+                <div className="flex flex-wrap gap-2">
+                  {['Aoede', 'Charon', 'Fenrir', 'Kore', 'Puck', 'Sulafat', 'Leda', 'Orus', 'Zephyr', 'Autonoe'].map(v => (
+                    <span key={v} className="px-3 py-1.5 bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-full text-sm font-medium">{v}</span>
+                  ))}
+                </div>
+                <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mt-2">Hindi recommendation: <strong>Sulafat</strong> (warm female), <strong>Aoede</strong> (neutral female). Test multiple voices \u2014 quality varies by language.</p>
+              </section>
+
+              <section>
+                <h4 className="text-lg font-bold mb-3 text-primary dark:text-molten-primary">Supported Languages</h4>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {[
+                    { code: 'hi-IN', name: 'Hindi' },
+                    { code: 'mr-IN', name: 'Marathi' },
+                    { code: 'en-IN', name: 'English (India)' },
+                    { code: 'en-US', name: 'English (US)' },
+                    { code: 'en-GB', name: 'English (UK)' },
+                    { code: 'ta-IN', name: 'Tamil' },
+                    { code: 'te-IN', name: 'Telugu' },
+                    { code: 'kn-IN', name: 'Kannada' },
+                    { code: 'bn-IN', name: 'Bengali' },
+                    { code: 'gu-IN', name: 'Gujarati' },
+                    { code: 'pa-IN', name: 'Punjabi' },
+                  ].map(l => (
+                    <div key={l.code} className="flex items-center gap-2 px-3 py-2 bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm">
+                      <code className="text-primary dark:text-molten-primary font-bold text-xs">{l.code}</code>
+                      <span className="text-on-surface-variant dark:text-molten-text-muted">{l.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section>
+                <h4 className="text-lg font-bold mb-3 text-primary dark:text-molten-primary">VAD Tuning Guide</h4>
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 text-sm">
+                  <p className="font-bold text-amber-700 dark:text-amber-300 mb-2">{'\u26A0\uFE0F'} Critical for Indian Languages</p>
+                  <p className="text-on-surface-variant dark:text-molten-text-muted mb-3">
+                    Short affirmatives like \u0939\u093e\u0901, \u0939\u094b, \u0939\u093e, \u091c\u0940 are ~150\u2013200ms bursts. Default settings swallow them entirely.
+                  </p>
+                  <div className="bg-black/50 p-3 rounded text-xs font-mono text-green-400">
+                    vad_start_sensitivity: HIGH  \u2190 fires on soft/short speech<br/>
+                    vad_end_sensitivity: LOW     \u2190 waits longer before closing turn<br/>
+                    vad_prefix_padding_ms: 200   \u2190 captures lead-in sounds<br/>
+                    vad_silence_duration_ms: 400  \u2190 snappy but captures short words
+                  </div>
+                </div>
+              </section>
+            </div>
+          )}
+
+          {activeTab === 'rules' && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              {/* Outcome Routing section */}
+              <div className="bg-primary/10 dark:bg-molten-primary/10 border-l-4 border-primary dark:border-molten-primary p-4 rounded-r-lg">
+                <h4 className="text-lg font-bold text-primary dark:text-molten-primary mb-1 flex items-center gap-2">
+                  <span className="material-symbols-outlined">rule</span>
+                  Outcome Routing & Normalization
+                </h4>
+                <p className="text-sm text-on-surface dark:text-molten-text">
+                  After the AI extracts <code>intent_status</code> from the transcript, two things happen in sequence:
+                  <strong> normalization rules</strong> correct the extraction, then <strong>outcome routing</strong> determines the lead state.
+                </p>
+              </div>
+
+              {/* Visual flow */}
+              <div className="bg-surface-container-lowest dark:bg-[#141210] rounded-lg border border-outline-variant dark:border-[#2A345E] p-6">
+                <h5 className="font-bold text-sm mb-4 text-on-surface dark:text-molten-text">Post-Call Pipeline Flow</h5>
+                <div className="flex flex-col sm:flex-row items-center gap-3 text-xs font-medium">
+                  {[
+                    { label: 'Call Ends', icon: 'call_end', color: 'bg-gray-500' },
+                    { label: 'Transcript', icon: 'description', color: 'bg-blue-500' },
+                    { label: 'LLM Extraction', icon: 'analytics', color: 'bg-purple-500' },
+                    { label: 'Normalization', icon: 'auto_fix_high', color: 'bg-amber-500' },
+                    { label: 'Outcome Routing', icon: 'route', color: 'bg-emerald-500' },
+                    { label: 'State Update', icon: 'check_circle', color: 'bg-green-500' },
+                  ].map((step, i) => (
+                    <React.Fragment key={step.label}>
+                      <div className={`${step.color} text-white px-3 py-2 rounded-lg flex items-center gap-1.5 shrink-0`}>
+                        <span className="material-symbols-outlined text-[16px]">{step.icon}</span>
+                        {step.label}
+                      </div>
+                      {i < 5 && <span className="material-symbols-outlined text-on-surface-variant dark:text-molten-text-muted text-[20px] rotate-90 sm:rotate-0">arrow_forward</span>}
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+
+              {/* Outcome Routing - Drag and Drop */}
+              <div className="bg-surface-container-lowest dark:bg-[#141210] rounded-lg border border-outline-variant dark:border-[#2A345E] p-5">
+                <h5 className="font-bold text-sm mb-2 text-on-surface dark:text-molten-text flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[18px] text-primary dark:text-molten-primary">drag_indicator</span>
+                  Outcome Routing (Drag & Drop in CMS)
+                </h5>
+                <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-4">
+                  After pasting the extraction schema, the CMS shows all <code>intent_status</code> enum values as draggable pills.
+                  The admin drags each value into one of three buckets. <strong>Every value must be in exactly one bucket.</strong>
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="rounded-lg border-2 border-emerald-500/30 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
+                      <h6 className="font-bold text-emerald-600 dark:text-emerald-400">Terminal</h6>
+                    </div>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-3">Lead \u2192 <strong>Completed</strong>. No more calls.</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {['Interested', 'Not_Interested', 'Wrong_Requirement'].map(v => (
+                        <span key={v} className="px-2 py-1 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 rounded text-xs font-medium">{v}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border-2 border-amber-500/30 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="w-3 h-3 rounded-full bg-amber-500"></span>
+                      <h6 className="font-bold text-amber-600 dark:text-amber-400">Retry</h6>
+                    </div>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-3">Lead \u2192 <strong>Pending</strong>, then Failed after max retries.</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {['Busy', 'Unknown'].map(v => (
+                        <span key={v} className="px-2 py-1 bg-amber-500/10 text-amber-700 dark:text-amber-300 rounded text-xs font-medium">{v}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border-2 border-blue-500/30 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="w-3 h-3 rounded-full bg-blue-500"></span>
+                      <h6 className="font-bold text-blue-600 dark:text-blue-400">Callback</h6>
+                    </div>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-3">Lead \u2192 <strong>Callback Scheduled</strong>.</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {['Callback_Requested', 'Early_Disconnect'].map(v => (
+                        <span key={v} className="px-2 py-1 bg-blue-500/10 text-blue-700 dark:text-blue-300 rounded text-xs font-medium">{v}</span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                    <p className="text-xs font-bold text-red-600 dark:text-red-400 mb-1">{'\u274C'} Unmapped Intent</p>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted">A value not in any bucket blocks saving</p>
+                  </div>
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                    <p className="text-xs font-bold text-red-600 dark:text-red-400 mb-1">{'\u274C'} Overlapping Buckets</p>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted">Same value in two buckets blocks saving</p>
+                  </div>
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                    <p className="text-xs font-bold text-red-600 dark:text-red-400 mb-1">{'\u274C'} Stale/Orphan Value</p>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted">Bucket value not in intent_status enum</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Normalization Rules */}
+              <div className="bg-surface-container-lowest dark:bg-[#141210] rounded-lg border border-outline-variant dark:border-[#2A345E] p-5">
+                <h5 className="font-bold text-sm mb-2 text-on-surface dark:text-molten-text flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[18px] text-purple-500">auto_fix_high</span>
+                  Normalization Rules (Post-call tab)
+                </h5>
+                <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-4">
+                  Deterministic corrections applied <strong>after</strong> AI extraction but <strong>before</strong> outcome bucketing.
+                  Encodes reliable domain logic to fix known LLM inconsistencies. Rules are applied in order.
+                </p>
+
+                <div className="mb-4">
+                  <h6 className="text-xs font-bold text-on-surface dark:text-molten-text mb-2 uppercase tracking-wide">Rule Shape</h6>
+                  <pre className="bg-black/50 p-3 rounded text-xs overflow-x-auto text-green-400 border border-outline-variant/30">
+{`{
+  "when": { "field": "callback_time", "truthy": true },
+  "and_intent_in": ["", "Unknown", "Busy"],
+  "set": { "intent_status": "Callback_Requested" }
+}`}
+                  </pre>
+                </div>
+
+                <div className="space-y-2">
+                  <h6 className="text-xs font-bold text-on-surface dark:text-molten-text uppercase tracking-wide">Rule Fields</h6>
+                  <ul className="space-y-2 text-xs">
+                    {[
+                      { key: 'when.field', desc: 'The extraction field to check (e.g. "callback_time", "site_visit_agreed")' },
+                      { key: 'when.truthy', desc: 'If true, fires when field is non-empty/non-null. If false, fires when empty/null.' },
+                      { key: 'when.eq', desc: 'Alternative to truthy \u2014 fires when field exactly equals this value.' },
+                      { key: 'and_intent_in', desc: 'Optional guard \u2014 only fires if current intent_status is in this list. Use "" for empty/missing.' },
+                      { key: 'set', desc: 'Key-value pairs to overwrite in extracted data. Use null to clear a field.' },
+                    ].map((item) => (
+                      <li key={item.key} className="flex items-start gap-2">
+                        <code className="bg-black/10 dark:bg-white/10 px-1.5 py-0.5 rounded font-bold text-primary dark:text-molten-primary shrink-0">{item.key}</code>
+                        <span className="text-on-surface-variant dark:text-molten-text-muted">{item.desc}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="mt-4">
+                  <h6 className="text-xs font-bold text-on-surface dark:text-molten-text mb-2 uppercase tracking-wide">Common Patterns</h6>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {[
+                      { trigger: 'callback_time is non-empty', action: 'Set intent to Callback_Requested', guard: 'Only if intent is Unknown/Busy/empty' },
+                      { trigger: 'site_visit_agreed is true', action: 'Set intent to Interested', guard: 'Only if intent is Unknown/empty' },
+                      { trigger: 'bhk_preference is non-empty', action: 'Set intent to Interested', guard: 'Only if intent is Wrong_Requirement/Unknown' },
+                      { trigger: 'location_preference is non-empty', action: 'Set intent to Interested', guard: 'Only if intent is Wrong_Requirement/Unknown' },
+                    ].map((p, i) => (
+                      <div key={i} className="bg-surface dark:bg-[#1C1810] rounded-lg p-3 border border-outline-variant/50 dark:border-[#2A345E]/50">
+                        <p className="text-xs font-bold text-on-surface dark:text-molten-text">{p.trigger}</p>
+                        <p className="text-xs text-emerald-600 dark:text-emerald-400">\u2192 {p.action}</p>
+                        <p className="text-xs text-on-surface-variant dark:text-molten-text-muted italic">{p.guard}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Extraction schema hard constraints */}
+              <div className="bg-surface-container-lowest dark:bg-[#141210] rounded-lg border border-outline-variant dark:border-[#2A345E] p-5">
+                <h5 className="font-bold text-sm mb-3 text-on-surface dark:text-molten-text">Extraction Schema Hard Constraints</h5>
+                <ul className="space-y-2 text-xs">
+                  {[
+                    { rule: 'mode must be "both"', detail: 'Always generates both a summary paragraph and structured field extraction' },
+                    { rule: 'intent_status field is mandatory', detail: 'Must be type "enum" with required: true and non-empty values array' },
+                    { rule: 'Valid field types', detail: '"string", "enum", "boolean", "datetime"' },
+                    { rule: 'Each field key must be unique', detail: 'No duplicate keys in the fields array' },
+                    { rule: 'summary_prompt is required', detail: 'Must be present when mode is "both" \u2014 guides the LLM summarization' },
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="material-symbols-outlined text-[14px] mt-0.5 text-primary dark:text-molten-primary shrink-0">check_circle</span>
+                      <div>
+                        <span className="font-bold text-on-surface dark:text-molten-text">{item.rule}</span>
+                        <span className="text-on-surface-variant dark:text-molten-text-muted ml-1">\u2014 {item.detail}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'design' && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              <div className="bg-primary/10 dark:bg-molten-primary/10 border-l-4 border-primary dark:border-molten-primary p-4 rounded-r-lg">
+                <h4 className="text-lg font-bold text-primary dark:text-molten-primary mb-1 flex items-center gap-2">
+                  <span className="material-symbols-outlined">forum</span>
+                  Conversational Design Tips
+                </h4>
+                <p className="text-sm text-on-surface dark:text-molten-text">
+                  Writing a conversational prompt is about directing a persona&#39;s <strong>emotional intelligence</strong> rather than hardcoding a rigid decision tree.
+                </p>
+              </div>
+
+              {/* Core principles */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[
+                  { title: 'One Question, One Breath', desc: 'Never ask two questions simultaneously. Humans answer only the last question heard. Stop completely after asking.', icon: 'mic' },
+                  { title: 'Code-Switching is Natural', desc: 'Force "Hinglish" or "Marathlish". Pure textbook languages sound robotic. Mix English nouns into regional sentences.', icon: 'translate' },
+                  { title: 'Listen First', desc: 'Validate the caller\'s input before pushing the next step. Acknowledgment builds trust.', icon: 'hearing' },
+                  { title: 'Emotional Intelligence', desc: 'Map out reactions to caller tones: if stressed \u2192 soften; if excited \u2192 match energy; if annoyed \u2192 exit gracefully.', icon: 'psychology' },
+                ].map(p => (
+                  <div key={p.title} className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
+                    <h5 className="font-bold mb-2 flex items-center gap-2">
+                      <span className="material-symbols-outlined text-primary dark:text-molten-primary text-[18px]">{p.icon}</span>
+                      {p.title}
+                    </h5>
+                    <p className="text-sm text-on-surface-variant dark:text-molten-text-muted">{p.desc}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* System instruction sections */}
+              <section>
+                <h4 className="text-lg font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
+                  System Instruction Architecture
+                </h4>
+                <div className="space-y-3">
+                  {[
+                    { section: 'THE SCENE & PERSONA', color: 'blue', desc: 'Define mood, setting, and vocal delivery. Who is the agent?', example: '"Diya is in a warm, professional office. Tone: helpful advisor, zero pressure."' },
+                    { section: 'EMOTIONAL INTELLIGENCE', color: 'purple', desc: 'Tell the model exactly how to react to specific caller energy.', example: 'Hesitation \u2192 "Do NOT push. Soften voice." Budget Worry \u2192 "Never quote price."' },
+                    { section: 'CONVERSATIONAL RULES', color: 'green', desc: 'Numbered rules (Rule 1-5) from opening to closing pitch.', example: 'Rule 1: "Say exactly \'Hello... {lead_name} ji?\' and wait."' },
+                    { section: 'GUARDRAILS', color: 'red', desc: 'Hard boundaries. Use "unmistakably" for critical ones.', example: '"Never fabricate facts." "One question at a time \u2014 unmistakably."' },
+                    { section: 'CALL ENDING', color: 'amber', desc: 'Goodbye protocol + end_call tool invocation.', example: '"First speak goodbye warmly, then IMMEDIATELY call end_call once."' },
+                  ].map(s => {
+                    const c = colorMap[s.color] || colorMap.blue;
+                    return (
+                      <div key={s.section} className={`bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-l-4 ${c.border} border-outline-variant dark:border-[#2A345E]`}>
+                        <h5 className={`font-bold text-sm ${c.text} mb-1`}>{s.section}</h5>
+                        <p className="text-sm text-on-surface-variant dark:text-molten-text-muted mb-2">{s.desc}</p>
+                        <p className="text-xs font-mono bg-black/5 dark:bg-white/5 px-2 py-1 rounded">{s.example}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* Bootstrap + Hangup */}
+              <section>
+                <h4 className="text-lg font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
+                  Session Bootstrapping & Hangup
+                </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
-                    <h5 className="font-bold mb-2">One Question, One Breath</h5>
-                    <p className="text-sm">Never ask two questions simultaneously. Humans answer only the last question heard. Stop completely after asking.</p>
-                  </div>
-                  <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
-                    <h5 className="font-bold mb-2">Code-Switching is Natural</h5>
-                    <p className="text-sm">Force "Hinglish" or "Marathlish". Pure textbook languages sound robotic. Mixing English nouns into regional sentences builds trust.</p>
-                  </div>
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  2. Building the System Instruction
-                </h4>
-                <p className="mb-4 text-sm">The <code>build_system_instruction()</code> method must return the master prompt string. Structure it carefully:</p>
-                
-                <div className="space-y-4">
-                  <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-l-4 border-l-blue-500 border-outline-variant dark:border-[#2A345E]">
-                    <h5 className="font-bold text-sm text-blue-500 mb-1">THE SCENE & PERSONA</h5>
-                    <p className="text-sm text-on-surface-variant dark:text-molten-text-muted mb-2">Define mood and setting to shape vocal delivery.</p>
-                    <p className="text-xs font-mono">"You are Aryan, a relationship manager in a calm Pune office. Mood: warm professional, zero pressure. Speak like a senior colleague."</p>
-                  </div>
-
-                  <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-l-4 border-l-purple-500 border-outline-variant dark:border-[#2A345E]">
-                    <h5 className="font-bold text-sm text-purple-500 mb-1">EMOTIONAL INTELLIGENCE (Crucial)</h5>
-                    <p className="text-sm text-on-surface-variant dark:text-molten-text-muted mb-2">Tell the model exactly how to react to specific caller energy.</p>
-                    <ul className="text-xs font-mono space-y-1">
-                      <li>• Hesitation: "Do NOT push. Soften voice. 'No rush at all, just sharing info.'"</li>
-                      <li>• Budget Worry: "Never quote a price. Empathise first: 'Pricing context matters, let's meet at site.'"</li>
-                      <li>• Annoyance: "Stay calm. Acknowledge and exit gracefully."</li>
-                    </ul>
-                  </div>
-
-                  <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-l-4 border-l-green-500 border-outline-variant dark:border-[#2A345E]">
-                    <h5 className="font-bold text-sm text-green-500 mb-1">CALL FLOW & GUARDRAILS</h5>
-                    <p className="text-sm text-on-surface-variant dark:text-molten-text-muted mb-2">Provide numbered rules (Rule 1: Greeting, Rule 2: Intro, etc.) and explicit guardrails.</p>
-                    <ul className="text-xs font-mono space-y-1">
-                      <li>• "Rule 1: Say exactly 'Hello... [Name] ji bol rahe hain?' and wait."</li>
-                      <li>• "Guardrail: Never fabricate facts outside the Knowledge Base."</li>
-                      <li>• "Guardrail: If audio is unclear, guess softly and move forward. Never go silent."</li>
-                    </ul>
-                  </div>
-                </div>
-              </section>
-
-              <section>
-                <h4 className="text-xl font-bold mb-4 text-primary dark:text-molten-primary border-b border-outline-variant dark:border-[#2A345E] pb-2">
-                  3. Session Bootstrapping & Hangup
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <h5 className="font-bold text-lg mb-2">Bootstrap Messages</h5>
-                    <p className="text-sm mb-2 text-on-surface-variant dark:text-molten-text-muted">A synthetic first message injected upon connection to force the AI to speak immediately and consistently.</p>
+                    <h5 className="font-bold text-sm mb-2 flex items-center gap-2">
+                      <span className="material-symbols-outlined text-emerald-500 text-[18px]">play_circle</span>
+                      Bootstrap Messages
+                    </h5>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-2">Synthetic first message injected on connect. Forces Gemini to speak immediately.</p>
                     <pre className="bg-black/50 p-3 rounded text-xs overflow-x-auto text-green-400 border border-outline-variant/30">
-{`def build_bootstrap_messages(ctx):
-  return [{
-    "role": "user",
-    "content": f"The call has just connected. {ctx.lead_name} answered. Execute Rule 1: say ONLY 'Hello... {ctx.lead_name} ji?' in a warm voice. Stop completely."
-  }]`}
+{`[{
+  "role": "user",
+  "content": "The call has just connected.
+  {lead_name} answered. Execute Rule 1:
+  say ONLY 'Hello... {lead_name} ji?'
+  in a warm voice. Stop completely."
+}]`}
                     </pre>
                   </div>
-                  <div>
-                    <h5 className="font-bold text-lg mb-2">Call End Protocol</h5>
-                    <p className="text-sm mb-2 text-on-surface-variant dark:text-molten-text-muted">The model must invoke the <code>end_call</code> tool to hang up. Teach it to say a goodbye first.</p>
-                    <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-3 rounded text-xs font-mono border border-outline-variant/30 space-y-2">
-                      <p>"When terminal conditions are met: first speak the matching goodbye warmly, then IMMEDIATELY call end_call once."</p>
-                      <p className="text-red-400">GOODBYE_HANGUP_MARKERS (Fallback)</p>
-                      <p>Always populate the <code>GOODBYE_HANGUP_MARKERS</code> constant in Python with substrings like "aapka din shubh ho" so the server hangs up if the bot forgets the tool.</p>
+                  <div className="bg-surface-container-lowest dark:bg-[#1C1810] p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
+                    <h5 className="font-bold text-sm mb-2 flex items-center gap-2">
+                      <span className="material-symbols-outlined text-rose-500 text-[18px]">call_end</span>
+                      Goodbye Hangup Markers
+                    </h5>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-2">Safety fallback \u2014 auto-hangup if bot forgets end_call tool.</p>
+                    <div className="text-xs space-y-2">
+                      <p className="font-bold">Rules:</p>
+                      <ul className="list-disc pl-4 space-y-1 text-on-surface-variant dark:text-molten-text-muted">
+                        <li>Use substrings, not full sentences</li>
+                        <li>Add both Devanagari + romanized versions</li>
+                        <li>Never add mid-conversation phrases</li>
+                        <li>Cover all goodbye scenarios</li>
+                      </ul>
                     </div>
                   </div>
                 </div>
               </section>
 
+              {/* Template variables */}
+              <section>
+                <h4 className="text-lg font-bold mb-3 text-primary dark:text-molten-primary">Template Variables</h4>
+                <div className="bg-surface-container-lowest dark:bg-[#141210] rounded-lg border border-outline-variant dark:border-[#2A345E] overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="bg-surface dark:bg-[#1C1810] border-b border-outline-variant dark:border-[#2A345E]">
+                        <th className="px-4 py-2 text-xs font-bold uppercase tracking-wide text-on-surface-variant dark:text-molten-text-muted">Variable</th>
+                        <th className="px-4 py-2 text-xs font-bold uppercase tracking-wide text-on-surface-variant dark:text-molten-text-muted">Description</th>
+                        <th className="px-4 py-2 text-xs font-bold uppercase tracking-wide text-on-surface-variant dark:text-molten-text-muted">Example</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-sm">
+                      <tr className="border-b border-outline-variant/50 dark:border-[#2A345E]/50">
+                        <td className="px-4 py-2 font-mono text-primary dark:text-molten-primary font-bold text-xs">{'{lead_name}'}</td>
+                        <td className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted">Caller&#39;s name</td>
+                        <td className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted">&quot;Rahul&quot;</td>
+                      </tr>
+                      <tr className="border-b border-outline-variant/50 dark:border-[#2A345E]/50">
+                        <td className="px-4 py-2 font-mono text-primary dark:text-molten-primary font-bold text-xs">{'{lead_phone}'}</td>
+                        <td className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted">Caller&#39;s E.164 phone</td>
+                        <td className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted">&quot;+919876543210&quot;</td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 font-mono text-primary dark:text-molten-primary font-bold text-xs">{'{lead_city}'}</td>
+                        <td className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted">Caller&#39;s city</td>
+                        <td className="px-4 py-2 text-on-surface-variant dark:text-molten-text-muted">&quot;Pune&quot;</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             </div>
           )}
 
