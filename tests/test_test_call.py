@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from test_call import (
+from scripts.test_call import (
     SANDBOX_BOT_CASCADED,
     SANDBOX_BOT_STS,
     SANDBOX_CAMPAIGN_ID,

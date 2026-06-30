@@ -4,6 +4,239 @@ import adminApi from '../../api/admin';
 import './AdminScriptConfigs.css';
 import ScriptingGuideModal from '../../components/shared/ScriptingGuideModal';
 
+const parseConfigJSON = (str, fallback) => {
+  try {
+    return JSON.parse(str || 'null') || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+/** Returns mapping validation state for save gating and inline warnings. */
+function getOutcomeMappingState(editingConfig) {
+  const schema = parseConfigJSON(editingConfig?.extraction_schema, {});
+  const mode = schema?.mode;
+  if (mode === 'summary') {
+    return { isSummaryMode: true, valid: true, unmapped: [], orphans: [], allOutcomes: [] };
+  }
+
+  let allOutcomes = [];
+  if (schema?.fields) {
+    const intentField = schema.fields.find((f) => f.key === 'intent_status');
+    if (intentField && Array.isArray(intentField.values)) {
+      allOutcomes = intentField.values;
+    }
+  }
+
+  const terminal = parseConfigJSON(editingConfig?.outcome_terminal, []);
+  const callback = parseConfigJSON(editingConfig?.outcome_callback, []);
+  const retry = parseConfigJSON(editingConfig?.outcome_retry, []);
+  const mapped = new Set([...terminal, ...callback, ...retry]);
+  const unmapped = allOutcomes.filter((o) => !mapped.has(o));
+  const intentSet = new Set(allOutcomes);
+  const orphans = [...mapped].filter((o) => allOutcomes.length > 0 && !intentSet.has(o));
+
+  return {
+    isSummaryMode: false,
+    valid: allOutcomes.length === 0 ? true : unmapped.length === 0 && orphans.length === 0,
+    unmapped,
+    orphans,
+    allOutcomes,
+    terminal,
+    callback,
+    retry,
+  };
+}
+
+const OutcomeDragDropEditor = ({ editingConfig, setEditingConfig }) => {
+  const [showRawJson, setShowRawJson] = useState(false);
+  const mapping = getOutcomeMappingState(editingConfig);
+  const { isSummaryMode, unmapped, orphans, allOutcomes, terminal, callback, retry } = mapping;
+
+  if (isSummaryMode) {
+    return (
+      <div className="mt-6 p-4 rounded-lg border border-outline-variant dark:border-[#2A345E] bg-surface-container-lowest dark:bg-[#1A1A24] text-xs text-on-surface-variant dark:text-molten-text-muted">
+        Summary-mode schemas do not use outcome buckets. Switch extraction schema to <code>fields</code> or <code>both</code> to map intents.
+      </div>
+    );
+  }
+
+  if (allOutcomes.length === 0) {
+    return (
+      <div className="mt-6 p-4 rounded-lg border border-dashed border-outline-variant dark:border-[#2A345E] bg-surface-container-lowest dark:bg-[#1A1A24] text-xs text-on-surface-variant dark:text-molten-text-muted">
+        Define an <code>intent_status</code> enum in the Extraction Schema first — its values will appear here as draggable pills.
+      </div>
+    );
+  }
+
+  const applyBuckets = (newTerminal, newCallback, newRetry) => {
+    setEditingConfig({
+      ...editingConfig,
+      outcome_terminal: JSON.stringify(newTerminal, null, 2),
+      outcome_callback: JSON.stringify(newCallback, null, 2),
+      outcome_retry: JSON.stringify(newRetry, null, 2),
+    });
+  };
+
+  const handleDragStart = (e, item, source) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ item, source }));
+  };
+
+  const handleDrop = (e, targetZone) => {
+    e.preventDefault();
+    const data = e.dataTransfer.getData('text/plain');
+    if (!data) return;
+    try {
+      const { item, source } = JSON.parse(data);
+      if (source === targetZone) return;
+
+      let newTerminal = [...terminal];
+      let newCallback = [...callback];
+      let newRetry = [...retry];
+
+      if (source === 'terminal') newTerminal = newTerminal.filter((i) => i !== item);
+      if (source === 'callback') newCallback = newCallback.filter((i) => i !== item);
+      if (source === 'retry') newRetry = newRetry.filter((i) => i !== item);
+
+      if (targetZone === 'unmapped') {
+        applyBuckets(newTerminal, newCallback, newRetry);
+        return;
+      }
+
+      if (targetZone === 'terminal' && !newTerminal.includes(item)) newTerminal.push(item);
+      if (targetZone === 'callback' && !newCallback.includes(item)) newCallback.push(item);
+      if (targetZone === 'retry' && !newRetry.includes(item)) newRetry.push(item);
+
+      applyBuckets(newTerminal, newCallback, newRetry);
+    } catch {
+      /* ignore malformed drag payload */
+    }
+  };
+
+  const allowDrop = (e) => e.preventDefault();
+
+  const Pill = ({ item, source, stale = false }) => (
+    <div
+      draggable
+      onDragStart={(e) => handleDragStart(e, item, source)}
+      title={stale ? 'Stale — not in current extraction schema' : undefined}
+      className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold cursor-grab active:cursor-grabbing border m-1 shadow-sm ${
+        stale
+          ? 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/40'
+          : 'bg-surface-container-high dark:bg-[#2A345E] text-on-surface dark:text-molten-text border-outline-variant/50'
+      }`}
+    >
+      <span className="material-symbols-outlined text-[14px] mr-1 opacity-50">drag_indicator</span>
+      {item}
+      {stale && <span className="ml-1 text-[10px] uppercase tracking-wide opacity-80">stale</span>}
+    </div>
+  );
+
+  const renderZone = (items, source) =>
+    items.map((o) => (
+      <Pill key={`${source}-${o}`} item={o} source={source} stale={!allOutcomes.includes(o)} />
+    ));
+
+  return (
+    <div className="mt-6 border border-outline-variant dark:border-[#2A345E] rounded-lg p-4 bg-surface-container-lowest dark:bg-[#1A1A24]">
+      <h3 className="font-bold text-sm mb-2 text-on-surface dark:text-molten-text">Outcome Routing (Drag & Drop)</h3>
+      <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-4 leading-relaxed">
+        <strong>What they are:</strong> map each <code>intent_status</code> value to what the dialer does after the call.<br />
+        <strong>Terminal</strong> → Completed · <strong>Callback</strong> → Callback Scheduled · <strong>Retry</strong> → Pending (then Failed after max attempts).<br />
+        <strong>Golden rule:</strong> every intent must appear in exactly one bucket. Drag to move (not copy).
+      </p>
+
+      {(unmapped.length > 0 || orphans.length > 0) && (
+        <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-900 dark:text-amber-200">
+          {unmapped.length > 0 && <div>Unmapped intents: {unmapped.join(', ')}</div>}
+          {orphans.length > 0 && <div>Stale bucket values (remove or re-add to schema): {orphans.join(', ')}</div>}
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row gap-4">
+        <div
+          className="flex-1 min-h-[120px] p-3 rounded-lg border-2 border-dashed border-outline-variant dark:border-[#2A345E] bg-surface dark:bg-[#141210] transition-colors hover:border-primary/50"
+          onDragOver={allowDrop}
+          onDrop={(e) => handleDrop(e, 'unmapped')}
+        >
+          <div className="text-xs font-bold mb-2 text-on-surface-variant dark:text-molten-text-muted flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-gray-400"></span> Unmapped Outcomes
+          </div>
+          {unmapped.length === 0 && (
+            <div className="text-xs text-emerald-600 dark:text-emerald-400 font-medium italic p-2">All outcomes mapped ✓</div>
+          )}
+          <div className="flex flex-wrap">{unmapped.map((o) => <Pill key={o} item={o} source="unmapped" />)}</div>
+        </div>
+
+        <div className="flex-[2] flex flex-col gap-3">
+          <div
+            className="p-3 rounded-lg border border-outline-variant dark:border-[#2A345E] bg-surface dark:bg-[#141210] transition-colors hover:border-emerald-500/50"
+            onDragOver={allowDrop}
+            onDrop={(e) => handleDrop(e, 'terminal')}
+          >
+            <div className="text-xs font-bold mb-2 text-on-surface-variant dark:text-molten-text-muted flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-emerald-500"></span> Terminal → Completed
+            </div>
+            <div className="flex flex-wrap min-h-[32px]">{renderZone(terminal, 'terminal')}</div>
+          </div>
+          <div
+            className="p-3 rounded-lg border border-outline-variant dark:border-[#2A345E] bg-surface dark:bg-[#141210] transition-colors hover:border-blue-500/50"
+            onDragOver={allowDrop}
+            onDrop={(e) => handleDrop(e, 'callback')}
+          >
+            <div className="text-xs font-bold mb-2 text-on-surface-variant dark:text-molten-text-muted flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-blue-500"></span> Callback → Callback Scheduled
+            </div>
+            <div className="flex flex-wrap min-h-[32px]">{renderZone(callback, 'callback')}</div>
+          </div>
+          <div
+            className="p-3 rounded-lg border border-outline-variant dark:border-[#2A345E] bg-surface dark:bg-[#141210] transition-colors hover:border-amber-500/50"
+            onDragOver={allowDrop}
+            onDrop={(e) => handleDrop(e, 'retry')}
+          >
+            <div className="text-xs font-bold mb-2 text-on-surface-variant dark:text-molten-text-muted flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-amber-500"></span> Retry → Pending → Failed
+            </div>
+            <div className="flex flex-wrap min-h-[32px]">{renderZone(retry, 'retry')}</div>
+          </div>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setShowRawJson((v) => !v)}
+        className="mt-4 text-xs font-semibold text-primary dark:text-molten-primary hover:underline"
+      >
+        {showRawJson ? 'Hide raw JSON buckets' : 'View / edit raw JSON buckets'}
+      </button>
+      {showRawJson && (
+        <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mt-2 mb-3">
+          Untouched bucket fields save as null and fall back to system defaults. Once you drag a pill or edit raw JSON, the field is saved explicitly — use [] only if you intend an empty bucket.
+        </p>
+      )}
+      {showRawJson && (
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+          {[
+            ['outcome_terminal', 'Terminal'],
+            ['outcome_callback', 'Callback'],
+            ['outcome_retry', 'Retry'],
+          ].map(([field, label]) => (
+            <div key={field}>
+              <label className="block text-xs font-bold mb-1 text-on-surface dark:text-molten-text">{label}</label>
+              <textarea
+                rows={5}
+                className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-2 py-2 text-xs text-on-surface dark:text-molten-text font-mono"
+                value={editingConfig[field] || ''}
+                onChange={(e) => setEditingConfig({ ...editingConfig, [field]: e.target.value })}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function AdminScriptConfigs() {
   const [configs, setConfigs] = useState([]);
   const [clients, setClients] = useState([]);
@@ -155,6 +388,16 @@ export default function AdminScriptConfigs() {
 
   const saveConfig = async () => {
     setSaveError('');
+
+    const mapping = getOutcomeMappingState(editingConfig);
+    if (!mapping.isSummaryMode && mapping.allOutcomes.length > 0 && !mapping.valid) {
+      const parts = [];
+      if (mapping.unmapped.length) parts.push(`unmapped: ${mapping.unmapped.join(', ')}`);
+      if (mapping.orphans.length) parts.push(`stale: ${mapping.orphans.join(', ')}`);
+      setSaveError(`Map every intent_status value before saving (${parts.join('; ')})`);
+      setActiveTab('post-call');
+      return;
+    }
     
     // Parse JSON strings back to objects
     let payload = { ...editingConfig };
@@ -164,11 +407,25 @@ export default function AdminScriptConfigs() {
       'outcome_event_map', 'outcome_terminal', 'outcome_retry', 'outcome_callback'
     ];
     
+    const fieldTabMap = {
+      'extraction_schema': 'post-call',
+      'lead_schema': 'advanced',
+      'bootstrap_messages_json': 'prompts',
+      'goodbye_markers': 'advanced',
+      'cascade_live_tools': 'advanced',
+      'normalization_rules': 'post-call',
+      'outcome_event_map': 'post-call',
+      'outcome_terminal': 'post-call',
+      'outcome_retry': 'post-call',
+      'outcome_callback': 'post-call'
+    };
+    
     for (const field of jsonFields) {
       try {
         payload[field] = JSON.parse(editingConfig[field] || 'null');
       } catch (e) {
         setSaveError(`Invalid JSON in field: ${field}`);
+        setActiveTab(fieldTabMap[field] || 'general');
         return;
       }
     }
@@ -195,11 +452,15 @@ export default function AdminScriptConfigs() {
       fetchConfigs();
     } catch (error) {
       const detail = error.response?.data?.detail;
+      let errorMsg = typeof detail === 'string' ? detail : (error.message || 'Failed to save config.');
       if (Array.isArray(detail)) {
-        setSaveError(detail.map(d => `${d.loc.join('.')}: ${d.msg}`).join(', '));
-      } else {
-        setSaveError(typeof detail === 'string' ? detail : (error.message || 'Failed to save config.'));
+        errorMsg = detail.map(d => `${d.loc.join('.')}: ${d.msg}`).join(', ');
       }
+      
+      if (errorMsg.toLowerCase().includes('unmapped') || errorMsg.toLowerCase().includes('intent_status')) {
+        setActiveTab('post-call');
+      }
+      setSaveError(errorMsg);
     }
   };
 
@@ -309,6 +570,14 @@ export default function AdminScriptConfigs() {
       setTestCallError(typeof detail === 'string' ? detail : (error.message || 'Failed to dispatch test call.'));
     }
   };
+
+  const outcomeMappingState = editingConfig ? getOutcomeMappingState(editingConfig) : null;
+  const saveBlockedByOutcomes =
+    activeTab === 'post-call'
+    && outcomeMappingState
+    && !outcomeMappingState.isSummaryMode
+    && outcomeMappingState.allOutcomes.length > 0
+    && !outcomeMappingState.valid;
 
   return (
     <>
@@ -472,18 +741,24 @@ export default function AdminScriptConfigs() {
                 </button>
               </div>
               <div className="flex items-center gap-3 shrink-0">
-                {saveError && <span className="text-arctic-error dark:text-molten-error text-sm max-w-[200px] md:max-w-[300px] truncate" title={saveError}>{saveError}</span>}
+                {saveError && !saveError.includes('intent_status') && !saveError.includes('unmapped') && !saveError.includes('stale') && <span className="text-arctic-error dark:text-molten-error text-sm max-w-[200px] md:max-w-[300px] truncate" title={saveError}>{saveError}</span>}
                 <button onClick={() => setIsEditorOpen(false)} className="px-4 py-2 border border-outline-variant dark:border-[#2A345E] rounded-lg text-on-surface dark:text-molten-text hover:bg-surface-container-low dark:hover:bg-[#2A345E]">Cancel</button>
                 {editingConfig.id && (
                   <button onClick={() => setIsTestCallOpen(true)} className="px-4 py-2 border border-primary dark:border-molten-primary text-primary dark:text-molten-primary rounded-lg font-bold hover:bg-primary/10 dark:hover:bg-molten-primary/10 transition-colors">
                     Test Call
                   </button>
                 )}
-                <button onClick={saveConfig} className="px-4 py-2 bg-primary dark:bg-molten-primary text-white dark:text-molten-bg rounded-lg">Save</button>
+                <button
+                  onClick={saveConfig}
+                  disabled={saveBlockedByOutcomes}
+                  className="px-4 py-2 bg-primary dark:bg-molten-primary text-white dark:text-molten-bg rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save
+                </button>
               </div>
             </div>
             
-            <div className="tabs-header px-6 bg-surface dark:bg-[#1C1810]">
+            <div className="tabs-header shrink-0 px-6 bg-surface dark:bg-[#1C1810]">
               {['general', 'prompts', 'models', 'post-call', 'advanced'].map(tab => (
                 <button key={tab} className={`tab-btn ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
                   {tab.charAt(0).toUpperCase() + tab.slice(1).replace('-', ' ')}
@@ -609,16 +884,28 @@ export default function AdminScriptConfigs() {
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Extraction Schema (JSON Schema)</label>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-2">
+                      Must include an <code>intent_status</code> enum in <code>fields</code> (unless using summary-only mode). Those values drive the outcome mapper below.
+                    </p>
                     <textarea rows="10" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.extraction_schema || ''} onChange={e => handleEditorChange('extraction_schema', e.target.value)}></textarea>
                   </div>
                   <div>
                     <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Normalization Rules (JSON)</label>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-2">Deterministic corrections applied after AI extraction, before bucketing. Encodes reliable domain logic.</p>
                     <textarea rows="6" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.normalization_rules || ''} onChange={e => handleEditorChange('normalization_rules', e.target.value)}></textarea>
                   </div>
                   <div>
                     <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Outcome Event Map (JSON)</label>
+                    <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-2">Maps an <code>intent_status</code> value to the webhook event name fired to the client's automation (e.g. n8n). Example: <code>{"{"}"Interested": "lead_qualified"{"}"}</code></p>
                     <textarea rows="4" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.outcome_event_map || ''} onChange={e => handleEditorChange('outcome_event_map', e.target.value)}></textarea>
                   </div>
+                  
+                  <OutcomeDragDropEditor editingConfig={editingConfig} setEditingConfig={setEditingConfig} />
+                  {saveError && (
+                    <div className="mt-4 p-3 bg-error-container/20 border border-arctic-error/30 dark:border-molten-error/30 rounded-lg text-arctic-error dark:text-molten-error text-sm font-medium w-full">
+                      {saveError}
+                    </div>
+                  )}
                 </div>
               )}
               

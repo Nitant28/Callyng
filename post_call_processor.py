@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -16,40 +15,27 @@ from db import postgres as pg_db
 from n8n_webhook import fire_event_webhook, outcome_to_event
 from script_runtime import outcome_buckets
 
-_DEBUG_LOG_PATH = "/home/satyam/aakashvani/.cursor/debug-d77155.log"
+# Cap retry delay after near-instant drops so leads are not stuck waiting hours.
+_SHORT_CALL_SECONDS = 90
+_SHORT_CALL_RETRY_CAP_MIN = 1
+EARLY_DISCONNECT_MAX_SECONDS = 30
 
 
-def _agent_log(
-    location: str,
-    message: str,
-    data: dict,
+def apply_early_disconnect_policy(
     *,
-    hypothesis_id: str,
-    run_id: str = "pre-fix",
-) -> None:
-    # #region agent log
-    try:
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "d77155",
-                        "runId": run_id,
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(time.time() * 1000),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-    # #endregion
-
-
+    intent_status: str,
+    duration_seconds: int,
+    callee_hangup: bool,
+) -> str | None:
+    """Map short callee hangups with no intent to Early_Disconnect."""
+    if not callee_hangup:
+        return None
+    if duration_seconds >= EARLY_DISCONNECT_MAX_SECONDS:
+        return None
+    weak = not (intent_status or "").strip() or intent_status.casefold() == "unknown"
+    if weak:
+        return "Early_Disconnect"
+    return None
 
 
 def _parse_callback_time(raw: Any) -> datetime | None:
@@ -97,34 +83,28 @@ def _lead_transition(
     now = datetime.now(timezone.utc)
     terminal_set, retry_set, callback_set = outcome_buckets(post_call_snapshot)
 
-    if outcome.casefold() == "dnc":
-        return "dnc", None, None, False
-
     if _matches_bucket(outcome, terminal_set):
         return "completed", None, None, True
 
     if _matches_bucket(outcome, callback_set):
         cb = _parse_callback_time(extraction.get("callback_time"))
-        next_at = cb or (now + timedelta(hours=4))
+        if cb:
+            next_at = cb
+        elif outcome == "Early_Disconnect":
+            next_at = now + timedelta(minutes=retry_delay_minutes)
+        else:
+            next_at = now + timedelta(hours=4)
         return "callback_scheduled", next_at, next_at, True
 
     if _matches_bucket(outcome, retry_set):
         if attempts < max_attempts:
-            return (
-                "pending",
-                now + timedelta(minutes=retry_delay_minutes),
-                None,
-                False,
-            )
+            next_at = now + timedelta(minutes=retry_delay_minutes)
+            return "callback_scheduled", next_at, next_at, False
         return "failed", None, None, True
 
     if attempts < max_attempts:
-        return (
-            "pending",
-            now + timedelta(minutes=retry_delay_minutes),
-            None,
-            False,
-        )
+        next_at = now + timedelta(minutes=retry_delay_minutes)
+        return "callback_scheduled", next_at, next_at, False
     return "failed", None, None, True
 
 
@@ -142,8 +122,8 @@ def resolve_post_call_transition(
     post_call_snapshot: dict | None = None,
 ) -> tuple[str, datetime | None, datetime | None, bool]:
     """Apply post-call state machine using locked lead status as source of truth."""
-    terminal_set, _, _ = outcome_buckets(post_call_snapshot)
-    terminal_outcome = _matches_bucket(outcome, terminal_set) or outcome.casefold() == "dnc"
+    terminal_set, _, callback_set = outcome_buckets(post_call_snapshot)
+    terminal_outcome = _matches_bucket(outcome, terminal_set)
 
     new_status, next_at, sched_cb, fire_webhook = _lead_transition(
         outcome,
@@ -159,11 +139,19 @@ def resolve_post_call_transition(
         next_at = lead_next_attempt_at
         sched_cb = lead_scheduled_callback_at
     elif callee_hangup and not terminal_outcome:
-        now = datetime.now(timezone.utc)
-        next_at = now + timedelta(minutes=retry_delay_minutes)
-        new_status = "callback_scheduled"
-        sched_cb = next_at
-        fire_webhook = True
+        if _matches_bucket(outcome, callback_set):
+            pass  # keep callback_scheduled from _lead_transition
+        elif attempts >= max_attempts:
+            new_status = "failed"
+            next_at = None
+            sched_cb = None
+            fire_webhook = True
+        else:
+            now = datetime.now(timezone.utc)
+            next_at = now + timedelta(minutes=retry_delay_minutes)
+            new_status = "callback_scheduled"
+            sched_cb = next_at
+            fire_webhook = False
 
     return new_status, next_at, sched_cb, fire_webhook
 
@@ -236,14 +224,6 @@ async def recover_abandoned_session(
             hangup_json = {}
     hangup_source = str((hangup_json or {}).get("hangup_source") or "").strip().lower()
     if hangup_source.replace("_", " ") in ("api", "api request"):
-        # #region agent log
-        _agent_log(
-            "post_call_processor.py:recover_skip_api",
-            "recover skipped for API-initiated hangup",
-            {"session_call_id": session_call_id, "hangup_source": hangup_source},
-            hypothesis_id="A",
-        )
-        # #endregion
         logger.debug(
             "recover_abandoned_session skip: API hangup session={}",
             session_call_id,
@@ -301,28 +281,14 @@ async def recover_abandoned_session(
             parsed, err, _ = await extract_post_call(transcript, extraction_schema=schema)
             if parsed and not err:
                 extraction = normalize_post_call_extraction(
-                    parsed, normalization_rules=norm_rules, transcript=transcript
+                    parsed,
+                    normalization_rules=norm_rules,
                 )
                 extraction_error = None
             else:
                 extraction_error = err or "ws_recovery_extraction_failed"
         except Exception as exc:
             extraction_error = f"ws_recovery_error: {exc}"
-
-    # #region agent log
-    _agent_log(
-        "post_call_processor.py:recover_extraction",
-        "recover extraction result",
-        {
-            "session_call_id": session_call_id,
-            "intent_status": (extraction or {}).get("intent_status"),
-            "callback_time": (extraction or {}).get("callback_time"),
-            "transcript_turns": len(transcript),
-            "extraction_error": extraction_error,
-        },
-        hypothesis_id="B",
-    )
-    # #endregion
 
     try:
         await _run_campaign_post_call(
@@ -374,25 +340,10 @@ async def process_post_call(
         return
 
     credits_per_minute = float(bot_config["credits_per_minute"])
-    _MIN_BILLABLE_DURATION_S = 15
-    billed_minutes = math.ceil(duration_seconds / 60) if duration_seconds >= _MIN_BILLABLE_DURATION_S else 0
+    _MIN_BILLABLE_DURATION_S = 0
+    billed_minutes = math.ceil(duration_seconds / 60) if duration_seconds > _MIN_BILLABLE_DURATION_S else 0
     credits_charged = billed_minutes * credits_per_minute
 
-    outcome = (extraction_json or {}).get("intent_status", "Unknown")
-    # #region agent log
-    _agent_log(
-        "post_call_processor.py:process_post_call",
-        "post_call starting",
-        {
-            "session_call_id": session_call_id,
-            "lead_id": str(lead_id),
-            "lead_status_before": lead.get("status"),
-            "outcome": outcome,
-            "callback_time": (extraction_json or {}).get("callback_time"),
-        },
-        hypothesis_id="C",
-    )
-    # #endregion
     attempts = int(lead.get("attempts") or 0)
     max_attempts = int(lead.get("max_attempts") or campaign.get("max_attempts") or 3)
     retry_delay = int(campaign.get("retry_delay_minutes") or 120)
@@ -414,6 +365,17 @@ async def process_post_call(
         elif isinstance(raw_hangup, dict):
             hangup_json = raw_hangup
     callee_hangup = hangup_json.get("hangup_source") == "callee"
+
+    outcome = (extraction_json or {}).get("intent_status", "Unknown")
+    policy_outcome = apply_early_disconnect_policy(
+        intent_status=outcome,
+        duration_seconds=duration_seconds,
+        callee_hangup=callee_hangup,
+    )
+    if policy_outcome:
+        outcome = policy_outcome
+        extraction_json = dict(extraction_json or {})
+        extraction_json["intent_status"] = policy_outcome
 
     fire_webhook = False
     applied = False
@@ -450,20 +412,17 @@ async def process_post_call(
                     lead_id,
                     session_call_id,
                 )
-                # #region agent log
-                _agent_log(
-                    "post_call_processor.py:process_post_call_skip",
-                    "post_call skipped inactive lead",
-                    {
-                        "session_call_id": session_call_id,
-                        "lead_id": str(lead_id),
-                        "outcome": outcome,
-                    },
-                    hypothesis_id="C",
-                )
-                # #endregion
             else:
                 from_status = active["status"]
+                
+                lead_next_at = active.get("next_attempt_at")
+                if isinstance(lead_next_at, str):
+                    lead_next_at = datetime.fromisoformat(lead_next_at)
+                    
+                lead_sched_cb = active.get("scheduled_callback_at")
+                if isinstance(lead_sched_cb, str):
+                    lead_sched_cb = datetime.fromisoformat(lead_sched_cb)
+
                 new_status, next_at, sched_cb, fire_webhook = resolve_post_call_transition(
                     from_status,
                     outcome,
@@ -471,35 +430,26 @@ async def process_post_call(
                     max_attempts,
                     retry_delay,
                     extraction_json or {},
-                    lead_next_attempt_at=active.get("next_attempt_at"),
-                    lead_scheduled_callback_at=active.get("scheduled_callback_at"),
+                    lead_next_attempt_at=lead_next_at,
+                    lead_scheduled_callback_at=lead_sched_cb,
                     callee_hangup=callee_hangup,
                     post_call_snapshot=post_call_snapshot,
                 )
-                # #region agent log
-                _agent_log(
-                    "post_call_processor.py:process_post_call_transition",
-                    "post_call transition resolved",
-                    {
-                        "session_call_id": session_call_id,
-                        "from_status": from_status,
-                        "new_status": new_status,
-                        "outcome": outcome,
-                        "next_attempt_at": next_at.isoformat() if next_at else None,
-                        "scheduled_callback_at": sched_cb.isoformat() if sched_cb else None,
-                    },
-                    hypothesis_id="C",
-                )
-                # #endregion
                 if (
-                    new_status == "pending"
+                    new_status == "callback_scheduled"
                     and next_at is not None
-                    and duration_seconds < 90
-                    and _matches_bucket(outcome, retry_set)
+                    and duration_seconds < _SHORT_CALL_SECONDS
+                    and (
+                        _matches_bucket(outcome, retry_set)
+                        or outcome == "Early_Disconnect"
+                    )
                 ):
-                    cap_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+                    cap_at = datetime.now(timezone.utc) + timedelta(
+                        minutes=_SHORT_CALL_RETRY_CAP_MIN
+                    )
                     if next_at > cap_at:
                         next_at = cap_at
+                        sched_cb = cap_at
                 updated = await pg_db.update_lead_post_call(
                     conn,
                     lead_id,

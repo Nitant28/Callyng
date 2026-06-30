@@ -67,7 +67,7 @@ _END_SENSITIVITY = {
 
 DEFAULT_OUTCOME_TERMINAL = ["Interested", "Not_Interested"]
 DEFAULT_OUTCOME_RETRY = ["Busy", "Unknown", "Wrong_Requirement"]
-DEFAULT_OUTCOME_CALLBACK = ["Callback_Requested"]
+DEFAULT_OUTCOME_CALLBACK = ["Callback_Requested", "Early_Disconnect"]
 
 
 @dataclass(frozen=True)

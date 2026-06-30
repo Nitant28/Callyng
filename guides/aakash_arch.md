@@ -252,8 +252,8 @@ CREATE TABLE campaigns (
     -- Terminal: Interested or Not_Interested
     failed_leads         INTEGER DEFAULT 0,
     -- Attempts exhausted, no qualified outcome
-    dnc_leads            INTEGER DEFAULT 0,
-    -- Do Not Call: opted out during call or flagged on upload
+                INTEGER DEFAULT 0,
+    -- : opted out during call or flagged on upload
 
     -- ── EXTRACTION OVERRIDE ───────────────────────────────────
     extraction_schema_override JSONB DEFAULT NULL,
@@ -278,7 +278,7 @@ CREATE TABLE campaigns (
 --     → calling              (dialer claims with FOR UPDATE SKIP LOCKED)
 --     → completed            (terminal outcome received)
 --     → failed               (attempts >= max_attempts, no terminal outcome)
---     → dnc                  (opted out during call, or TRAI/internal DND)
+--     →                   (opted out during call, or TRAI/internal )
 --     → callback_scheduled   (lead asked to be called back at specific time)
 --   callback_scheduled
 --     → calling              (when next_attempt_at <= NOW())
@@ -317,7 +317,7 @@ CREATE TABLE leads (
     -- ── DIALER STATE MACHINE ──────────────────────────────────
     status                  VARCHAR(50) DEFAULT 'pending'
                                 CHECK (status IN ('pending', 'calling', 'completed',
-                                                  'failed', 'dnc', 'callback_scheduled')),
+                                                  'failed', '', 'callback_scheduled')),
 
     attempts                INTEGER DEFAULT 0,
     -- How many call attempts have been made. Incremented in post_call_processor.
@@ -975,7 +975,7 @@ class LeadContext:
                     │              ├─────────────► failed (terminal)
                     │              │               (attempts >= max_attempts)
                     │              │
-                    │              ├─────────────► dnc (terminal)
+                    │              ├─────────────►  (terminal)
                     │              │               (opted out / TRAI)
                     │              │
                     │              └─────────────► callback_scheduled
@@ -985,7 +985,7 @@ class LeadContext:
                     │                                   ▼
                     │                               calling
                     │
-                    └──────────────────────────────(dnc on upload if on DND list)
+                    └──────────────────────────────( on upload if on  list)
 ```
 
 ### Who moves leads between states
@@ -996,20 +996,20 @@ class LeadContext:
 | `pending` → `calling` | Dialer (FOR UPDATE SKIP LOCKED) | Lead claimed for dial |
 | `calling` → `completed` | post_call_processor | Terminal outcome (Interested / Not_Interested) |
 | `calling` → `failed` | post_call_processor | attempts >= max_attempts |
-| `calling` → `dnc` | post_call_processor | Lead opted out ("mujhe call mat karo") |
+| `calling` → `` | post_call_processor | Lead opted out ("mujhe call mat karo") |
 | `calling` → `callback_scheduled` | post_call_processor | Callback_Requested outcome |
 | `calling` → `pending` | post_call_processor | Busy/Unknown, attempts < max_attempts (retry) |
 | `callback_scheduled` → `calling` | Dialer | next_attempt_at <= NOW() |
 
-### DNC — Do Not Call
+###  — 
 
-A lead is marked `dnc` in two situations:
+A lead is marked `` in two situations:
 
-1. **During a call** — the person explicitly opts out ("remove my number", "DNC pe daal do", "mujhe call mat karo"). The extraction finds this signal. `post_call_processor` sets `status='dnc'`. The dialer's partial index excludes `dnc` status — this lead is never touched again.
+1. **During a call** — the person explicitly opts out ("remove my number", " pe daal do", "mujhe call mat karo"). The extraction finds this signal. `post_call_processor` sets `status=''`. The dialer's partial index excludes `` status — this lead is never touched again.
 
-2. **On upload** — phone numbers on the internal opt-out list (accumulated from previous campaigns) are marked `dnc` immediately. No call is ever placed. The `campaigns.dnc_leads` counter shows how many were filtered — useful for auditing lead list quality.
+2. **On upload** — phone numbers on the internal opt-out list (accumulated from previous campaigns) are marked `` immediately. No call is ever placed. The `campaigns.` counter shows how many were filtered — useful for auditing lead list quality.
 
-TRAI compliance: 9am–9pm IST window enforced in `compliance.py` before every dial. Numbers on the national DND registry should not be uploaded. DPDP Act 2023: store only necessary data, support deletion-on-request.
+TRAI compliance: 9am–9pm IST window enforced in `compliance.py` before every dial. Numbers on the national  registry should not be uploaded. DPDP Act 2023: store only necessary data, support deletion-on-request.
 
 ### Retry logic in post_call_processor
 
@@ -1049,8 +1049,8 @@ async def process_post_call(lead, campaign, bot_config, duration_seconds):
             new_status = "failed"
             fire_webhook = True  # fire lead_failed event
 
-    elif outcome == "dnc":
-        new_status = "dnc"
+    elif outcome == "":
+        new_status = ""
         fire_webhook = False
 
     # 5. Write everything in one transaction
@@ -1354,7 +1354,7 @@ Layer 1 (nginx — blocks at network level):
 location /internal/ {
     allow 127.0.0.1;
     deny all;
-    proxy_pass http://fastapi:7860;
+    proxy_pass http:/fastapi:7860;
 }
 ```
 
@@ -1428,7 +1428,7 @@ pool = await asyncpg.create_pool(
 ```
 Status: RUNNING    Budget: 47.3 / 500 credits used
 
-Pending: 234  |  Live: 8  |  Callbacks: 12  |  Completed: 156  |  Failed: 3  |  DNC: 2
+Pending: 234  |  Live: 8  |  Callbacks: 12  |  Completed: 156  |  Failed: 3  |  : 2
 ```
 
 **Live calls panel** (within campaign view):
@@ -1674,29 +1674,29 @@ The managed service model means we build everything before the client touches an
 ## 14. File layout (Phase 2 target)
 
 ```
-aakashvani/
+aakashvani
 ├── server.py                  FastAPI app, lifespan, route wiring
-├── api/
+├── api
 │   ├── auth.py                Bearer token → client_id dependency (hash + DB lookup)
-│   └── routes/
+│   └── routes
 │       ├── campaigns.py       /api/campaigns and /api/campaigns/{id}/*
 │       ├── leads.py           /api/campaigns/{id}/leads/upload
 │       ├── calls.py           /api/calls, /api/calls/{session_call_id}
 │       ├── credits.py         /api/credits
 │       └── internal.py        /internal/* (ADMIN_API_KEY required)
-├── dialer/
+├── dialer
 │   ├── concurrent_dialer.py   asyncio dialer loop, FOR UPDATE SKIP LOCKED
 │   └── cost_guard.py          check_budget(), deduct_credits()
-├── lead_upload/
+├── lead_upload
 │   ├── parser.py              CSV/Excel → pd.DataFrame
 │   ├── validator.py           validate_dataframe(df, lead_schema) → list[str]
 │   └── normaliser.py          normalise_phone(raw) → E.164 via phonenumbers
-├── db/
+├── db
 │   ├── postgres.py            asyncpg pool + all query functions
-│   ├── schema/
+│   ├── schema
 │   │   ├── 001_initial.sql    full schema (this document §2)
 │   │   └── 002_compat.sql     session_call_id, usage_* additions
-│   └── seed/
+│   └── seed
 │       └── dev_tenant.sql     one clients row + bot_configs for local dev
 ├── post_call_processor.py     outcome → lead status + counters + credits + webhook
 ├── post_call_extract.py       Groq/Gemini extraction + normalizer
@@ -1707,14 +1707,14 @@ aakashvani/
 ├── call_limits.py             MAX_CALL_MINUTES watchdog + end_call coordinator
 ├── lead_context.py            LeadContext dataclass (name, phone, city, metadata)
 ├── pricing_sts.py             cost_usd from token counts (internal margin)
-├── compliance.py              9am–9pm IST check, internal DND list
+├── compliance.py              9am–9pm IST check, internal  list
 ├── bot_sts.py                 Gemini Live pipeline
 ├── bot_cascade.py             Sarvam+Groq+Cartesia pipeline
-├── sts_scripts/
+├── sts_scripts
 │   ├── pyramid_mr.py          Marathi real estate bot (Diya)
 │   ├── pyramid_hi.py          Hindi real estate bot (Diya)
 │   └── ...
-├── cascade_scripts/
+├── cascade_scripts
 │   └── prowave.py             Cascaded bot example
 └── justfile                   dev commands (dev, tunnel, call, health, sync)
 ```
@@ -1725,7 +1725,7 @@ aakashvani/
 
 ```bash
 # ── DATABASE ──────────────────────────────────────────────────
-DATABASE_URL=postgresql://aakashvani:PASSWORD@localhost:5432/aakashvani
+DATABASE_URL=postgresql:/aakashvani:PASSWORD@localhost:5432/aakashvani
 
 # ── ADMIN ─────────────────────────────────────────────────────
 ADMIN_API_KEY=<random-256-bit-secret>
@@ -1742,7 +1742,7 @@ CASCADE_SCRIPT=prowave
 # ── TELEPHONY ─────────────────────────────────────────────────
 PLIVO_AUTH_ID=
 PLIVO_AUTH_TOKEN=
-NGROK_URL=https://<reserved>.ngrok-free.dev
+NGROK_URL=https:/<reserved>.ngrok-free.dev
 
 # ── AI PROVIDERS ──────────────────────────────────────────────
 GOOGLE_API_KEY=           # Gemini Live (STS route)
@@ -1762,7 +1762,7 @@ GEMINI_CONTEXT_COMPRESSION=1
 GEMINI_CWC_TRIGGER_TOKENS=20000
 
 # ── WEBHOOK ───────────────────────────────────────────────────
-N8N_WEBHOOK_URL=http://localhost:5678/webhook/...
+N8N_WEBHOOK_URL=http:/localhost:5678/webhook/...
 # Phase 0 single-client fallback. Phase 2: per-client from webhook_configs table.
 
 # ── PAYMENTS (Phase 3) ────────────────────────────────────────
@@ -1817,12 +1817,12 @@ Two independent mechanisms exist. Both are compatible with `<Stream>` (no confli
 
 **Mechanism A — REST Record API (chosen):**
 ```
-POST https://api.plivo.com/v1/Account/{auth_id}/Call/{call_uuid}/Record/
+POST https:/api.plivo.com/v1/Account/{auth_id}/Call/{call_uuid}/Record
 Auth: Basic (PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN)
 Body: {
   "time_limit": 3600,
   "file_format": "mp3",
-  "callback_url": "https://{host}/plivo-recording?session_call_id={call_id}",
+  "callback_url": "https:/{host}/plivo-recording?session_call_id={call_id}",
   "callback_method": "POST"
 }
 Response: 202 { "message": "async api spawned", "api_id": "..." }
@@ -1831,8 +1831,8 @@ Response: 202 { "message": "async api spawned", "api_id": "..." }
 **Mechanism B — `<Record>` XML element (rejected):**
 ```xml
 <Response>
-  <Record action="https://..." maxLength="3600" redirect="false" />
-  <Stream bidirectional="true" keepCallAlive="true">wss://...</Stream>
+  <Record action="https:/..." maxLength="3600" redirect="false" />
+  <Stream bidirectional="true" keepCallAlive="true">wss:/...</Stream>
 </Response>
 ```
 Works technically, but `<Record>` is a sequential/blocking XML element designed for IVR-style "press 1 to stop" recording. Mixing it with `<Stream>` is undocumented territory. The REST API is the officially supported path for recording calls that use audio streaming.
@@ -1876,7 +1876,7 @@ Works technically, but `<Record>` is a sequential/blocking XML element designed 
 │ GET /api/calls/{session_call_id}/recording │
 │  → look up call_logs.recording_url         │
 │  → generate presigned R2 URL (1hr expiry)  │
-│  → return { "url": "https://..." }         │
+│  → return { "url": "https:/..." }         │
 └─────────────────────────────────────────┘
 ```
 
@@ -1901,7 +1901,7 @@ Security: Validate `X-Plivo-Signature-V3` header on the webhook.
 
 ```python
 # RecordUrl from the callback, e.g.:
-# https://media.plivo.com/v1/Account/{auth_id}/Recording/{recording_id}.mp3
+# https:/media.plivo.com/v1/Account/{auth_id}/Recording/{recording_id}.mp3
 
 async with session.get(record_url, auth=aiohttp.BasicAuth(auth_id, auth_token)) as resp:
     if resp.status == 200:
@@ -1919,7 +1919,7 @@ from botocore.config import Config
 def _r2_client():
     return boto3.client(
         "s3",
-        endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+        endpoint_url=f"https:/{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
         aws_access_key_id=R2_ACCESS_KEY_ID,
         aws_secret_access_key=R2_SECRET_ACCESS_KEY,
         config=Config(signature_version="s3v4"),
@@ -1988,7 +1988,7 @@ async def start_plivo_recording(
 ) -> bool:
     """Fire Plivo Record API. Returns True if accepted (202)."""
     auth_id, auth_token = _plivo_auth()
-    url = f"https://api.plivo.com/v1/Account/{auth_id}/Call/{call_uuid}/Record/"
+    url = f"https:/api.plivo.com/v1/Account/{auth_id}/Call/{call_uuid}/Record/"
     base = public_telephony_base_url(host)
     callback = f"{base}/plivo-recording?session_call_id={urllib.parse.quote(session_call_id)}"
     data = {

@@ -215,8 +215,8 @@ just change-lead-status $KEY $CID $LID callback_scheduled
 # Schedule callback at a specific time
 just change-lead-status $KEY $CID $LID callback_scheduled "2026-01-15T14:00:00Z"
 
-# Mark as DNC
-just change-lead-status $KEY $CID $LID dnc
+# Mark as 
+just change-lead-status $KEY $CID $LID 
 
 # ── Delete a lead ──
 just delete-lead $KEY $CID $LID
@@ -234,10 +234,10 @@ just delete-lead $KEY $CID $LID
 **Allowed status transitions:**
 | From | Allowed To |
 |------|-----------|
-| `pending` | `failed`, `dnc`, `callback_scheduled` |
-| `callback_scheduled` | `pending`, `failed`, `dnc` |
+| `pending` | `failed`, ``, `callback_scheduled` |
+| `callback_scheduled` | `pending`, `failed`, `` |
 | `failed` | `pending` |
-| `dnc` | `pending` |
+| `` | `pending` |
 | `completed` | `pending` |
 | `calling` | *(blocked — live call)* |
 

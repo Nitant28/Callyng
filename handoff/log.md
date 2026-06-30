@@ -241,7 +241,7 @@ At hangup, post-call processing now reads the frozen `call_logs.call_data.post_c
 End-to-end CMS test dial without campaign dialer or admin UI.
 
 **Files added/changed:**
-- `test_call.py` — root CLI: resolve script_config, throwaway lead, `fire_call`, poll loop
+- `scripts/test_call.py` — root CLI: resolve script_config, throwaway lead, `fire_call`, poll loop
 - `db/seed/dev_tenant.sql` — sandbox bots (`...0004` STS, `...0005` cascaded) + campaign (`...0006`, 500 credits)
 - `dialer/concurrent_dialer.py` — `fire_call(..., dial_phone=)` returns `session_call_id`
 - `justfile` — `just cms-call <script-config-id> <phone> [route]`
@@ -258,7 +258,7 @@ just dev          # server must be running (holds PREFETCHED_CONFIGS)
 just cms-call <script-config-uuid> +919... sts
 ```
 
-**vs `just call`:** Phase 0 `POST /start` uses env module scripts, no `lead_id` FK, no CMS prefetch/snapshot. `test_call.py` exercises the full production dial path.
+**vs `just call`:** Phase 0 `POST /start` uses env module scripts, no `lead_id` FK, no CMS prefetch/snapshot. `scripts/test_call.py` exercises the full production dial path.
 
 **Prerequisites:** `DATABASE_URL`, Plivo creds, `NGROK_URL`, a `script_configs` row for the given UUID.
 
@@ -401,4 +401,223 @@ Implemented robust state management, billing guarantees, validation sanitization
 
 ### 6. Script Template Searching & Filtering
 - **Admin Search Bar:** Added template search functionality inside `AdminScriptConfigs.jsx` to filter template rows by script identifier or client name, ensuring fast navigation as the template library grows.
+
+---
+
+## Addendum: `guides/optimization.md` — Spec & Implementation Audit Trail (2026-06-27)
+
+`guides/optimization.md` is the single source of truth for the call-outcome / lead-state optimization work (Workstreams A–H). Header status: **All workstreams (A–H) complete.** The doc defines the canonical five-status model (§1), per-workstream specs (§2–§14), sequencing (§10), verification checklist (§11), and an implementation audit log (§15). Below mirrors what §15 records as shipped.
+
+### Document structure (key sections)
+
+| Section | Purpose |
+|---|---|
+| §1 | Canonical lead statuses, outcome vocabulary, status × outcome matrix |
+| §2–§8 | Workstreams A–G specs (state machine, Plivo mapping, DNC removal, extractor de-hardcoding, indexes, frontend cards, repo cleanup) |
+| §14 | Workstream H — admin script/post-call UI guidance copy |
+| §15 | Implementation log — what was actually shipped (audit trail) |
+
+### §15.1 — Workstream A: Post-call state machine unification ✅
+
+Funnelled all five divergent lead-status mutation paths through `resolve_post_call_transition` (answered) and `resolve_lead_retry_or_failed` (non-answers/abandoned).
+
+| Path | After |
+|---|---|
+| Unanswered Plivo hangup | campaign `retry_delay_minutes` + `outcome_from_plivo_status`; normalized outcome on `call_logs` + `leads` |
+| Orphaned dials | `retry_delay_minutes=0`, `base_outcome="Carrier_Failed"` |
+| Stuck/exhausted housekeeping | `resolve_lead_retry_or_failed` with campaign delay / `Max_Attempts_Reached` |
+
+**Files:** `db/postgres.py`, `plivo_hangup.py`, `post_call_processor.py` (`_SHORT_CALL_SECONDS = 90`, `_SHORT_CALL_RETRY_CAP_MIN = 1`), `dialer/concurrent_dialer.py`. **Review fix:** `settle_unanswered_call` sync order — resolve outcome before writing to both `call_logs` and `leads`.
+
+### §15.2 — Workstream B: Outcome normalization (Plivo path) ✅
+
+- **New:** `call_outcomes.py` — `TERMINAL`, `RETRY`, `FAILURE`, `outcome_from_plivo_status()`.
+- Plivo mapping: `busy→Busy`, `no-answer/cancel→No_Answer`, `reject→Rejected`, `failed→Carrier_Failed`, else `Unknown`.
+- **Review fix:** `reject` corrected from `Call_Rejected` to `Rejected`.
+
+### §15.3 — Post-call extraction reconcile fix ✅
+
+- **`post_call_extract.py`:** removed early return on `_CALLBACK_CONFIRM_RE` that blocked property-interest branch; priority: property confirmed + no time → `Interested`, explicit time → `Callback_Requested`.
+- Fixed `tests/test_post_call_engine.py` Hindi STT conflict transcript failure.
+
+### §15.4 — Tests added/updated (A/B)
+
+- `tests/test_call_outcomes.py` (new), `tests/test_post_call_engine.py` updated for 3-tuple `resolve_lead_retry_or_failed`.
+
+### §15.5 — Verification (2026-06-27)
+
+- `rg "'Unanswered'" db/postgres.py` → zero matches ✅
+- Campaign retry delay flows via `plivo_hangup.py` ✅
+- **151 passed** with Postgres up.
+
+### §15.6 — Workstream C: DNC removal ✅
+
+- Migration `007_remove_dnc.py`; `dnc_leads` column dropped; `dnc` leads → `completed` / `Not_Interested`.
+- Backend: removed DNC from `post_call_processor.py`, `db/postgres.py` counter deltas, `api/routes/leads.py` transitions, `scripts/cli.py`.
+- Frontend: removed DNC badge/counters from `CampaignDetail.jsx`, `AdminClientDetail.jsx`, `AdminCampaigns.jsx`.
+- `fix_leads.py` deleted; `env.example` scrubbed; docs sanitized.
+
+### §15.7 — Sequencing status table
+
+All workstreams A–H marked ✅ Complete in the doc's status table.
+
+### §15.8 — Workstream F: Frontend status cards & outcome labels ✅
+
+- `CampaignDetail.jsx` — five-card grid (Pending, Calling, Callback Scheduled, Completed, Failed) with `OUTCOME_LABELS` / `friendlyOutcome()` for all §1.2 outcomes; no `Unanswered` / DNC references.
+
+### §15.9 — Workstream H: Admin outcome drag-and-drop editor ✅
+
+- `AdminScriptConfigs.jsx` — `OutcomeDragDropEditor` (move-not-copy drag, unmapped/stale warnings, summary-mode hide, raw JSON escape hatch, save blocked when mapping incomplete).
+
+### §15.10 — Workstream D: Extractor de-hardcoding ✅
+
+- `PYRAMID_NORMALIZATION_RULES` in `sts_scripts/pyramid_extraction.py`; migration `008_pyramid_normalization_rules`; stripped domain heuristics from `post_call_extract.py`.
+- **Behavior change:** when `normalization_rules` is non-empty, generic `site_visit_agreed` / `callback_time` fallback no longer runs (explicit config wins).
+
+### §15.11 — Workstream E: Performance / indexes ✅
+
+- Migration `009_calllog_indexes.py` — `idx_call_logs_lead_live`, `idx_call_logs_lead_ended`.
+- Base schema `001_initial.sql` parity; dialer 30s cooldown gate; `guides/admin_script_guide.md` created.
+
+### §15.12 — Workstream G: Repo cleanup ✅
+
+- 14 root ad-hoc scripts deleted; `test_call.py` → `scripts/test_call.py`; `pyproject.toml` `testpaths = ["tests"]`.
+- `tests/test_settle_unanswered_call.py` added; **153 passed**.
+
+### §14 — Workstream H guidance copy (spec, in-doc)
+
+Defines inline help for Extraction Schema, Outcome buckets, Normalization Rules, Outcome Event Map, plus worked healthcare example (§14.6). Acceptance: six post-call fields editable, drag-and-drop partition UI, validation errors inline near bucket editors.
+
+---
+
+## Addendum: Workstreams E / G / H — Dialer Hot-Path, Repo Cleanup & Frontend Polish (2026-06-28)
+
+Completed the dialer hot-path index optimization (Workstream E), repo/seed cleanup (Workstream G), and the Admin Script Configs frontend UX gaps (Workstream H), plus scripting-guide documentation. Status tracked in `guides/optimization.md` §15.7 / §15.11.
+
+### 1. Database Indexes (Workstream E — hot-path optimization)
+- Added two partial indexes targeting the dialer's most expensive `NOT EXISTS` subqueries in `claim_leads_for_dialer`, eliminating sequential scans:
+  - `idx_call_logs_lead_live` — leads with active calls (`WHERE in_progress = TRUE`).
+  - `idx_call_logs_lead_ended` — leads with recently completed calls (wrap-up grace query).
+- Added in both a new migration `alembic/versions/009_calllog_indexes.py` (`down_revision = 008_pyramid_normalization_rules`, `IF NOT EXISTS`, `downgrade()` drops them) and the base schema `db/schema/001_initial.sql` for fresh installs.
+
+### 2. Dialer Cooldown Gate (Workstream E)
+- **`dialer/concurrent_dialer.py`:** the claim-failure branch previously called `release_stuck_calling_leads` on every ~5s tick, generating heavy multi-CTE transactions. Added a module-level 30s per-campaign cooldown (`_RELEASE_STUCK_COOLDOWN_S = 30.0`) throttling ongoing polling. The cold-start path stays unconditional; the per-campaign key is cleaned up in `stop_dialer` (no leak).
+
+### 3. Admin Script Configuration Guide
+- Added `guides/admin_script_guide.md` covering all 8 internal script-config API endpoints, field references for all 30+ config attributes, deep dives into `extraction_schema` / `normalization_rules` / outcome mapping / `cascade_live_tools`, and how Workstream D made explicit config win over normalization fallbacks.
+
+### 4. Status Tracking
+- **`guides/optimization.md`:** marked Workstream E complete and appended the implementation audit log to §15.11 (§15.7 reflects E & G complete).
+
+### 5. Workstream H — Frontend Polish (`AdminScriptConfigs.jsx`)
+- **Inline error feedback:** moved validation errors from the truncated modal footer to a full-width inline message below the outcome mapping editor (removed the duplicate footer display).
+- **Auto-tab switching:** `saveConfig` now switches the user to the Post-Call tab and shows inline validation when the backend reports unmapped `intent_status` fields.
+- **Defaults helper copy:** added text clarifying how untouched JSON fields behave as null vs an explicitly saved empty structure (`[]`).
+
+### 6. Seed Data & UI Filtering (Workstream G)
+- **`db/seed/dev_tenant.sql`:** repointed dev sandbox bots to live scripts — `…0004 → pyramid_hi`, `…0005 → prowave` (was `cli_sandbox_sts` / `cli_sandbox_cascade`).
+- **`api/routes/internal_script_configs.py`:** dropped the `cli_sandbox*` hiding filter now that the seeded script references are valid active scripts.
+- **Repo cleanup:** removed orphaned root-level ad-hoc scripts; moved `test_call.py` → `scripts/test_call.py` (kept `just cms-call` + `tests/test_test_call.py` working).
+
+### 7. Scripting Guide Enhancements (`ScriptingGuideModal.jsx`)
+- Added a 5-step post-call lifecycle section (Transcript → Extraction → Normalization → Routing → Update) into the UI guide.
+- Fixed stale `pyramid_hindi` references → `pyramid_hi`.
+
+### 8. Tests & verification
+- **Added `tests/test_settle_unanswered_call.py`** (exhaustion/retry mapping coverage).
+- Full suite: **153 passed**; `npm run build` clean; `EXPLAIN ANALYZE` confirmed `idx_call_logs_lead_live` is used for the dialer concurrency check; `db-seed` works with the repointed `dev_tenant.sql`.
+
+---
+
+## Addendum: Post-Attempt Callback Visibility (Early Disconnect) (2026-06-28)
+
+Reworked the post-call lead state machine so that **every inconclusive dial attempt routes to `callback_scheduled` (purple card), never back to `pending` (yellow)**. Pending now strictly means "awaiting first dial." Added a new `Early_Disconnect` outcome for short callee hangups and made the manual "reset to pending" override behave like a fresh lead. Full plan in `/home/satyam/.cursor/plans/early_disconnect_callback_3434bd48.plan.md`.
+
+### Core UX contract change
+- **Pending (yellow):** never tried — `attempts = 0` fresh upload, or a lead manually reset while paused.
+- **Callback Scheduled (purple):** tried + inconclusive — shows outcome badge + when we redial.
+- Dialer claim SQL, wrap-up grace, budget reservation, and lock semantics are **untouched** — `claim_leads_for_dialer` already claims both `pending` and `callback_scheduled`, and the `calling → callback_scheduled` counter delta already existed.
+
+### 1. Step 0 — `normalization_rules` load bug fix
+- **`call_transcript.py`:** post-call extraction loaded `norm_rules = rules` where `rules = norm_rules` (self-reference, always `None`). Now correctly reads `rules = snapshot.get("normalization_rules")`, so per-bot normalization rules are actually applied at hangup.
+
+### 2. Step 1 — Retry outcomes → `callback_scheduled`
+- **`db/postgres.py` `resolve_lead_retry_or_failed`:** returns `callback_scheduled` (was `pending`) for under-max-attempts retries; still returns `failed` + `Max_Attempts_Reached` at the cap.
+- **`db/postgres.py` `settle_unanswered_call`:** unanswered Plivo calls (Busy/No_Answer/Rejected/Carrier_Failed) now set `scheduled_callback_at` and increment the `calling → callback_scheduled` counter.
+- **`db/postgres.py` `release_stuck_calling_leads`:** stuck-lead release now routes to `callback_scheduled` (renamed internal `pending_ids` → `callback_ids`, sets `scheduled_callback_at`).
+- **`post_call_processor.py` `_lead_transition`:** retry branch and the fallback branch return `callback_scheduled` with `scheduled_callback_at = next_attempt_at`.
+- **`post_call_processor.py` `resolve_post_call_transition`:** the callee-hangup override returns `callback_scheduled` (was `pending`).
+
+### 3. Step 2 — `apply_early_disconnect_policy`
+- **`post_call_processor.py`:** new pure function + `EARLY_DISCONNECT_MAX_SECONDS = 30`. Fires when the callee hung up, duration < 30s, and intent is weak (`""` or `Unknown`), returning `Early_Disconnect`.
+
+### 4. Step 3 — `Early_Disconnect` vocabulary + webhook
+- **`call_outcomes.py`:** `Early_Disconnect` added to the `CALLBACK` frozenset.
+- **`script_runtime.py`:** added to `DEFAULT_OUTCOME_CALLBACK`.
+- **`api/script_config_validation.py`:** added to `_DEFAULT_OUTCOME_CALLBACK`.
+- **`n8n_webhook.py`:** `outcome_to_event` maps `early_disconnect → lead_callback`.
+
+### 5. Step 4 / 4b — Wiring + scheduling + short-call cap
+- **`post_call_processor.py` `process_post_call`:** applies the early-disconnect policy (reordered so `attempts`/`max_attempts`/`retry_delay`/`call_log`/`callee_hangup` are computed first), rewriting `outcome` and `extraction_json["intent_status"]` before transition resolution. Policy is wired here only (recovery delegates to `process_post_call`).
+- **`_lead_transition` callback bucket:** `Callback_Requested` with a parsed time → that time; `Early_Disconnect` → `now + retry_delay_minutes`; organic `Callback_Requested` without a time → `+4h`.
+- **Short-call cap:** condition changed from `new_status == "pending"` to `new_status == "callback_scheduled"` AND (retry-bucket outcome OR `Early_Disconnect`); now caps `next_at` and keeps `sched_cb` in sync (1-minute cap when duration < 90s).
+
+### 6. Step 5 — Migration + extraction enum
+- **`alembic/versions/010_early_disconnect_outcome.py`:** appends `Early_Disconnect` to `outcome_callback` for existing pyramid script_configs (`pyramid_bilingual`, `pyramid_hi`, `pyramid_mr`, `prowave`); idempotent, no-op downgrade.
+- **`sts_scripts/pyramid_extraction.py`:** added `Early_Disconnect` to the `intent_status` enum values and description.
+
+### 7. Step 6 — API enrichment
+- **`db/postgres.py` `list_campaign_leads`:** added a `LEFT JOIN LATERAL` on the most recent ended `call_log` exposing `last_call_duration_seconds`, `last_call_outcome`, `last_call_ended_at`, and `last_hangup_source` (from `plivo_hangup_json`). Qualified existing `status`/`name`/`phone`/`created_at` filters with the `l.` alias.
+
+### 8. Step 7 — Frontend transparency
+- **`frontend/src/pages/client/CampaignDetail.jsx`:** added `Early_Disconnect` → "Hung up early" to `OUTCOME_LABELS`; new `formatCallbackTiming` + `buildCallbackBadgeLabel` helpers render "Callback in Xm / Xh / at …". Callback card now shows the outcome + timing badge (e.g. `Hung up early (8s) · Callback in 10 min`). Pending card shows **"Awaiting first call"** when `attempts === 0`, else `Pending · n/max`. Release-stuck toast wording updated to "callback scheduled".
+- **`frontend/src/components/shared/CallTranscriptDrawer.jsx`:** added a post-call summary strip (duration, hangup source via `hangupSourceLabel`, outcome via `outcomeLabel`) shown for completed calls.
+- **`frontend/src/components/shared/ScriptingGuideModal.jsx`:** updated outcome-routing copy — retry-bucket outcomes and `Early_Disconnect` map to `callback_scheduled`, not `pending`.
+
+### 9. Step 8b — Manual status override (pause + edit lead) = fresh reset
+- **`db/postgres.py` `update_lead_status_manual`:** new `reset_to_fresh` flag; when resetting to pending it sets `attempts = 0`, `outcome = NULL`, `extraction = '{}'::jsonb`.
+- **`api/routes/leads.py` `change_lead_status`:** passes `reset_to_fresh=(target == "pending")`. A tried lead manually moved to pending becomes a clean "Awaiting first call" lead. (Manual edits remain blocked while a campaign is `running`.)
+- **`api/routes/leads.py` `change_lead_status` (follow-up guard):** rejects manual `→ callback_scheduled` when `attempts >= max_attempts` with HTTP 409 and message to move to Pending first. Prevents a lead landing on the purple Callback card with a scheduled time but never dialable (`claim_leads_for_dialer` requires `attempts < max_attempts`). Recovery path: `pending` reset clears attempts → `callback_scheduled` allowed again.
+- **Test:** `tests/test_client_api_edge.py::test_manual_callback_blocked_at_max_attempts` (409 at cap; recovery via `failed → pending` reset → `callback_scheduled`).
+
+### 10. Tests + docs
+- **Added:** `tests/test_call_transcript_norm_rules.py`, `tests/test_early_disconnect_policy.py`, `tests/test_early_disconnect_post_call.py`.
+- **Updated:** `tests/test_post_call_engine.py` and `tests/test_phase2.py` (retry → `callback_scheduled`, callee-hangup → `callback_scheduled`, `Early_Disconnect` webhook mapping); `tests/test_settle_unanswered_call.py` (asserts `callback_scheduled` + `scheduled_callback_at`); `tests/test_client_api_edge.py` (`test_manual_pending_resets_attempts`).
+- **Docs:** `guides/admin_script_guide.md` (outcome bucket descriptions).
+
+### 11. `guides/optimization.md` — canonical model & target-design updates
+
+Spec sections updated to reflect Post-Attempt Callback Visibility (§15 implementation log not yet extended with §15.13):
+
+**§1.1 Lead statuses — pending / callback semantics rewritten:**
+| Status | Doc meaning (after update) |
+|---|---|
+| `pending` | Awaiting **first dial only** (`attempts = 0`, or manually reset while paused) |
+| `callback_scheduled` | **Tried, inconclusive** — shows outcome + when we call back |
+
+**§1.2 Outcome vocabulary — routing model changed:**
+- Added `Early_Disconnect` under **Callback → `callback_scheduled`** (short callee hangup, no intent).
+- Retry-bucket outcomes (`Busy`, `No_Answer`, `Rejected`, `Carrier_Failed`, `Wrong_Requirement`, `Unknown`) now documented as mapping to **`callback_scheduled` status** (outcome label preserved on card; **not** `pending`).
+- Clarifies outcome buckets in `script_configs` do not need to move — runtime maps retry-bucket outcomes to `callback_scheduled` card visibility.
+
+**§1.3 Status × outcome matrix — UI contract:**
+| Status | Allowed outcomes (after update) |
+|---|---|
+| `pending` | `NULL` only (never called, or manual reset with `attempts = 0`) |
+| `callback_scheduled` | `Callback_Requested`, `Early_Disconnect`, `Busy`, `No_Answer`, `Rejected`, `Carrier_Failed`, `Wrong_Requirement`, `Unknown` |
+- Added note: **Manual → `pending` while paused** resets `attempts = 0`, clears `outcome` and `extraction`.
+
+**§2.2 Target design — `resolve_lead_retry_or_failed` example updated:**
+```python
+return "callback_scheduled", ts + timedelta(minutes=retry_delay_minutes), base_outcome
+```
+(was `pending` in the original spec text)
+
+**§11.3 manual smoke (still references pre-callback-card model):** smoke checklist in §11.3 still says `pending(Busy/No_Answer)` — **stale**; actual behavior is `callback_scheduled` per §1.1–1.3. Update when next editing the doc.
+
+**§14.4 outcome-bucket guidance copy (still stale):** §14.4 still says `outcome_retry` → Pending card; implementation and §1.2 now route retry-bucket outcomes to Callback Scheduled. Update when next editing the doc.
+
+### Migration & verification
+- Run `alembic upgrade head` (applies `010_early_disconnect_outcome`) before deploying.
+- Verified: **165 tests passed**; `npm run build` succeeded.
 

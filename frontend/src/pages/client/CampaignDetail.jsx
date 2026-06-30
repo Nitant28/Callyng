@@ -6,6 +6,56 @@ import clientApi from '../../api/client';
 import LoaderOverlay from '../../components/shared/LoaderOverlay';
 import CallTranscriptDrawer from '../../components/shared/CallTranscriptDrawer';
 
+/** Friendly labels for canonical backend outcomes (call_outcomes.py / §1.2). */
+const OUTCOME_LABELS = {
+  Interested: 'Connected',
+  Not_Interested: 'Not Interested',
+  Callback_Requested: 'Callback',
+  Wrong_Requirement: 'Wrong Requirement',
+  Busy: 'Busy',
+  No_Answer: 'No Answer',
+  Rejected: 'Rejected',
+  Carrier_Failed: 'Carrier Failed',
+  Unknown: 'Unknown',
+  Early_Disconnect: 'Hung up early',
+  Max_Attempts_Reached: 'Max Attempts Reached',
+  Campaign_Cancelled: 'Campaign Cancelled',
+};
+
+function friendlyOutcome(outcome, fallback = 'Unknown') {
+  const key = (outcome || '').toString().trim();
+  if (!key) return fallback;
+  return OUTCOME_LABELS[key] || key.replace(/_/g, ' ');
+}
+
+function formatCallbackTiming(nextAt) {
+  if (!nextAt) return 'Callback scheduled';
+  const target = new Date(nextAt);
+  const diffMs = target - Date.now();
+  if (diffMs <= 0) return 'Callback due';
+  const mins = Math.ceil(diffMs / 60000);
+  if (mins < 60) return `Callback in ${mins} min`;
+  const hours = Math.ceil(mins / 60);
+  if (hours < 48) return `Callback in ${hours}h`;
+  return `Callback at ${target.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function buildCallbackBadgeLabel(lead) {
+  const outcome = (lead.outcome || '').toString();
+  const duration = lead.last_call_duration_seconds;
+  const timing = formatCallbackTiming(lead.next_attempt_at || lead.scheduled_callback_at);
+  if (outcome === 'Early_Disconnect' && duration != null) {
+    return `Hung up early (${duration}s) · ${timing}`;
+  }
+  if (outcome === 'Callback_Requested') {
+    return `${friendlyOutcome(outcome)} · ${timing}`;
+  }
+  if (outcome) {
+    return `${friendlyOutcome(outcome)} · ${timing}`;
+  }
+  return timing;
+}
+
 const CampaignDetail = () => {
   const { id } = useParams();
   const { theme, toggleTheme } = useTheme();
@@ -208,8 +258,6 @@ const CampaignDetail = () => {
     setIsTranscriptOpen(true);
   };
 
-  // Actions
-  // Actions
   const handleToggleState = async () => {
     if (!campaign) return;
     const action = campaign.status === 'running' ? 'stop' : 'start';
@@ -253,7 +301,7 @@ const CampaignDetail = () => {
       const released = response.data?.released ?? 0;
       showToast(
         released > 0
-          ? `Released ${released} stuck lead${released === 1 ? '' : 's'} back to pending.`
+          ? `Released ${released} stuck lead${released === 1 ? '' : 's'} back to callback scheduled.`
           : 'No stuck leads needed releasing.',
         released > 0 ? 'success' : 'info'
       );
@@ -357,7 +405,6 @@ const CampaignDetail = () => {
     }
   };
 
-  // Manual Lead Creation
   const handleAddLead = async (e) => {
     e.preventDefault();
     if (!newLead.phone.trim()) return;
@@ -379,7 +426,6 @@ const CampaignDetail = () => {
     }
   };
 
-  // Edit Lead
   const handleEditLead = async (e) => {
     e.preventDefault();
     if (!editLeadData.name?.trim()) return;
@@ -409,7 +455,6 @@ const CampaignDetail = () => {
     }
   };
 
-  // Delete Lead
   const handleDeleteLead = async (leadId) => {
     if (!window.confirm('Are you sure you want to delete this lead?')) return;
     
@@ -426,22 +471,7 @@ const CampaignDetail = () => {
     }
   };
 
-  // Change Lead Status
-  const handleChangeLeadStatus = async (leadId, newStatus) => {
-    try {
-      const response = await clientApi.patch(`/api/campaigns/${id}/leads/${leadId}/status`, {
-        status: newStatus
-      });
-      if (response.data) {
-        showToast('Status updated successfully.', 'success');
-        loadLeads();
-        loadCampaignDetails();
-      }
-    } catch (err) {
-      console.error('Failed to change lead status', err);
-      showToast(err.customErrorMessage || 'Failed to change lead status. The transition may not be allowed.', 'error');
-    }
-  };
+
 
   // Settings Save
   const handleSaveSettings = async (e) => {
@@ -484,15 +514,30 @@ const CampaignDetail = () => {
 
   // Calculate percentages for progress bars
   const total = campaign.total_leads || 0;
-  const completedPercent = total > 0 ? (campaign.completed_leads / total) * 100 : 0;
-  const failedPercent = total > 0 ? (campaign.failed_leads / total) * 100 : 0;
+  const pendingPercent = total > 0 ? ((campaign.pending_leads || 0) / total) * 100 : 0;
+  const callingDisplay = liveCallingCount;
+  const callingPercent = total > 0 ? (callingDisplay / total) * 100 : 0;
+  const callbackPercent = total > 0 ? ((campaign.callback_leads || 0) / total) * 100 : 0;
+  const completedPercent = total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0;
+  const failedPercent = total > 0 ? ((campaign.failed_leads || 0) / total) * 100 : 0;
 
   const isPausing = campaign.status === 'pausing' || (campaign.status === 'paused' && campaign.calling_leads > 0);
 
   return (
     <>
-      <LoaderOverlay isVisible={isPausing} message="Finishing ongoing leads..." />
       <div className="flex-1 w-full">
+        {isPausing && (
+          <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-start gap-3 animate-fade-in">
+            <span className="material-symbols-outlined text-amber-500 mt-0.5">hourglass_empty</span>
+            <div>
+              <h3 className="text-amber-700 dark:text-amber-400 font-bold text-sm">Campaign is pausing...</h3>
+              <p className="text-amber-700/80 dark:text-amber-400/80 text-sm mt-1">
+                Waiting for {campaign.calling_leads} active call{campaign.calling_leads !== 1 ? 's' : ''} to finish. 
+                If leads appear permanently stuck in "Calling", wait a few minutes, then use the <strong>Release stuck leads</strong> button below to redial them later.
+              </p>
+            </div>
+          </div>
+        )}
           
           {/* Header Section */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-stack-lg animate-fade-in">
@@ -623,18 +668,18 @@ const CampaignDetail = () => {
           </div>
 
           {/* Metric Cards */}
-          <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-gutter mb-stack-lg">
-            {/* Total Leads */}
+          <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-gutter mb-stack-lg">
+            {/* Pending */}
             <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.1s' }}>
-              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Total Leads</p>
+              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Pending / Retry</p>
               <div className="flex items-baseline gap-2 mb-4">
-                <span className="text-headline-md font-bold tabular-nums">{total.toLocaleString()}</span>
-                {/* <span className="text-label-sm text-secondary">+12%</span> */}
+                <span className="text-headline-md font-bold tabular-nums">{(campaign.pending_leads || 0).toLocaleString()}</span>
+                <span className="text-label-sm text-secondary">{pendingPercent.toFixed(1)}%</span>
               </div>
               <div className="h-1.5 w-full bg-surface-container-highest dark:bg-[#1f2937] rounded-full overflow-hidden">
                 <div 
-                  className="h-full transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1) progress-glow-light dark:progress-glow-dark" 
-                  style={{ width: total > 0 ? '100%' : '0%' }}
+                  className="h-full bg-gray-400 dark:bg-gray-500 opacity-80 transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1)" 
+                  style={{ width: `${pendingPercent}%` }}
                 ></div>
               </div>
             </div>
@@ -644,20 +689,35 @@ const CampaignDetail = () => {
               <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Calling</p>
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="text-headline-md font-bold tabular-nums" id="counter-calling">
-                  {liveCallingCount}
+                  {callingDisplay}
                 </span>
-                <span className="text-label-sm text-arctic-warning">Live</span>
+                <span className="text-label-sm text-amber-600 dark:text-amber-400">{callingPercent.toFixed(1)}% · Live</span>
               </div>
               <div className="h-1.5 w-full bg-surface-container-highest dark:bg-[#1f2937] rounded-full overflow-hidden">
                 <div 
-                  className="h-full transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1) progress-glow-light dark:progress-glow-dark" 
-                  style={{ width: `${(liveCallingCount / (campaign.max_concurrent_calls || 5)) * 100}%` }}
+                  className="h-full bg-amber-500 dark:bg-amber-400 opacity-90 transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1)" 
+                  style={{ width: `${callingPercent}%` }}
+                ></div>
+              </div>
+            </div>
+
+            {/* Callback Scheduled */}
+            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.3s' }}>
+              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Callback Scheduled</p>
+              <div className="flex items-baseline gap-2 mb-4">
+                <span className="text-headline-md font-bold tabular-nums">{(campaign.callback_leads || 0).toLocaleString()}</span>
+                <span className="text-label-sm text-blue-500">{callbackPercent.toFixed(1)}%</span>
+              </div>
+              <div className="h-1.5 w-full bg-surface-container-highest dark:bg-[#1f2937] rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500 dark:bg-blue-400 opacity-80 transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1)" 
+                  style={{ width: `${callbackPercent}%` }}
                 ></div>
               </div>
             </div>
 
             {/* Completed */}
-            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.3s' }}>
+            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.4s' }}>
               <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Completed</p>
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="text-headline-md font-bold tabular-nums">{(campaign.completed_leads || 0).toLocaleString()}</span>
@@ -672,7 +732,7 @@ const CampaignDetail = () => {
             </div>
 
             {/* Failed */}
-            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.4s' }}>
+            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.5s' }}>
               <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Failed</p>
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="text-headline-md font-bold tabular-nums">{(campaign.failed_leads || 0).toLocaleString()}</span>
@@ -682,36 +742,6 @@ const CampaignDetail = () => {
                 <div 
                   className="h-full bg-error dark:bg-molten-error opacity-80 transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1)" 
                   style={{ width: `${failedPercent}%` }}
-                ></div>
-              </div>
-            </div>
-
-            {/* Budget Allocated */}
-            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.5s' }}>
-              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Total Credits</p>
-              <div className="flex items-baseline gap-2 mb-4">
-                <span className="text-headline-md font-bold tabular-nums">{(campaign.budget_credits || 0).toLocaleString()}</span>
-                <span className="text-label-sm text-secondary">Allocated</span>
-              </div>
-              <div className="h-1.5 w-full bg-surface-container-highest dark:bg-[#1f2937] rounded-full overflow-hidden">
-                <div 
-                  className="h-full transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1) bg-blue-500" 
-                  style={{ width: '100%' }}
-                ></div>
-              </div>
-            </div>
-
-            {/* Budget Spent */}
-            <div className="stagger-in bg-arctic-surface dark:bg-molten-surface p-6 anti-slop-card-light dark:anti-slop-card-dark transition-colors duration-300" style={{ animationDelay: '0.6s' }}>
-              <p className="text-arctic-text-muted dark:text-molten-text-muted font-label-md mb-2">Credits Used</p>
-              <div className="flex items-baseline gap-2 mb-4">
-                <span className="text-headline-md font-bold tabular-nums text-error">{(campaign.budget_used_credits || 0).toLocaleString()}</span>
-                <span className="text-label-sm text-error">Spent</span>
-              </div>
-              <div className="h-1.5 w-full bg-surface-container-highest dark:bg-[#1f2937] rounded-full overflow-hidden">
-                <div 
-                  className="h-full transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1) bg-error" 
-                  style={{ width: `${campaign.budget_credits > 0 ? ((campaign.budget_used_credits || 0) / campaign.budget_credits) * 100 : 0}%` }}
                 ></div>
               </div>
             </div>
@@ -949,18 +979,10 @@ const CampaignDetail = () => {
                           ) : (
                             leads.map((lead) => {
                               // Determine status style
-                              let statusElement = null;
+                              let statusElement;
                               const outcome = (lead.outcome || '').toString();
                               if (lead.status === 'completed') {
-                                const outcomeLabel = outcome === 'Interested'
-                                  ? 'Connected'
-                                  : outcome === 'Not_Interested'
-                                    ? 'Not Interested'
-                                    : outcome === 'Wrong_Requirement'
-                                      ? 'Wrong Requirement'
-                                      : outcome === 'Callback_Requested'
-                                        ? 'Callback'
-                                        : 'Completed';
+                                const outcomeLabel = friendlyOutcome(outcome, 'Completed');
                                 const completedClasses = outcome === 'Interested'
                                   ? 'bg-secondary-container/20 text-on-secondary-container dark:text-emerald-400'
                                   : outcome === 'Not_Interested'
@@ -980,17 +1002,15 @@ const CampaignDetail = () => {
                                   </span>
                                 );
                               } else if (lead.status === 'failed') {
+                                const failedLabel = outcome === 'Max_Attempts_Reached'
+                                  ? 'Max Attempts Reached'
+                                  : outcome === 'Campaign_Cancelled'
+                                    ? 'Campaign Cancelled'
+                                    : `${friendlyOutcome(outcome, 'Failed')} (Failed)`;
                                 statusElement = (
                                   <span className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-error-container/40 text-on-error-container dark:bg-rose-500/10 dark:text-rose-400 text-xs font-semibold">
-                                    <svg className="w-6 h-4" viewBox="0 0 24 16">
-                                      <rect className="waveform-bar-static" height="12" rx="1" width="2" x="0" y="2"></rect>
-                                      <rect className="waveform-bar-static" height="16" rx="1" width="2" x="4" y="0"></rect>
-                                      <rect className="waveform-bar-static" height="10" rx="1" width="2" x="8" y="3"></rect>
-                                      <rect className="waveform-bar-static" height="14" rx="1" width="2" x="12" y="1"></rect>
-                                      <rect className="waveform-bar-static" height="8" rx="1" width="2" x="16" y="4"></rect>
-                                      <rect className="waveform-bar-static" height="12" rx="1" width="2" x="20" y="2"></rect>
-                                    </svg>
-                                    Failed
+                                    <span className="material-symbols-outlined text-[14px]">call_end</span>
+                                    {failedLabel}
                                   </span>
                                 );
                               } else if (lead.status === 'calling') {
@@ -1011,28 +1031,29 @@ const CampaignDetail = () => {
                                 statusElement = (
                                   <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs font-semibold border border-blue-500/20">
                                     <span className="material-symbols-outlined text-[14px]">calendar_clock</span>
-                                    {lead.scheduled_callback_at ? `Callback at ${new Date(lead.scheduled_callback_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : 'Callback Scheduled'}
+                                    {buildCallbackBadgeLabel(lead)}
                                   </span>
                                 );
                               } else if (lead.status === 'pending') {
-                                statusElement = (
-                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted text-xs font-semibold border border-outline-variant/30">
-                                    <span className="material-symbols-outlined text-[14px]">hourglass_top</span>
-                                    Pending
-                                  </span>
-                                );
+                                if ((lead.attempts || 0) > 0) {
+                                  statusElement = (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-semibold border border-amber-500/20">
+                                      <span className="material-symbols-outlined text-[14px]">refresh</span>
+                                      Retry · {lead.attempts}/{lead.max_attempts || 3}
+                                    </span>
+                                  );
+                                } else {
+                                  statusElement = (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted text-xs font-semibold border border-outline-variant/30">
+                                      <span className="material-symbols-outlined text-[14px]">hourglass_top</span>
+                                      Awaiting first call
+                                    </span>
+                                  );
+                                }
                               } else {
                                 statusElement = (
-                                  <span className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted text-xs font-semibold">
-                                    <svg className="w-6 h-4" viewBox="0 0 24 16">
-                                      <rect className="waveform-bar-static" height="12" rx="1" width="2" x="0" y="2"></rect>
-                                      <rect className="waveform-bar-static" height="16" rx="1" width="2" x="4" y="0"></rect>
-                                      <rect className="waveform-bar-static" height="10" rx="1" width="2" x="8" y="3"></rect>
-                                      <rect className="waveform-bar-static" height="14" rx="1" width="2" x="12" y="1"></rect>
-                                      <rect className="waveform-bar-static" height="8" rx="1" width="2" x="16" y="4"></rect>
-                                      <rect className="waveform-bar-static" height="12" rx="1" width="2" x="20" y="2"></rect>
-                                    </svg>
-                                    No Answer
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-variant dark:bg-surface-variant/20 text-on-surface-variant dark:text-molten-text-muted text-xs font-semibold border border-outline-variant/30 capitalize">
+                                    {(lead.status || 'unknown').replace(/_/g, ' ')}
                                   </span>
                                 );
                               }
@@ -1351,19 +1372,23 @@ const CampaignDetail = () => {
                 className="w-full bg-surface-container-low dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] p-2.5 rounded-lg outline-none focus:border-primary dark:focus:border-molten-primary text-on-surface dark:text-molten-text"
               >
                 {(() => {
-                  const allowed = {
-                    pending: ['pending', 'failed', 'dnc', 'callback_scheduled', 'completed'],
-                    callback_scheduled: ['callback_scheduled', 'pending', 'failed', 'dnc', 'completed'],
+                  let allowed = {
+                    pending: ['pending', 'failed', 'callback_scheduled', 'completed'],
+                    callback_scheduled: ['callback_scheduled', 'pending', 'failed', 'completed'],
                     failed: ['failed', 'pending', 'completed'],
-                    dnc: ['dnc', 'pending', 'completed'],
                     completed: ['completed', 'pending'],
                     calling: ['calling']
                   }[editLeadData.original_status] || [editLeadData.original_status];
 
+                  const attempts = editLeadData.attempts || 0;
+                  const maxAttempts = editLeadData.max_attempts || 3;
+                  if (attempts >= maxAttempts) {
+                    allowed = allowed.filter(s => s !== 'callback_scheduled');
+                  }
+
                   return [
-                    { value: 'pending', label: 'Pending' },
+                    { value: 'pending', label: 'Pending / Retry' },
                     { value: 'failed', label: 'Failed' },
-                    { value: 'dnc', label: 'DNC' },
                     { value: 'completed', label: 'Completed' },
                     { value: 'callback_scheduled', label: 'Callback Scheduled' }
                   ].map(opt => (

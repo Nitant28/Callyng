@@ -1,12 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import { useTheme } from '../../hooks/useTheme';
 import clientApi from '../../api/client';
 import LoaderOverlay from '../../components/shared/LoaderOverlay';
 
 const CallLogs = () => {
-  const { theme, toggleTheme } = useTheme();
-
   // Call logs state
   const [calls, setCalls] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -24,9 +21,6 @@ const CallLogs = () => {
   const [recordingUrl, setRecordingUrl] = useState(null);
   const [recordingLoading, setRecordingLoading] = useState(false);
   const [recordingError, setRecordingError] = useState(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [playSeconds, setPlaySeconds] = useState(0);
-
   // Load calls list
   const loadCalls = useCallback(async () => {
     setLoading(true);
@@ -61,8 +55,6 @@ const CallLogs = () => {
     setSelectedCall(call);
     setIsDrawerOpen(true);
     setCallLoading(true);
-    setIsPlaying(false);
-    setPlaySeconds(84);
     setRecordingUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return null;

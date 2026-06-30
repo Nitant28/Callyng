@@ -759,7 +759,7 @@ async def test_f2_t2_low_credits_warning(client):
 @pytest.mark.asyncio
 async def test_f2_t2_unsupported_razorpay_disabled(client):
     """Verifies Razorpay payment UI is commented out or disabled."""
-    path = "/home/satyam/aakashvani/frontend/src/pages/client/Dashboard.jsx"
+    path = "./frontend/src/pages/client/Dashboard.jsx"
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     assert "TODO: Credit recharge/top-up" in content

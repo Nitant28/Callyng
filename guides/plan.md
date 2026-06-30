@@ -168,7 +168,7 @@ Auth: `X-Admin-Key` header.
 
 **Revision Snapshot Timing:** Every successful create/PATCH/rollback writes the *resulting* full config as a new `script_config_revisions` row at the new version number.
 
-**Strict API Validation:** On `POST`/`PATCH` (if not `summary` mode), the API validates that *every* value in `extraction_schema.fields[intent_status].values` is covered exactly once by `outcome_terminal`, `outcome_retry`, or `outcome_callback` (or implicitly `dnc`).
+**Strict API Validation:** On `POST`/`PATCH` (if not `summary` mode), the API validates that *every* value in `extraction_schema.fields[intent_status].values` is covered exactly once by `outcome_terminal`, `outcome_retry`, or `outcome_callback` (or implicitly ``).
 
 ---
 
@@ -179,7 +179,7 @@ Auth: `X-Admin-Key` header.
 Root CLI to verify the full database-driven pipeline without Admin UI or campaign dialer:
 
 ```bash
-uv run python test_call.py --script-config-id <UUID> --phone <PHONE> --route <sts|cascaded>
+uv run python scripts/test_call.py --script-config-id <UUID> --phone <PHONE> --route <sts|cascaded>
 # or:
 just cms-call <script-config-uuid> +919... sts
 ```
@@ -211,7 +211,7 @@ The CLI auto-links `bot_configs.script_config_id` on the sandbox bot for the req
 
 ### Files
 
-- `test_call.py` — CLI entry
+- `scripts/test_call.py` — CLI entry
 - `dialer/concurrent_dialer.py` — `fire_call(..., dial_phone=)` returns `session_call_id`
 - `db/seed/dev_tenant.sql` — sandbox bots + campaign
 - `tests/test_test_call.py` — unit tests for helpers
@@ -225,7 +225,7 @@ The CLI auto-links `bot_configs.script_config_id` on the sandbox bot for the req
 1. **Phase 0 Hotfix:** Fix the `_pg.script_id` lookup via explicit resolution order.
 2. **Schema & API:** Add DB schema and build Admin CRUD API.
 3. **Data Migration:** `scripts/migrate_script_configs.py` converts module scripts into `script_configs` rows for all active clients and links `bot_configs.script_config_id`.
-4. **Test Calls:** Admins use `test_call.py` / `just cms-call` to verify migrated scripts through the full CMS path.
+4. **Test Calls:** Admins use `scripts/test_call.py` / `just cms-call` to verify migrated scripts through the full CMS path.
 
 Migration CLI:
 
@@ -243,7 +243,7 @@ uv run python scripts/migrate_script_configs.py [--dry-run] [--force-update] [--
 4. **[x] Bot Loaders:** Update bots to execute step 1 of the resolution order (`PREFETCHED_CONFIGS.pop()`).
 5. **[x] Snapshotting:** Write the targeted post-call config subset to `call_logs.call_data`.
 6. **[x] Post-Call Engine:** Refactor `post_call_extract.py` and `post_call_processor.py` to use the snapshot data.
-7. **[x] CLI Tool:** Build `test_call.py` (with throwaway lead generation) to verify the pipeline end-to-end.
+7. **[x] CLI Tool:** Build `scripts/test_call.py` (with throwaway lead generation) to verify the pipeline end-to-end.
 8. **[x] Admin API:** Build CRUD endpoints, append-only rollback (`{"version": N}`), validation logic, and template generator.
 9. **[x] Data Migration:** Migrate `.py` files to DB rows and verify using the CLI tool.
 10. **[x] Frontend CMS:** Build `AdminScriptConfigs.jsx` and refactor `AdminBotConfigs.jsx` to enforce the new workflow.
@@ -259,12 +259,12 @@ I have performed a thorough codebase audit to verify the implementation of Steps
 - **Step 2 (Database Schema):** Confirmed `db/schema/006_script_configs.sql` precisely maps to the planned schema, including `cascade_live_tools` and `UNIQUE (client_id, script_id)`.
 - **Step 3 (Dialer Prefetch & Cleanup):** Confirmed `concurrent_dialer.py` uses `register_prefetched_config` and reliably clears it via `pop_prefetched_config` inside its exception handlers. The required `sweep_stale_prefetched_configs` is wired into `maintenance.py`.
 - **Step 5 & 6 (Snapshotting & Post-Call Engine):** Confirmed `build_post_call_snapshot_from_prefetch` saves the subset to `call_logs.call_data`, which `post_call_processor.py` successfully parses.
-- **Step 7 (CLI Tool):** Confirmed `test_call.py` safely creates synthetic leads (`+cli{uuid}`) for test loops, sidestepping duplicate locks.
+- **Step 7 (CLI Tool):** Confirmed `scripts/test_call.py` safely creates synthetic leads (`+cli{uuid}`) for test loops, sidestepping duplicate locks.
 - **Step 8 (Admin API):** Confirmed the presence of `/internal/script-configs` endpoints and `api/script_config_validation.py`.
-- **Step 9 (Data Migration):** Confirmed `scripts/migrate_script_configs.py` correctly parses Python modules and exports them to the DB. Verified end-to-end routing with the migrated `script_config_id` via `test_call.py`.
+- **Step 9 (Data Migration):** Confirmed `scripts/migrate_script_configs.py` correctly parses Python modules and exports them to the DB. Verified end-to-end routing with the migrated `script_config_id` via `scripts/test_call.py`.
 
 ### Discrepancy Found and Fixed
-During Step 9 verification, `test_call.py` crashed with a `dictionary update sequence element #0 has length 1; 2 is required` error. This was traced to a **double-encoding bug** in `db/postgres.py`: `_script_config_json` was redundantly calling `json.dumps()` on `jsonb` fields, while `asyncpg`'s type codec automatically applies `json.dumps()` during inserts. As a result, JSON objects were persisted as JSON strings. I removed the redundant `json.dumps()` from `_script_config_json`, cleared the corrupted `script_configs`, re-ran the migration script, and successfully fired a Plivo test call.
+During Step 9 verification, `scripts/test_call.py` crashed with a `dictionary update sequence element #0 has length 1; 2 is required` error. This was traced to a **double-encoding bug** in `db/postgres.py`: `_script_config_json` was redundantly calling `json.dumps()` on `jsonb` fields, while `asyncpg`'s type codec automatically applies `json.dumps()` during inserts. As a result, JSON objects were persisted as JSON strings. I removed the redundant `json.dumps()` from `_script_config_json`, cleared the corrupted `script_configs`, re-ran the migration script, and successfully fired a Plivo test call.
 
 ### Frontend Verification (Step 10)
 **Result: PASS.** Frontend successfully implemented.

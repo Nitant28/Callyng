@@ -113,6 +113,38 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   };
 
+  const parseHangupJson = (raw) => {
+    if (!raw) return {};
+    if (typeof raw === 'object') return raw;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  };
+
+  const hangupSourceLabel = (source) => {
+    const s = (source || '').toString().trim().toLowerCase();
+    if (s === 'callee') return 'Callee hung up';
+    if (s === 'caller') return 'Caller hung up';
+    if (s === 'api' || s === 'api request') return 'API hangup';
+    return source || 'Unknown';
+  };
+
+  const outcomeLabel = (outcome) => {
+    const labels = {
+      Interested: 'Connected',
+      Not_Interested: 'Not Interested',
+      Early_Disconnect: 'Hung up early',
+      Callback_Requested: 'Callback requested',
+      No_Answer: 'No answer',
+      Busy: 'Busy',
+      Unknown: 'Could not determine',
+    };
+    const key = (outcome || '').toString().trim();
+    return labels[key] || key.replace(/_/g, ' ') || 'Unknown';
+  };
+
   const getInitials = (name) => {
     if (!name) return 'LD';
     return name
@@ -184,6 +216,30 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
               </button>
             </div>
 
+            {/* Post-call summary strip */}
+            {!callData.in_progress && (
+              <div className="px-6 py-3 border-b border-outline-variant dark:border-[#2A345E] bg-surface-container-low dark:bg-molten-bg/60 shrink-0">
+                <div className="flex flex-wrap gap-3 text-xs text-on-surface-variant dark:text-molten-text-muted">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[14px]">timer</span>
+                    {formatDuration(callData.duration_seconds)}
+                  </span>
+                  {callData.plivo_hangup_json && (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[14px]">call_end</span>
+                      {hangupSourceLabel(parseHangupJson(callData.plivo_hangup_json).hangup_source)}
+                    </span>
+                  )}
+                  {(callData.outcome || callData.extraction_json?.intent_status) && (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[14px]">label</span>
+                      {outcomeLabel(callData.outcome || callData.extraction_json?.intent_status)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Transcript Conversation Area */}
             <div className="flex-1 overflow-y-auto p-6 bg-arctic-bg dark:bg-molten-bg/40 flex flex-col gap-6" id="chatArea">
               {Array.isArray(callData.transcript) && callData.transcript.length > 0 ? (
@@ -220,7 +276,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
                   );
                 })
               ) : (
-                <div className="flex-1 flex items-center justify-center text-arctic-text-muted">
+                <div className="flex-1 flex items-center justify-center text-arctic-text-muted dark:text-molten-text-muted font-label-md">
                   No transcript details captured yet.
                 </div>
               )}
@@ -272,7 +328,19 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName }) => {
                   Loading audio...
                 </div>
               ) : recordingUrl ? (
-                <audio controls src={recordingUrl} className="w-full h-10 outline-none" controlsList="nodownload" />
+                <div className="flex items-center gap-2">
+                  <audio controls src={recordingUrl} className="flex-1 h-10 outline-none" controlsList="nodownload" />
+                  <a 
+                    href={recordingUrl} 
+                    download={`call_recording_${callData.phone || 'lead'}.mp3`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center w-10 h-10 shrink-0 bg-surface-variant dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-on-surface-variant dark:text-molten-text-muted hover:bg-outline-variant dark:hover:bg-[#2A345E]/50 transition-colors cursor-pointer group"
+                    title="Download Recording"
+                  >
+                    <span className="material-symbols-outlined text-lg group-hover:text-primary dark:group-hover:text-molten-primary transition-colors">download</span>
+                  </a>
+                </div>
               ) : (
                 <div className="text-center text-xs text-arctic-text-muted dark:text-molten-text-muted">
                   {recordingError || (callData.in_progress

@@ -186,8 +186,6 @@ CREATE TABLE campaigns (
     -- Terminal: Interested or Not_Interested
     failed_leads         INTEGER DEFAULT 0,
     -- Attempts exhausted, no qualified outcome
-    dnc_leads            INTEGER DEFAULT 0,
-    -- Do Not Call: opted out during call or flagged on upload
 
     -- ── EXTRACTION OVERRIDE ───────────────────────────────────
     extraction_schema_override JSONB DEFAULT NULL,
@@ -212,7 +210,6 @@ CREATE TABLE campaigns (
 --     → calling              (dialer claims with FOR UPDATE SKIP LOCKED)
 --     → completed            (terminal outcome received)
 --     → failed               (attempts >= max_attempts, no terminal outcome)
---     → dnc                  (opted out during call, or TRAI/internal DND)
 --     → callback_scheduled   (lead asked to be called back at specific time)
 --   callback_scheduled
 --     → calling              (when next_attempt_at <= NOW())
@@ -251,7 +248,7 @@ CREATE TABLE leads (
     -- ── DIALER STATE MACHINE ──────────────────────────────────
     status                  VARCHAR(50) DEFAULT 'pending'
                                 CHECK (status IN ('pending', 'calling', 'completed',
-                                                  'failed', 'dnc', 'callback_scheduled')),
+                                                  'failed', 'callback_scheduled')),
 
     attempts                INTEGER DEFAULT 0,
     -- How many call attempts have been made. Incremented in post_call_processor.
@@ -524,3 +521,15 @@ CREATE INDEX idx_call_logs_client_date
 CREATE INDEX idx_call_logs_live
     ON call_logs (session_call_id)
     WHERE in_progress = TRUE;
+
+-- Dialer hot-path: "is there a live call for this lead?"
+-- Correlated NOT EXISTS in claim_leads_for_dialer.
+CREATE INDEX idx_call_logs_lead_live
+    ON call_logs (lead_id)
+    WHERE in_progress = TRUE;
+
+-- Dialer hot-path: "did a call for this lead end recently?"
+-- Correlated NOT EXISTS with ended_at time predicate.
+CREATE INDEX idx_call_logs_lead_ended
+    ON call_logs (lead_id, ended_at DESC)
+    WHERE ended_at IS NOT NULL;

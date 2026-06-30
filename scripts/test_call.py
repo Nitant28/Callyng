@@ -2,7 +2,7 @@
 """CMS end-to-end test call — dial via script_configs without campaign dialer.
 
 Usage:
-    uv run python test_call.py --script-config-id <UUID> --phone +91... --route sts
+    uv run python scripts/test_call.py --script-config-id <UUID> --phone +91... --route sts
 
 Prerequisites:
     - server.py running (``just dev``)

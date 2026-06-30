@@ -376,12 +376,11 @@ export default function AdminCampaigns() {
               <h5 className="font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2 dark:text-molten-text">Leads Pipeline</h5>
               <div className="grid grid-cols-2 gap-2 text-sm text-on-surface-variant dark:text-molten-text-muted">
                 <div className="flex justify-between"><span>Total:</span> <span className="dark:text-molten-text">{selectedCampaign.total_leads}</span></div>
-                <div className="flex justify-between"><span>Pending:</span> <span className="dark:text-molten-text">{selectedCampaign.pending_leads}</span></div>
+                <div className="flex justify-between"><span>Pending / Retry:</span> <span className="dark:text-molten-text">{selectedCampaign.pending_leads}</span></div>
                 <div className="flex justify-between"><span>Calling:</span> <span className="dark:text-molten-text">{selectedCampaign.calling_leads}</span></div>
                 <div className="flex justify-between"><span>Callback:</span> <span className="dark:text-molten-text">{selectedCampaign.callback_leads}</span></div>
                 <div className="flex justify-between"><span>Completed:</span> <span className="dark:text-molten-text">{selectedCampaign.completed_leads}</span></div>
                 <div className="flex justify-between"><span>Failed:</span> <span className="dark:text-molten-text">{selectedCampaign.failed_leads}</span></div>
-                <div className="flex justify-between"><span>DNC:</span> <span className="dark:text-molten-text">{selectedCampaign.dnc_leads}</span></div>
               </div>
 
               <h5 className="font-bold border-b border-outline-variant dark:border-[#2A345E] pb-2 mt-4 dark:text-molten-text">Settings</h5>

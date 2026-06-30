@@ -393,12 +393,12 @@ Global competitors charge $0.05-0.15/min = ₹4-12/min. Indian human call-centre
 
 ### TRAI
 
-- **DND registry**: do not call DND-registered numbers. There is no usable public TRAI DND API — we maintain our own opt-out list and require clients to declare their consent source.
+- ** registry**:  -registered numbers. There is no usable public TRAI  API — we maintain our own opt-out list and require clients to declare their consent source.
 - **Calling hours**: 9:00 AM to 9:00 PM IST only. Enforce in `compliance.py`.
 - **Caller ID**: must show a registered Plivo number.
 - **DPDP Act 2023**: store only necessary lead data, support deletion-on-request, log where each lead's consent originated.
 
-Lead state machine and DNC-on-upload: [guides/aakash_arch.md §6](guides/aakash_arch.md).
+Lead state machine and -on-upload: [guides/aakash_arch.md §6](guides/aakash_arch.md).
 
 ```python
 # compliance.py — runs before every dial
@@ -407,7 +407,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
     if not (9 <= now_ist.hour < 21):
         return False, "outside 9am-9pm IST window"
     if phone in opt_out_list():
-        return False, "number on internal DND list"
+        return False, "number on internal  list"
     return True, "ok"
 ```
 
@@ -458,7 +458,7 @@ def is_call_allowed(phone: str) -> tuple[bool, str]:
 | `EXTRACTION_SCHEMA` per script + schema-driven `post_call_extract.py` | done |
 | `leads` table + CSV upload endpoint (strict schema via `LEAD_SCHEMA`) | planned |
 | Sequential / concurrent dialer with retry | planned (Phase 2) |
-| Basic compliance check: 9am–9pm IST, internal DND list | planned |
+| Basic compliance check: 9am–9pm IST, internal  list | planned |
 | `/api/campaigns` and lead upload client-facing endpoints | planned |
 | `/internal/*` admin endpoints | planned (Phase 2A) |
 | React SPA: `/dashboard`, `/campaigns`, `/campaigns/new`, `/calls`, `/calls/{id}`, `/credits` | planned |
@@ -580,7 +580,7 @@ Before clients run production campaigns, they need a safe path from CSV upload t
 
 | # | Feature | Why it matters | Scope (planned) |
 | - | ------- | -------------- | ----------------- |
-| **1** | **Data cleaning + pre-upload report** | Most critical — catches bad phones, missing fields, and schema violations **before** rows enter Postgres. Prevents polluted campaigns and wasted dialer credits. | On CSV upload (or dry-run endpoint): normalize phones to E.164, validate against script `LEAD_SCHEMA`, dedupe within file, flag DNC/opt-out, return a structured report (accepted / rejected / fixed rows with reasons). Client must acknowledge or fix before commit. |
+| **1** | **Data cleaning + pre-upload report** | Most critical — catches bad phones, missing fields, and schema violations **before** rows enter Postgres. Prevents polluted campaigns and wasted dialer credits. | On CSV upload (or dry-run endpoint): normalize phones to E.164, validate against script `LEAD_SCHEMA`, dedupe within file, flag opt-out, return a structured report (accepted / rejected / fixed rows with reasons). Client must acknowledge or fix before commit. |
 | **2** | **Draft-state lead management** | One coherent feature, not three tickets — while `campaigns.status = 'draft'`, clients can **edit** lead fields, **delete** leads, and **manually add** a single lead without re-uploading the whole CSV. | `GET/PATCH/DELETE /api/campaigns/{id}/leads/{lead_id}`, `POST /api/campaigns/{id}/leads` (manual). All mutations rejected once status leaves `draft` (409). SPA: draft campaign detail as the lead workspace. |
 | **3** | **Single test call** | Pre-launch confidence — one real Plivo call using the campaign’s `bot_config` and a chosen lead (or test number) before full dial. | From draft screen: “Test call” → dials one lead, writes `call_logs`, shows transcript + extraction in UI. Does not start the concurrent dialer or flip campaign to `running`. Reuses Phase 0 `/start` path with campaign/lead context where possible. |
 | **4** | **Lock on Start** | Prevents accidental or API-driven starts from `paused` / wrong state; enforces the draft → running lifecycle at the server. | `PATCH /api/campaigns/{id}/start` returns **409** unless `status = 'draft'` (and existing budget checks). After success, status → `running` and dialer starts. UI disables Start until report is clean and (optionally) test call succeeded. |

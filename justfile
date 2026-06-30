@@ -187,7 +187,7 @@ test-call phone name="Test Lead" city="Pune":
 
 # CMS pipeline test (script_configs + prefetch + post-call). Usage: just cms-call <uuid> +91... sts
 cms-call script_config_id phone route="sts":
-    uv run python test_call.py --script-config-id {{script_config_id}} --phone {{phone}} --route {{route}}
+    uv run python scripts/test_call.py --script-config-id {{script_config_id}} --phone {{phone}} --route {{route}}
 
 # Migrate module scripts into script_configs rows for all clients
 migrate-scripts:

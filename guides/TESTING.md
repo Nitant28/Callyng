@@ -159,4 +159,4 @@ SELECT session_call_id, call_sid, plivo_hangup_json
 FROM call_logs WHERE campaign_id = '<CAMPAIGN_ID>' ORDER BY started_at DESC LIMIT 3;
 ```
 Expected: lead `callback_scheduled`, `next_attempt_at` ≈ hangup time + `campaign.retry_delay_minutes`; `call_sid` set; `plivo_hangup_json` populated.
-6. After Groq post-call finishes, lead should **remain** `callback_scheduled` (not revert to `pending`) unless extraction is `Interested` / `Not_Interested` / `dnc`.
+6. After Groq post-call finishes, lead should **remain** `callback_scheduled` (not revert to `pending`) unless extraction is `Interested` / `Not_Interested` / ``.

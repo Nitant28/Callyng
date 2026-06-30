@@ -563,7 +563,6 @@ def attach_pipeline_finalize(
                         extraction = normalize_post_call_extraction(
                             parsed,
                             normalization_rules=norm_rules,
-                            transcript=transcript,
                         )
                         update_call_log_extraction(
                             row_id,

@@ -25,15 +25,15 @@
 
 | Layer | Status | Key files |
 |-------|--------|-----------|
-| **Auth — Admin** | ✅ Done | `X-Admin-Key` header, `require_admin` dep in [auth.py](file:///home/satyam/aakashvani/api/auth.py) |
+| **Auth — Admin** | ✅ Done | `X-Admin-Key` header, `require_admin` dep in [auth.py](file:/home/satyam/aakashvani/api/auth.py) |
 | **Auth — Client** | ✅ Done | `Bearer` token → SHA-256 lookup, `get_client_from_token` dep |
-| **Admin API (`/internal/*`)** | ✅ Done | [internal.py](file:///home/satyam/aakashvani/api/routes/internal.py) — clients, bot-configs, campaigns, credits, webhooks, calls |
-| **Client API (`/api/*`)** | ✅ Done | [campaigns.py](file:///home/satyam/aakashvani/api/routes/campaigns.py), [leads.py](file:///home/satyam/aakashvani/api/routes/leads.py), [calls.py](file:///home/satyam/aakashvani/api/routes/calls.py), [credits.py](file:///home/satyam/aakashvani/api/routes/credits.py) |
-| **DB schema (Postgres)** | ✅ Done | `clients`, `bot_configs`, `campaigns`, `leads`, `call_logs`, `webhook_configs` — [001_initial.sql](file:///home/satyam/aakashvani/db/schema/001_initial.sql) |
-| **Query layer** | ✅ Done | 63 KB [postgres.py](file:///home/satyam/aakashvani/db/postgres.py) — all CRUD, counters, budget, dialer, billing |
-| **Dialer** | ✅ Done | [concurrent_dialer.py](file:///home/satyam/aakashvani/dialer/concurrent_dialer.py) — `FOR UPDATE SKIP LOCKED` |
-| **Post-call pipeline** | ✅ Done | [post_call_processor.py](file:///home/satyam/aakashvani/post_call_processor.py) — lead state machine, billing, counters, webhooks |
-| **CORS** | ✅ Done | `allow_origins=["*"]` in [server.py](file:///home/satyam/aakashvani/server.py#L226-L231) — wide open for dev |
+| **Admin API (`/internal/*`)** | ✅ Done | [internal.py](file:/home/satyam/aakashvani/api/routes/internal.py) — clients, bot-configs, campaigns, credits, webhooks, calls |
+| **Client API (`/api/*`)** | ✅ Done | [campaigns.py](file:/home/satyam/aakashvani/api/routes/campaigns.py), [leads.py](file:/home/satyam/aakashvani/api/routes/leads.py), [calls.py](file:/home/satyam/aakashvani/api/routes/calls.py), [credits.py](file:/home/satyam/aakashvani/api/routes/credits.py) |
+| **DB schema (Postgres)** | ✅ Done | `clients`, `bot_configs`, `campaigns`, `leads`, `call_logs`, `webhook_configs` — [001_initial.sql](file:/home/satyam/aakashvani/db/schema/001_initial.sql) |
+| **Query layer** | ✅ Done | 63 KB [postgres.py](file:/home/satyam/aakashvani/db/postgres.py) — all CRUD, counters, budget, dialer, billing |
+| **Dialer** | ✅ Done | [concurrent_dialer.py](file:/home/satyam/aakashvani/dialer/concurrent_dialer.py) — `FOR UPDATE SKIP LOCKED` |
+| **Post-call pipeline** | ✅ Done | [post_call_processor.py](file:/home/satyam/aakashvani/post_call_processor.py) — lead state machine, billing, counters, webhooks |
+| **CORS** | ✅ Done | `allow_origins=["*"]` in [server.py](file:/home/satyam/aakashvani/server.py#L226-L231) — wide open for dev |
 
 ### What's NOT built (your work)
 
@@ -57,7 +57,7 @@ Authorization: Bearer <client_api_key>
 ```
 
 - Key created via admin `POST /internal/clients` — shown **once**, hashed (SHA-256) in DB
-- Every `/api/*` route validates via [get_client_from_token](file:///home/satyam/aakashvani/api/auth.py#L35-L53)
+- Every `/api/*` route validates via [get_client_from_token](file:/home/satyam/aakashvani/api/auth.py#L35-L53)
 - Admin key explicitly rejected on client routes (line 46-47)
 - Store token in `localStorage` or secure cookie — no JWT, no refresh tokens, no OAuth yet
 - For the SPA login: since there's no login endpoint, the simplest approach is a token-entry screen ("paste your API key") — this matches the managed service model
@@ -93,7 +93,7 @@ PATCH  /api/campaigns/:id/cancel                 → { campaign_id, status: "can
 ```
 GET    .../leads?limit=50&offset=0&status=pending  → { leads: [...] }
 GET    .../leads/:lead_id                           → { lead: {...} }
-POST   .../leads                                    → { lead: {...}, dnc: bool }  (single add)
+POST   .../leads                                    → { lead: {...}, : bool }  (single add)
 PATCH  .../leads/:lead_id                           → { lead: {...} }  (edit name/lead_type/metadata)
 DELETE .../leads/:lead_id                           → { deleted: true, counters: {...} }
 PATCH  .../leads/:lead_id/status                    → { lead: {...}, transition: "..." }
@@ -112,11 +112,11 @@ GET    /api/credits                               → { balance_credits, max_con
 > [!IMPORTANT]
 > **These will bite you if ignored.**
 
-1. **Campaign lifecycle:** `draft → running → paused ↔ running → completed/cancelled`. Lead mutations only allowed in `draft` or `paused`. The backend enforces this via [require_campaign_modifiable](file:///home/satyam/aakashvani/api/guards.py#L8-L28).
+1. **Campaign lifecycle:** `draft → running → paused ↔ running → completed/cancelled`. Lead mutations only allowed in `draft` or `paused`. The backend enforces this via [require_campaign_modifiable](file:/home/satyam/aakashvani/api/guards.py#L8-L28).
 
-2. **Live transcript polling:** `call_logs` has `in_progress: true` while a call is live. The transcript JSON array grows turn-by-turn. Poll `GET /api/calls/:session_call_id` every 3s while `in_progress` is true. Stop polling when it flips to false. There's a partial index [idx_call_logs_live](file:///home/satyam/aakashvani/db/schema/001_initial.sql#L524-L526) optimized for this.
+2. **Live transcript polling:** `call_logs` has `in_progress: true` while a call is live. The transcript JSON array grows turn-by-turn. Poll `GET /api/calls/:session_call_id` every 3s while `in_progress` is true. Stop polling when it flips to false. There's a partial index [idx_call_logs_live](file:/home/satyam/aakashvani/db/schema/001_initial.sql#L524-L526) optimized for this.
 
-3. **CSV upload:** The upload endpoint expects a `multipart/form-data` file. It validates against `LEAD_SCHEMA` from the bot's script module. Phone numbers are normalized to E.164. DNC numbers are auto-flagged.
+3. **CSV upload:** The upload endpoint expects a `multipart/form-data` file. It validates against `LEAD_SCHEMA` from the bot's script module. Phone numbers are normalized to E.164.  numbers are auto-flagged.
 
 4. **Denormalized counters:** Campaign objects have `total_leads`, `pending_leads`, `calling_leads`, `completed_leads`, etc. — use these for dashboards. **Never** `COUNT(*)` on the frontend.
 
@@ -228,7 +228,7 @@ GET    /internal/calls?limit=50&offset=0           → list all calls (all clien
 
 1. **Same codebase or separate repos?** Recommend: **separate repos** for client SPA and admin panel, both deployed as static builds behind nginx. They share no code beyond API client utils.
 
-2. **API base URL:** In dev, both hit `http://localhost:7860`. In prod, nginx routes:
+2. **API base URL:** In dev, both hit `http:/localhost:7860`. In prod, nginx routes:
    - `*.aakashvani.in` → React SPA (client)
    - `admin.aakashvani.in` → Admin panel
    - Both proxy `/api/*` and `/internal/*` to FastAPI on port 7860
@@ -251,7 +251,7 @@ Since both panels serve the same platform:
 ### 4.3 API Error Handling Pattern
 
 ```typescript
-// Shared error handler
+/ Shared error handler
 async function apiCall(url: string, options: RequestInit) {
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -311,7 +311,7 @@ flowchart LR
 
 **This works beautifully with STS.** Here's why:
 
-- The STS pipeline in [bot_sts.py](file:///home/satyam/aakashvani/bot_sts.py) doesn't depend on campaign/lead context for the audio pipeline itself
+- The STS pipeline in [bot_sts.py](file:/home/satyam/aakashvani/bot_sts.py) doesn't depend on campaign/lead context for the audio pipeline itself
 - `LeadContext.from_body(body)` gracefully handles empty bodies (defaults to empty name)
 - The script's `build_system_instruction(ctx)` and `build_bootstrap_messages(ctx)` already accept a context object — for inbound, you'd pass a minimal context with just the caller's phone number
 - Gemini Live is the **best route for inbound** (as noted in your ROADMAP: "Best for: Inbound, complex conversational scenarios")
@@ -360,7 +360,7 @@ CREATE TABLE inbound_configs (
 
 #### Why Reuse `call_logs` (Not a New Table)
 
-Looking at [call_logs schema](file:///home/satyam/aakashvani/db/schema/001_initial.sql#L324-L438):
+Looking at [call_logs schema](file:/home/satyam/aakashvani/db/schema/001_initial.sql#L324-L438):
 
 ```sql
 campaign_id  UUID REFERENCES campaigns(id),  -- already NULLABLE
@@ -437,7 +437,7 @@ async def inbound_answer(
     }
     
     host = request.headers.get("host", "localhost")
-    ws_url = f"wss://{host}/ws"
+    ws_url = f"wss:/{host}/ws"
     encoded = base64.b64encode(json.dumps(body_data).encode()).decode()
     ws_url += f"?call_id={call_id}&body={urllib.parse.quote(encoded)}"
     
@@ -547,13 +547,13 @@ flowchart TD
 
 | # | Issue | Severity | Where |
 |---|-------|----------|-------|
-| 1 | **`credits_per_minute` not snapshotted** | Medium | [post_call_processor.py:138](file:///home/satyam/aakashvani/post_call_processor.py#L138) reads live from `bot_configs` — if you change the rate mid-campaign, already-running calls bill at the new rate |
-| 2 | **No `total_count` in paginated responses** | Low | [leads.py](file:///home/satyam/aakashvani/api/routes/leads.py) and [calls.py](file:///home/satyam/aakashvani/api/routes/calls.py) — SPA can't show "page X of Y" |
-| 3 | **`PATCH /api/campaigns/:id/start` accepts `paused`** | Medium | [campaigns.py:171](file:///home/satyam/aakashvani/api/routes/campaigns.py#L171) — ROADMAP says Phase 2 priority #4 is "draft-only start" |
+| 1 | **`credits_per_minute` not snapshotted** | Medium | [post_call_processor.py:138](file:/home/satyam/aakashvani/post_call_processor.py#L138) reads live from `bot_configs` — if you change the rate mid-campaign, already-running calls bill at the new rate |
+| 2 | **No `total_count` in paginated responses** | Low | [leads.py](file:/home/satyam/aakashvani/api/routes/leads.py) and [calls.py](file:/home/satyam/aakashvani/api/routes/calls.py) — SPA can't show "page X of Y" |
+| 3 | **`PATCH /api/campaigns/:id/start` accepts `paused`** | Medium | [campaigns.py:171](file:/home/satyam/aakashvani/api/routes/campaigns.py#L171) — ROADMAP says Phase 2 priority #4 is "draft-only start" |
 | 4 | **No rate limiting on API** | High | No `slowapi` or similar — a misbehaving client could hammer the server |
-| 5 | **Admin PATCH campaigns requires `client_id` in body** | Low | [internal.py:174](file:///home/satyam/aakashvani/api/routes/internal.py#L174) — should look up from campaign |
+| 5 | **Admin PATCH campaigns requires `client_id` in body** | Low | [internal.py:174](file:/home/satyam/aakashvani/api/routes/internal.py#L174) — should look up from campaign |
 | 6 | **No script listing endpoint** | Low | Admin panel needs to know valid `script_id` values |
-| 7 | **`call_transcript.py` finalize assumes `_pg.lead_id` exists** | Medium | [call_transcript.py:416](file:///home/satyam/aakashvani/call_transcript.py#L416) — will crash on inbound calls without a lead |
+| 7 | **`call_transcript.py` finalize assumes `_pg.lead_id` exists** | Medium | [call_transcript.py:416](file:/home/satyam/aakashvani/call_transcript.py#L416) — will crash on inbound calls without a lead |
 | 8 | **CostGuard is soft** | Low | Documented: possible ~1 call budget overshoot under concurrent dialer — acceptable |
 
 ### 6.2 Design Choices for Inbound

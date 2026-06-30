@@ -1,19 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../hooks/useTheme';
 import { useToast } from '../../contexts/ToastContext';
 import clientApi from '../../api/client';
 import LoaderOverlay from '../../components/shared/LoaderOverlay';
-import { ThemeToggle, Button, Card, Badge } from '../../components/shared/ui';
+import { Badge } from '../../components/shared/ui';
 
 const Dashboard = () => {
-  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const { showToast } = useToast();
   
   // Real API data & UI State
   const [balance, setBalance] = useState(0);
-  const [maxConcurrency, setMaxConcurrency] = useState(5);
+  // removed unused maxConcurrency
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   
@@ -62,14 +61,14 @@ const Dashboard = () => {
 
 
   // Load dashboard data
-  const loadDashboardData = useCallback(async () => {
-    setLoading(true);
+  const loadDashboardData = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     try {
       // 1. Fetch credits
       const creditsRes = await clientApi.get('/api/credits');
       if (creditsRes.data) {
         setBalance(creditsRes.data.balance_credits || 0);
-        setMaxConcurrency(creditsRes.data.max_concurrent_calls || 5);
+        // setMaxConcurrency(creditsRes.data.max_concurrent_calls || 5);
       }
     } catch (err) {
       console.warn('Could not fetch credit balance from API.', err);
@@ -87,7 +86,7 @@ const Dashboard = () => {
       console.warn('Could not list campaigns from API.', err);
       setCampaigns([]);
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
   }, []);
 
@@ -107,7 +106,7 @@ const Dashboard = () => {
     if (!needsPolling) return;
     
     const interval = setInterval(() => {
-      loadDashboardData();
+      loadDashboardData(false);
     }, 5000);
     return () => clearInterval(interval);
   }, [campaigns, loadDashboardData]);
@@ -176,11 +175,7 @@ const Dashboard = () => {
     }
   };
 
-  const handleSignOut = () => {
-    localStorage.removeItem('client_api_key');
-    navigate('/login');
-  };
-
+  // Removed handleSignOut as it's unused
   // Helper formatting INR
   const formatINR = (value) => {
     return new Intl.NumberFormat('en-IN', {
@@ -390,10 +385,6 @@ const Dashboard = () => {
                     // Draft/Completed/Other Campaign
                     const isCompleted = camp.status === 'completed';
                     const isFailed = camp.status === 'failed';
-                    
-                    let badgeClasses = 'bg-arctic-text-muted/15 text-arctic-text-muted';
-                    if (isCompleted) badgeClasses = 'bg-secondary/15 text-secondary dark:bg-molten-success/15 dark:text-molten-success';
-                    if (isFailed) badgeClasses = 'bg-error/15 text-error dark:bg-molten-error/15 dark:text-molten-error';
 
                     return (
                       <div key={camp.id} className="bg-arctic-surface dark:bg-molten-surface p-5 rounded-xl border border-outline-variant/50 dark:border-[#2A345E]/50 shadow-sm hover:shadow-md transition-all duration-300 flex flex-col justify-between cursor-pointer" onClick={() => window.location.href = `/app/campaigns/${camp.id}`}>

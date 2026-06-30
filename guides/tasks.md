@@ -137,12 +137,12 @@ Lead (1) ──→ (N) Call Logs (one lead can be called multiple times)
 - **Best approach**: Add a `GET /internal/campaigns` endpoint that lists all campaigns across all clients. It doesn't exist yet — **ask the user** if this should be added to the backend.
 - **Alternative**: Use the client's `active_campaigns` and `total_campaigns` counts from `/internal/clients`, and when a client is clicked, show their campaigns. But we still need a `list_campaigns` admin endpoint. The DB function `get_campaign_admin` exists but only takes a single `campaign_id`.
 - **Recommended backend addition**: Add a `GET /internal/campaigns?client_id=<uuid>` route that calls `list_campaigns(pool, client_id)` — this DB function already exists at line 532 of `postgres.py`.
-- **Table columns**: Name, Status (badge: draft=gray, running=green, paused=amber, completed=blue, cancelled=red), Budget allocated, Budget used, Remaining, Lead counters (total/pending/calling/callback/completed/failed/dnc), Created at
+- **Table columns**: Name, Status (badge: draft=gray, running=green, paused=amber, completed=blue, cancelled=red), Budget allocated, Budget used, Remaining, Lead counters (total/pending/calling/callback/completed/failed), Created at
 - **Status values**: Exactly `draft`, `running`, `paused`, `pausing`, `completed`, `cancelled`. The `pausing` status is a transitional state while in-flight calls complete.
 
 #### 1.2 — Campaign Detail (expand on row click)
 - Fetch `GET /internal/campaigns/:id` for full detail.
-- Show all denormalized counters: `total_leads`, `pending_leads`, `calling_leads`, `callback_leads`, `completed_leads`, `failed_leads`, `dnc_leads`.
+- Show all denormalized counters: `total_leads`, `pending_leads`, `calling_leads`, `callback_leads`, `completed_leads`, `failed_leads`, ``.
 - Show budget: `budget_credits` / `budget_used_credits` / remaining (all 2 decimal places).
 - Show settings: `max_concurrent_calls`, `calls_per_minute`, `max_attempts`, `retry_delay_minutes`, `max_call_minutes`.
 - Resolve `bot_config_id` to bot name from lookup map.
@@ -283,17 +283,17 @@ Store in a shared context or pass down from a top-level admin data provider.
      Upload ──→ │   pending   │ ──→ calling ──→ completed
                 └─────────────┘         │
                       ↑                 ├──→ failed
-                      │                 ├──→ dnc
+                      │                 ├──→ 
                       │                 └──→ callback_scheduled ──→ calling (retry)
                       │                           │
                       └───────────────────────────┘ (manual: back to pending)
 ```
 
 Manual transitions allowed (from `_MANUAL_TRANSITIONS` in `leads.py`):
-- `pending` → `failed`, `dnc`, `callback_scheduled`
-- `callback_scheduled` → `pending`, `failed`, `dnc`
+- `pending` → `failed`, ``, `callback_scheduled`
+- `callback_scheduled` → `pending`, `failed`, ``
 - `failed` → `pending`
-- `dnc` → `pending`
+- `` → `pending`
 - `completed` → `pending`
 
 ## Part 6: Campaign Status State Machine
