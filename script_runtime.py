@@ -447,6 +447,14 @@ def resolve_sts_runtime(body: dict[str, Any]) -> StsRuntime:
                 runtime.script_id,
                 version,
             )
+            # Log assembled prompts for observability before the call is started.
+            try:
+                logger.info("[prompt] system_instruction for call ->\n{}", runtime.system_instruction)
+                for idx, msg in enumerate(runtime.bootstrap_messages):
+                    content = msg.get("content") if isinstance(msg, dict) else str(msg)
+                    logger.info("[prompt] bootstrap[{}] -> {}", idx, content)
+            except Exception:
+                logger.debug("[prompt] Failed to log bootstrap messages", exc_info=True)
             return runtime
         if prefetch.get("source") == "script_config":
             logger.warning(
@@ -459,6 +467,14 @@ def resolve_sts_runtime(body: dict[str, Any]) -> StsRuntime:
     ctx = LeadContext.from_body(body)
     runtime = _sts_from_module(mod, ctx)
     logger.info("STS script active: {} ({})", runtime.script_id, runtime.module_name)
+    # Log assembled prompts for observability before the call is started.
+    try:
+        logger.info("[prompt] system_instruction for call ->\n{}", runtime.system_instruction)
+        for idx, msg in enumerate(runtime.bootstrap_messages):
+            content = msg.get("content") if isinstance(msg, dict) else str(msg)
+            logger.info("[prompt] bootstrap[{}] -> {}", idx, content)
+    except Exception:
+        logger.debug("[prompt] Failed to log bootstrap messages", exc_info=True)
     return runtime
 
 
@@ -510,6 +526,10 @@ def resolve_cascade_runtime(body: dict[str, Any]) -> CascadeRuntime:
                 runtime.script_id,
                 version,
             )
+            try:
+                logger.info("[prompt] cascade system_prompt for call ->\n{}", runtime.system_prompt)
+            except Exception:
+                logger.debug("[prompt] Failed to log cascade system_prompt", exc_info=True)
             return runtime
         if prefetch.get("source") == "script_config":
             logger.warning(
@@ -522,4 +542,8 @@ def resolve_cascade_runtime(body: dict[str, Any]) -> CascadeRuntime:
     ctx = LeadContext.from_body(body, default_lead_name="Sir")
     runtime = _cascade_from_module(mod, ctx)
     logger.info("Cascade script active: {} ({})", runtime.script_id, runtime.module_name)
+    try:
+        logger.info("[prompt] cascade system_prompt for call ->\n{}", runtime.system_prompt)
+    except Exception:
+        logger.debug("[prompt] Failed to log cascade system_prompt", exc_info=True)
     return runtime

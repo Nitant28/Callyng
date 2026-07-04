@@ -17,9 +17,11 @@ clientApi.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-      // Don't loop infinitely if we're already on login
-      if (window.location.pathname !== '/login') {
+      const path = window.location.pathname;
+      // Only redirect away from protected client routes (not login itself).
+      if (path.startsWith('/app')) {
         localStorage.removeItem('client_api_key');
+        localStorage.removeItem('client_name');
         window.location.href = '/login';
       }
     }
@@ -30,7 +32,15 @@ clientApi.interceptors.response.use(
       if (typeof detail === 'string') {
         error.customErrorMessage = detail;
       } else if (Array.isArray(detail)) {
-        error.customErrorMessage = detail.map(e => e.msg).join(', ');
+        error.customErrorMessage = detail.map((e) => e.msg || String(e)).join(', ');
+      } else if (detail && typeof detail === 'object') {
+        if (Array.isArray(detail.errors)) {
+          error.customErrorMessage = detail.errors
+            .map((e) => (typeof e === 'string' ? e : e.msg || JSON.stringify(e)))
+            .join('; ');
+        } else {
+          error.customErrorMessage = detail.message || JSON.stringify(detail);
+        }
       }
     }
     

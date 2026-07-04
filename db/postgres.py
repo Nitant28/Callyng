@@ -2235,20 +2235,23 @@ async def list_campaign_leads(
     offset: int = 0,
     status: str | None = None,
     search: str | None = None,
+    outcome: str | None = None,
 ) -> tuple[list[dict], int]:
     """Return a paginated list of leads for a campaign, plus total count."""
     query = """
         SELECT l.*,
+               lc.session_call_id,
                lc.duration_seconds AS last_call_duration_seconds,
                lc.outcome AS last_call_outcome,
                lc.ended_at AS last_call_ended_at,
+               lc.in_progress AS last_call_in_progress,
                lc.plivo_hangup_json->>'hangup_source' AS last_hangup_source
         FROM leads l
         LEFT JOIN LATERAL (
-            SELECT duration_seconds, outcome, ended_at, plivo_hangup_json
+            SELECT session_call_id, duration_seconds, outcome, ended_at, plivo_hangup_json, in_progress
             FROM call_logs
-            WHERE lead_id = l.id AND ended_at IS NOT NULL
-            ORDER BY ended_at DESC
+            WHERE lead_id = l.id
+            ORDER BY started_at DESC NULLS LAST
             LIMIT 1
         ) lc ON TRUE
         WHERE l.campaign_id = $1 AND l.client_id = $2
@@ -2270,12 +2273,230 @@ async def list_campaign_leads(
         args.append(search_pattern)
         idx += 1
 
+    if outcome:
+        query += f" AND l.outcome = ${idx}"
+        count_query += f" AND outcome = ${idx}"
+        args.append(outcome)
+        idx += 1
+
     total_count = await pool.fetchval(count_query, *args)
     query += f" ORDER BY l.created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
     args.extend([limit, offset])
 
     rows = await pool.fetch(query, *args)
     return records_to_dicts(rows), total_count
+
+
+async def list_campaign_leads_for_export(
+    pool: asyncpg.Pool,
+    campaign_id: UUID,
+    client_id: UUID,
+    status: str | None = None,
+    search: str | None = None,
+    outcome: str | None = None,
+) -> list[dict]:
+    """Return all leads for a campaign export (no pagination)."""
+    rows, _ = await list_campaign_leads(
+        pool,
+        campaign_id,
+        client_id,
+        limit=1_000_000,
+        offset=0,
+        status=status,
+        search=search,
+        outcome=outcome,
+    )
+    return rows
+
+
+_LEAD_SORT_COLUMNS = {
+    "created_at": "l.created_at",
+    "name": "l.name",
+    "status": "l.status",
+    "attempts": "l.attempts",
+    "updated_at": "l.updated_at",
+}
+
+
+async def list_client_leads(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    search: str | None = None,
+    campaign_id: UUID | None = None,
+    sort: str = "created_at",
+    order: str = "desc",
+) -> tuple[list[dict], int]:
+    """Return paginated leads across all campaigns for a client."""
+    sort_col = _LEAD_SORT_COLUMNS.get(sort, "l.created_at")
+    order_dir = "ASC" if (order or "").lower() == "asc" else "DESC"
+
+    query = f"""
+        SELECT l.*,
+               c.name AS campaign_name,
+               lc.duration_seconds AS last_call_duration_seconds,
+               lc.outcome AS last_call_outcome,
+               lc.ended_at AS last_call_ended_at,
+               lc.plivo_hangup_json->>'hangup_source' AS last_hangup_source
+        FROM leads l
+        JOIN campaigns c ON c.id = l.campaign_id
+        LEFT JOIN LATERAL (
+            SELECT duration_seconds, outcome, ended_at, plivo_hangup_json
+            FROM call_logs
+            WHERE lead_id = l.id AND ended_at IS NOT NULL
+            ORDER BY ended_at DESC
+            LIMIT 1
+        ) lc ON TRUE
+        WHERE l.client_id = $1
+    """
+    count_query = "SELECT COUNT(*) FROM leads l WHERE l.client_id = $1"
+    args: list[Any] = [client_id]
+    idx = 2
+
+    if campaign_id:
+        query += f" AND l.campaign_id = ${idx}"
+        count_query += f" AND l.campaign_id = ${idx}"
+        args.append(campaign_id)
+        idx += 1
+
+    if status:
+        query += f" AND l.status = ${idx}"
+        count_query += f" AND l.status = ${idx}"
+        args.append(status)
+        idx += 1
+
+    if search:
+        search_pattern = f"%{search}%"
+        search_clause = (
+            f" AND (l.name ILIKE ${idx} OR l.phone ILIKE ${idx} OR c.name ILIKE ${idx}"
+            f" OR COALESCE(l.metadata->>'email', '') ILIKE ${idx}"
+            f" OR COALESCE(l.metadata->>'company', '') ILIKE ${idx})"
+        )
+        query += search_clause
+        count_query += (
+            f" AND (l.name ILIKE ${idx} OR l.phone ILIKE ${idx}"
+            f" OR COALESCE(l.metadata->>'email', '') ILIKE ${idx}"
+            f" OR COALESCE(l.metadata->>'company', '') ILIKE ${idx}"
+            f" OR EXISTS (SELECT 1 FROM campaigns c2 WHERE c2.id = l.campaign_id AND c2.name ILIKE ${idx}))"
+        )
+        args.append(search_pattern)
+        idx += 1
+
+    total_count = await pool.fetchval(count_query, *args)
+    query += f" ORDER BY {sort_col} {order_dir} LIMIT ${idx} OFFSET ${idx + 1}"
+    args.extend([limit, offset])
+
+    rows = await pool.fetch(query, *args)
+    return records_to_dicts(rows), total_count
+
+
+async def get_client_lead_stats(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    campaign_id: UUID | None = None,
+) -> dict:
+    """Aggregate lead counters for the client lead sheet KPI strip."""
+    args: list[Any] = [client_id]
+    campaign_filter = ""
+    if campaign_id:
+        campaign_filter = " AND campaign_id = $2"
+        args.append(campaign_id)
+
+    row = await pool.fetchrow(
+        f"""
+        SELECT
+            COUNT(*)::int AS uploaded,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+            COUNT(*) FILTER (WHERE status = 'callback_scheduled')::int AS callback,
+            COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+            COUNT(*) FILTER (WHERE status = 'calling')::int AS calling,
+            COUNT(*) FILTER (WHERE outcome = 'Interested')::int AS interested
+        FROM leads
+        WHERE client_id = $1{campaign_filter}
+        """,
+        *args,
+    )
+    return dict(row) if row else {
+        "uploaded": 0,
+        "pending": 0,
+        "callback": 0,
+        "completed": 0,
+        "failed": 0,
+        "calling": 0,
+        "interested": 0,
+    }
+
+
+async def get_campaign_outcome_stats(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    campaign_id: UUID,
+) -> dict:
+    """Outcome and status counters for campaign detail stats (single source of truth)."""
+    row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*)::int AS total_leads,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_leads,
+            COUNT(*) FILTER (WHERE status = 'calling')::int AS calling_leads,
+            COUNT(*) FILTER (WHERE status = 'callback_scheduled')::int AS callback_leads,
+            COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_leads,
+            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_leads,
+            COUNT(*) FILTER (WHERE outcome = 'Interested')::int AS interested_leads,
+            COUNT(*) FILTER (WHERE outcome = 'Not_Interested')::int AS not_interested_leads,
+            COUNT(*) FILTER (
+                WHERE outcome IN ('Interested', 'Not_Interested', 'Early_Disconnect', 'Wrong_Requirement')
+            )::int AS answered_leads,
+            COUNT(*) FILTER (
+                WHERE outcome IN ('No_Answer', 'Busy', 'Rejected', 'Carrier_Failed')
+            )::int AS not_answered_leads,
+            COUNT(*) FILTER (WHERE outcome = 'Busy')::int AS busy_leads
+        FROM leads
+        WHERE client_id = $1 AND campaign_id = $2
+        """,
+        client_id,
+        campaign_id,
+    )
+    if not row:
+        return {
+            "total_leads": 0,
+            "pending_leads": 0,
+            "calling_leads": 0,
+            "callback_leads": 0,
+            "completed_leads": 0,
+            "failed_leads": 0,
+            "interested_leads": 0,
+            "not_interested_leads": 0,
+            "answered_leads": 0,
+            "not_answered_leads": 0,
+            "busy_leads": 0,
+            "conversion_rate": None,
+        }
+    stats = dict(row)
+    total = int(stats.get("total_leads") or 0)
+    interested = int(stats.get("interested_leads") or 0)
+    stats["conversion_rate"] = round((interested / total) * 100, 2) if total > 0 else None
+    return stats
+
+
+async def get_campaigns_interested_counts(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+) -> dict[str, int]:
+    """Map campaign_id → interested lead count for list views."""
+    rows = await pool.fetch(
+        """
+        SELECT campaign_id, COUNT(*)::int AS interested_leads
+        FROM leads
+        WHERE client_id = $1 AND outcome = 'Interested'
+        GROUP BY campaign_id
+        """,
+        client_id,
+    )
+    return {str(r["campaign_id"]): int(r["interested_leads"] or 0) for r in rows}
 
 
 async def update_lead_fields(
@@ -2993,10 +3214,14 @@ async def get_latest_call_log_for_lead(
 async def list_call_logs(
     pool: asyncpg.Pool,
     client_id: UUID | None,
-    limit: int = 50,
+    limit: int = 2000,
     offset: int = 0,
     search: str | None = None,
+    campaign_id: UUID | None = None,
 ) -> tuple[list[dict], int]:
+    """
+    Return all calls by recency. Stack ordering (running calls first) is handled on frontend.
+    """
     base_query = "FROM call_logs cl LEFT JOIN leads l ON cl.lead_id = l.id"
     conditions = []
     args = []
@@ -3007,6 +3232,11 @@ async def list_call_logs(
         args.append(client_id)
         idx += 1
         conditions.append("(cl.call_data->>'is_test_call' IS NULL OR cl.call_data->>'is_test_call' != 'true')")
+
+    if campaign_id is not None:
+        conditions.append(f"cl.campaign_id = ${idx}")
+        args.append(campaign_id)
+        idx += 1
         
     if search:
         search_pattern = f"%{search}%"

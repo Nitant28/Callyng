@@ -1,0 +1,175 @@
+.cd-campaigns {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+}
+.cd-campaigns__header {
+  padding: 18px 20px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 60px;
+}
+.cd-campaigns__actions {
+  display: flex;
+  gap: 8px;
+}
+.cd-campaigns__action {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.cd-campaigns__header h2 {
+  font-size: var(--font-section);
+  font-weight: var(--weight-bold);
+  letter-spacing: -1px;
+  color: var(--text);
+}
+.cd-campaigns__error {
+  padding: 0 20px 8px;
+  color: var(--danger);
+  font-size: var(--font-caption);
+}
+.cd-campaigns__cols {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.9fr 0.5fr 0.6fr 0.8fr 0.8fr 32px;
+  gap: 6px;
+  padding: 0 16px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.cd-campaigns__cols span {
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cd-campaigns__body {
+  padding: 4px 8px 10px;
+  overflow-y: auto;
+  flex: 1;
+}
+.cd-campaigns__row {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.9fr 0.5fr 0.6fr 0.8fr 0.8fr 32px;
+  gap: 6px;
+  align-items: center;
+  min-height: 80px;
+  padding: 0 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease;
+}
+.cd-campaigns__row:hover {
+  background: #f0f6ff;
+  transform: translateX(2px);
+}
+.cd-campaigns__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.cd-campaigns__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.cd-campaigns__icon .material-symbols-outlined { font-size: 16px; }
+.cd-campaigns__name {
+  font-size: var(--font-caption);
+  font-weight: var(--weight-bold);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cd-campaigns__status {
+  display: inline-flex;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: var(--weight-semibold);
+}
+.cd-campaigns__status--running { background: var(--success-light); color: #15803d; }
+.cd-campaigns__status--paused,
+.cd-campaigns__status--pausing { background: var(--warning-light); color: #b45309; }
+.cd-campaigns__status--draft { background: #f1f5f9; color: #64748b; }
+.cd-campaigns__status--completed { background: var(--primary-light); color: #1d4ed8; }
+.cd-campaigns__health {
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+  padding: 3px 8px;
+  border-radius: 999px;
+  width: fit-content;
+}
+.cd-campaigns__health--green { background: var(--success-light); color: #15803d; }
+.cd-campaigns__health--orange { background: var(--warning-light); color: #b45309; }
+.cd-campaigns__health--red { background: var(--danger-light); color: #b91c1c; }
+.cd-campaigns__health--blue { background: var(--primary-light); color: #1d4ed8; }
+.cd-campaigns__health--neutral { background: var(--surface-alt); color: var(--text-muted); }
+.cd-campaigns__cell {
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.cd-campaigns__progress,
+.cd-campaigns__conv {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+}
+.cd-campaigns__progress-bar,
+.cd-campaigns__conv-bar,
+.cd-campaigns__budget-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--border-light);
+  border-radius: 999px;
+  overflow: hidden;
+  max-width: 40px;
+}
+.cd-campaigns__progress-bar > div,
+.cd-campaigns__conv-bar > div,
+.cd-campaigns__budget-bar > div {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #60a5fa);
+  border-radius: 999px;
+}
+.cd-campaigns__budget {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+}
+.cd-campaigns__budget-bar { max-width: 100%; }
+.cd-campaigns__action {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}

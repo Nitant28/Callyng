@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 from api.script_config_validation import normalize_route
 
-_ROOT = Path(__file__).resolve().parent
+_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_ROOT / ".env")
 
 DEV_CLIENT_ID = UUID("00000000-0000-4000-8000-000000000001")
@@ -62,13 +62,13 @@ def _warn_localhost_callbacks(host: str) -> None:
 
 
 async def _get_pool():
-    import asyncpg
+    from db import postgres as pg_db
 
     dsn = (os.environ.get("DATABASE_URL") or "").strip()
     if not dsn:
         print("ERROR: DATABASE_URL is not set in .env", file=sys.stderr)
         sys.exit(1)
-    return await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=5, command_timeout=30)
+    return await pg_db.create_db_pool(dsn)
 
 
 async def _resolve_bot_config(
@@ -183,6 +183,17 @@ async def _claim_throwaway_lead(
     return lead
 
 
+def _call_log_finalized(row: dict | None) -> bool:
+    """True when hangup + post-call have written duration/outcome (not just in_progress cleared)."""
+    if not row or row.get("in_progress"):
+        return False
+    if row.get("duration_seconds") is not None and row.get("ended_at"):
+        return True
+    if row.get("outcome"):
+        return True
+    return False
+
+
 async def _poll_call_log(pool, session_call_id: str, *, timeout_s: int) -> dict | None:
     from db import postgres as pg_db
 
@@ -190,7 +201,7 @@ async def _poll_call_log(pool, session_call_id: str, *, timeout_s: int) -> dict 
     interval = 2
     while elapsed <= timeout_s:
         row = await pg_db.get_call_log_by_session(pool, session_call_id)
-        if row and not row.get("in_progress"):
+        if _call_log_finalized(row):
             return row
         await asyncio.sleep(interval)
         elapsed += interval
@@ -212,6 +223,14 @@ def _print_summary(
     print(f"In progress: {call_log.get('in_progress')}")
     print(f"Duration (s): {call_log.get('duration_seconds')}")
     print(f"Outcome: {call_log.get('outcome')}")
+    transcript = call_log.get("transcript") or []
+    if isinstance(transcript, str):
+        try:
+            transcript = json.loads(transcript)
+        except json.JSONDecodeError:
+            transcript = []
+    print(f"Transcript turns: {len(transcript)}")
+    print(f"Recording: {'yes' if call_log.get('recording_url') else 'no'}")
 
     extraction = call_log.get("extraction_json")
     if isinstance(extraction, str):
@@ -258,6 +277,9 @@ async def run_test_call(args: argparse.Namespace) -> int:
 
     pool = await _get_pool()
     try:
+        from db import redis_client as redis_db
+
+        await redis_db.init_redis()
         script_config = await pg_db.get_script_config(
             pool, script_config_id, client_id
         )
@@ -340,12 +362,18 @@ async def run_test_call(args: argparse.Namespace) -> int:
             call_log=call_log,
         )
 
-        if call_log and not call_log.get("in_progress"):
+        if call_log and _call_log_finalized(call_log):
             return 0
         print("Call still in progress or not finalized (timeout).", file=sys.stderr)
         return 2
     finally:
         await pool.close()
+        try:
+            from db import redis_client as redis_db
+
+            await redis_db.close_redis()
+        except Exception:
+            pass
 
 
 def build_parser() -> argparse.ArgumentParser:

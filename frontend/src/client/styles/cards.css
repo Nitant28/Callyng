@@ -1,0 +1,45 @@
+/* ── Cards and Panels ── */
+
+.cl-card {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px !important;
+  padding: 24px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+.cl-card--interactive:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Modal styling matching page rules */
+.cl-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.3) !important;
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 32px !important;
+}
+
+.cl-modal {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px !important;
+  padding: 32px !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04) !important;
+  width: 100%;
+  max-width: 520px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-card);
+}

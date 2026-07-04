@@ -1,0 +1,47 @@
+/* ============================================================
+   ADMIN TABLES — using design tokens from tokens.css
+   ============================================================ */
+
+.admin-table-container {
+  background-color: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-md);
+  overflow: hidden;
+  box-shadow: var(--admin-shadow-card);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.admin-table th {
+  padding: var(--admin-sp-3) var(--admin-sp-4);
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--admin-text-muted);
+  background-color: var(--admin-surface-alt);
+  border-bottom: 1px solid var(--admin-border);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.admin-table td {
+  padding: var(--admin-sp-3) var(--admin-sp-4);
+  font-size: var(--admin-text-base);
+  color: var(--admin-text-primary);
+  border-bottom: 1px solid var(--admin-border);
+  vertical-align: middle;
+}
+
+.admin-table tr:last-child td { border-bottom: none; }
+
+.table-row-hover {
+  transition: background 0.12s;
+  cursor: pointer;
+}
+.table-row-hover:hover { background-color: var(--admin-surface-alt); }

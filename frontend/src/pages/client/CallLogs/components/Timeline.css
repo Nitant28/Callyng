@@ -1,0 +1,19 @@
+.cl-timeline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 12px;
+}
+.cl-timeline__label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.cl-timeline__line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}

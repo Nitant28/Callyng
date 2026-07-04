@@ -1,0 +1,292 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
+
+.cl-login {
+  min-height: 100vh;
+  position: relative;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #0f172a;
+}
+
+.cl-login__header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 32px;
+}
+
+.cl-login__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cl-login__brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #2563eb;
+  box-shadow: 0 0 12px rgba(37, 99, 235, 0.45);
+}
+
+.cl-login__brand-name {
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+}
+
+.cl-login__theme-btn {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.cl-login__theme-btn:hover {
+  background: #f8fafc;
+  color: #2563eb;
+}
+
+.cl-login__main {
+  position: relative;
+  z-index: 10;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 96px 20px 80px;
+}
+
+.cl-login__card {
+  width: 100%;
+  max-width: 440px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+  padding: 32px 28px 28px;
+}
+
+.cl-login__icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.cl-login__icon .material-symbols-outlined {
+  font-size: 24px;
+}
+
+.cl-login__title {
+  margin: 0 0 8px;
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: #0f172a;
+}
+
+.cl-login__subtitle {
+  margin: 0 0 24px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.cl-login__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cl-login__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.cl-login__input-wrap {
+  position: relative;
+}
+
+.cl-login__input {
+  width: 100%;
+  height: 52px;
+  padding: 0 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 14px;
+  color: #0f172a;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.cl-login__input::placeholder {
+  color: #94a3b8;
+  font-family: 'Inter', sans-serif;
+}
+
+.cl-login__input:focus {
+  border-color: #2563eb;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.cl-login__input--error {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+}
+
+.cl-login__input--success {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.1);
+}
+
+.cl-login__input:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.cl-login__check {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #16a34a;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.cl-login__check--visible {
+  opacity: 1;
+}
+
+.cl-login__error {
+  min-height: 20px;
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: #dc2626;
+}
+
+.cl-login__btn {
+  width: 100%;
+  height: 48px;
+  margin-top: 20px;
+  border: none;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #fff;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+  transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+}
+
+.cl-login__btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.cl-login__btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.cl-login__btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.cl-login__btn--shake {
+  animation: cl-login-shake 0.4s ease;
+}
+
+.cl-login__spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: cl-login-spin 0.7s linear infinite;
+}
+
+.cl-login__footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 32px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+@keyframes cl-login-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+@keyframes cl-login-spin {
+  to { transform: rotate(360deg); }
+}
+
+.dark .cl-login__card {
+  background: rgba(18, 24, 36, 0.92);
+  border-color: #334155;
+}
+
+.dark .cl-login__brand-name,
+.dark .cl-login__title {
+  color: #f1f5f9;
+}
+
+.dark .cl-login__subtitle,
+.dark .cl-login__label {
+  color: #94a3b8;
+}
+
+.dark .cl-login__input {
+  background: #1e293b;
+  border-color: #334155;
+  color: #f1f5f9;
+}
+
+.dark .cl-login__theme-btn {
+  background: #1e293b;
+  border-color: #334155;
+  color: #cbd5e1;
+}

@@ -1,0 +1,82 @@
+.cl-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+.cl-filterbar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.cl-filterbar__btn:hover { background: var(--surface-alt); }
+.cl-filterbar__btn--active { border-color: var(--primary); color: var(--primary); }
+.cl-filterbar__btn .material-symbols-outlined { font-size: 18px; }
+.cl-filterbar__count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.cl-filterbar__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: 280px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-dropdown, 0 8px 24px rgba(15, 23, 42, 0.12));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cl-filterbar__panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.cl-filterbar__panel select,
+.cl-filterbar__panel input {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+}
+.cl-filterbar__clear {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+}
+.cl-spin { animation: cl-spin 0.8s linear infinite; }
+@keyframes cl-spin { to { transform: rotate(360deg); } }

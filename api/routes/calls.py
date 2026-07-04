@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi.responses import FileResponse, StreamingResponse
 import aiohttp
 
+from loguru import logger
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from db import postgres as pg_db
 from recording import resolve_recording_url
@@ -33,10 +34,15 @@ async def _resolve_call_log(pool, session_call_id: str, client_id: UUID) -> dict
 async def list_calls(
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(2000, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     search: Optional[str] = Query(None),
 ):
+    """
+    List calls in stack order: running calls pinned to top, then by recency.
+    Stack structure: running → recently ended → older calls
+    Default limit is 2000 (full stack) to support stack-based ordering.
+    """
     cid = client_id_uuid(client)
     calls, total_count = await pg_db.list_call_logs(pool, cid, limit=limit, offset=offset, search=search)
     return {"calls": calls, "total_count": total_count}

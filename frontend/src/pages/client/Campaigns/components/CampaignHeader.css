@@ -1,0 +1,38 @@
+.cmp-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 16px 24px;
+  margin-bottom: var(--page-section-gap, 16px);
+}
+.cmp-header h1 {
+  font-size: var(--font-page-title);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--text);
+  margin: 0;
+}
+.cmp-header p {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+.cmp-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+@media (max-width: 768px) {
+  .cmp-header {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 16px;
+  }
+  .cmp-header__actions {
+    width: 100%;
+  }
+}

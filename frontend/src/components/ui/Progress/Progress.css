@@ -1,0 +1,28 @@
+.ui-progress {
+  height: var(--progress-height);
+  border-radius: var(--radius-pill);
+  background: var(--border-light);
+  overflow: hidden;
+}
+
+.ui-progress__fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  transition: width var(--transition-slow);
+}
+
+.ui-progress__fill--primary {
+  background: var(--primary);
+}
+
+.ui-progress__fill--success {
+  background: var(--success);
+}
+
+.ui-progress__fill--warning {
+  background: var(--warning);
+}
+
+.ui-progress__fill--danger {
+  background: var(--danger);
+}

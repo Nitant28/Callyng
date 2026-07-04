@@ -1,0 +1,93 @@
+/* ============================================================
+   ADMIN TYPOGRAPHY
+   All text scale classes, using tokens from tokens.css.
+   ============================================================ */
+
+/* Display / Headline */
+.font-headline-xl, .text-headline-xl {
+  font-family: var(--admin-font-display);
+  font-size: var(--admin-text-4xl) !important;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.font-headline-lg, .text-headline-lg {
+  font-family: var(--admin-font-display);
+  font-size: var(--admin-text-3xl) !important;
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.font-headline-md, .text-headline-md {
+  font-family: var(--admin-font-display);
+  font-size: var(--admin-text-2xl) !important;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.font-headline-sm, .text-headline-sm {
+  font-family: var(--admin-font-display);
+  font-size: var(--admin-text-xl) !important;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* Body */
+.font-body-lg, .text-body-lg {
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-lg) !important;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.font-body-md, .text-body-md {
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-base) !important;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.font-body-sm, .text-body-sm {
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-sm) !important;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+/* Labels */
+.font-label-md, .text-label-md {
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-base) !important;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.font-label-sm, .text-label-sm {
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-sm) !important;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* Caption */
+.font-caption, .text-caption {
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-xs) !important;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+/* Text colour helpers */
+.text-on-background,
+.text-on-surface   { color: var(--admin-text-primary)   !important; }
+.text-on-surface-variant { color: var(--admin-text-secondary) !important; }
+.text-outline      { color: var(--admin-text-muted)     !important; }
+
+/* Dark mode overrides */
+.dark .text-on-background,
+.dark .text-on-surface   { color: var(--color-molten-text)        !important; }
+.dark .text-on-surface-variant { color: var(--color-molten-text-muted) !important; }
+.dark .text-outline      { color: var(--color-molten-text-muted)  !important; }

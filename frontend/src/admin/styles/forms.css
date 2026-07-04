@@ -1,0 +1,46 @@
+/* ============================================================
+   ADMIN FORMS — using design tokens from tokens.css
+   ============================================================ */
+
+.admin-app input[type="text"],
+.admin-app input[type="password"],
+.admin-app input[type="number"],
+.admin-app input[type="email"],
+.admin-app input[type="search"],
+.admin-app select,
+.admin-app textarea {
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-base);
+  color: var(--admin-text-primary);
+  background-color: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-sm);
+  padding: var(--admin-sp-2) var(--admin-sp-4);
+  height: 38px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.admin-app textarea { height: auto; }
+
+.admin-app input:focus,
+.admin-app select:focus,
+.admin-app textarea:focus {
+  border-color: var(--admin-primary);
+  box-shadow: 0 0 0 3px rgba(26, 71, 232, 0.1);
+}
+
+.admin-app label {
+  display: block;
+  font-size: var(--admin-text-sm);
+  font-weight: 600;
+  color: var(--admin-text-secondary);
+  margin-bottom: var(--admin-sp-1);
+}
+
+.admin-app .form-group { margin-bottom: var(--admin-sp-4); }
+
+/* Select arrow */
+.admin-app select { appearance: auto; }

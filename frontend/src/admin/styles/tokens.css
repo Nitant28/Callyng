@@ -1,0 +1,121 @@
+/* ============================================================
+   ADMIN DESIGN TOKENS
+   Single source of truth for all admin UI values.
+   ============================================================ */
+
+:root {
+  /* Brand palette */
+  --admin-primary:          #1a47e8;
+  --admin-primary-muted:    #dde4fd;
+  --admin-on-primary:       #ffffff;
+  --admin-success:          #006b5c;
+  --admin-success-bg:       #d7f5f0;
+  --admin-error:            #ba1a1a;
+  --admin-error-bg:         #fce8e8;
+  --admin-warning:          #b45309;
+  --admin-warning-bg:       #fef3c7;
+
+  /* Surface palette */
+  --admin-bg:               #f4f6fb;
+  --admin-surface:          #ffffff;
+  --admin-surface-alt:      #f8f9fe;
+  --admin-border:           #e0e3ee;
+  --admin-border-strong:    #c4c5d8;
+
+  /* Text palette */
+  --admin-text-primary:     #0c1941;
+  --admin-text-secondary:   #444656;
+  --admin-text-muted:       #747687;
+  --admin-text-disabled:    #a0a3b0;
+
+  /* Typography */
+  --admin-font-body:        'Inter', system-ui, sans-serif;
+  --admin-font-display:     'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+
+  --admin-text-xs:          11px;
+  --admin-text-sm:          12px;
+  --admin-text-base:        14px;
+  --admin-text-md:          15px;
+  --admin-text-lg:          16px;
+  --admin-text-xl:          20px;
+  --admin-text-2xl:         24px;
+  --admin-text-3xl:         30px;
+  --admin-text-4xl:         36px;
+
+  /* Spacing — 8pt grid */
+  --admin-sp-1:   4px;
+  --admin-sp-2:   8px;
+  --admin-sp-3:  12px;
+  --admin-sp-4:  16px;
+  --admin-sp-5:  20px;
+  --admin-sp-6:  24px;
+  --admin-sp-8:  32px;
+  --admin-sp-10: 40px;
+  --admin-sp-12: 48px;
+
+  /* Border radius */
+  --admin-radius-sm:  6px;
+  --admin-radius-md:  10px;
+  --admin-radius-lg:  14px;
+  --admin-radius-xl:  20px;
+  --admin-radius-full: 9999px;
+
+  /* Shadow */
+  --admin-shadow-card:  0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(22,71,232,0.04);
+  --admin-shadow-modal: 0 8px 40px rgba(12,25,65,0.16);
+
+  /* Layout */
+  --admin-sidebar-w:  220px;
+  --admin-topbar-h:   0px;   /* no topbar in image; content fills width */
+  --admin-page-pad:   32px;
+  --admin-gap:        20px;
+
+  /* Backward-compat aliases for legacy classes */
+  --space-8:  var(--admin-sp-2);
+  --space-16: var(--admin-sp-4);
+  --space-24: var(--admin-sp-6);
+  --space-32: var(--admin-sp-8);
+  --space-48: var(--admin-sp-12);
+
+  --font-headline-xl: var(--admin-text-3xl);
+  --font-headline-lg: var(--admin-text-2xl);
+  --font-headline-md: var(--admin-text-xl);
+  --font-headline-sm: var(--admin-text-lg);
+  --font-body-lg:     var(--admin-text-lg);
+  --font-body-md:     var(--admin-text-base);
+  --font-body-sm:     var(--admin-text-sm);
+  --font-caption:     var(--admin-text-xs);
+
+  --color-primary:              var(--admin-primary);
+  --color-on-primary:           var(--admin-on-primary);
+  --color-secondary:            var(--admin-success);
+  --color-background:           var(--admin-bg);
+  --color-on-background:        var(--admin-text-primary);
+  --color-surface:              var(--admin-surface);
+  --color-on-surface:           var(--admin-text-primary);
+  --color-on-surface-variant:   var(--admin-text-secondary);
+  --color-outline:              var(--admin-text-muted);
+  --color-outline-variant:      var(--admin-border);
+  --color-surface-container-lowest: var(--admin-surface);
+  --color-surface-container-low:    var(--admin-surface-alt);
+  --color-surface-container:        #ebedff;
+  --color-surface-container-high:   #e4e7ff;
+  --color-surface-variant:          #dce1ff;
+  --color-error:                    var(--admin-error);
+  --color-error-container:          var(--admin-error-bg);
+  --color-on-error-container:       var(--admin-error);
+
+  /* Molten dark mode (unchanged) */
+  --color-molten-bg:            #141210;
+  --color-molten-surface:       #1C1810;
+  --color-molten-primary:       #4D75FA;
+  --color-molten-success:       #FFB932;
+  --color-molten-error:         #FF426A;
+  --color-molten-text:          #FFF8EC;
+  --color-molten-text-muted:    #7A7060;
+  --sidebar-width:              var(--admin-sidebar-w);
+  --header-height:              var(--admin-topbar-h);
+  --nav-item-height:            44px;
+  --sidebar-padding:            var(--admin-sp-5);
+  --sidebar-gap:                var(--admin-sp-1);
+}

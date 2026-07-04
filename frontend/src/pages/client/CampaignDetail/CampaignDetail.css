@@ -1,0 +1,119 @@
+.cdet-page {
+  width: 100%;
+  max-width: 100%;
+}
+.cdet-compliance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  border: 1px solid;
+  font-size: 13px;
+}
+.cdet-compliance--active {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #047857;
+}
+.cdet-compliance--paused {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #b45309;
+}
+.cdet-compliance__main {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.cdet-compliance__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+  background: currentColor;
+}
+.cdet-compliance h4 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 2px;
+}
+.cdet-compliance p {
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.35;
+  opacity: 0.9;
+  max-width: 640px;
+}
+.cdet-compliance__time {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cdet-panel {
+  background: var(--surface);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 20px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+}
+.cdet-panel .ent-tabs {
+  padding: 0 24px;
+}
+.cdet-panel__body {
+  padding: 24px;
+}
+.cdet-overview {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 24px;
+}
+.cdet-overview__cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+.cdet-overview__card {
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  background: #f8fafc;
+}
+.cdet-overview__card h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+.cdet-overview__stat {
+  margin-bottom: 12px;
+}
+.cdet-overview__stat span {
+  display: block;
+  font-size: 13px;
+  color: var(--text-caption);
+  margin-bottom: 4px;
+}
+.cdet-overview__stat strong {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 1100px) {
+  .cdet-overview { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .cdet-overview__cards { grid-template-columns: 1fr; }
+}

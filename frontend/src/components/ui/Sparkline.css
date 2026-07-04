@@ -1,0 +1,10 @@
+.ds-sparkline {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.ds-sparkline--empty {
+  background: linear-gradient(90deg, transparent, var(--border-light), transparent);
+  border-radius: 4px;
+  opacity: 0.5;
+}

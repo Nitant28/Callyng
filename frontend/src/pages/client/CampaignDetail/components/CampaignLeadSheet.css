@@ -1,0 +1,186 @@
+.cdet-lead-sheet {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-card);
+}
+
+.cdet-lead-sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.cdet-lead-sheet__title {
+  margin: 0;
+  font-size: var(--font-section);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.cdet-lead-sheet__actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.cdet-lead-sheet__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+
+.cdet-lead-sheet__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.cdet-lead-sheet__filter {
+  height: var(--button-height);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.cdet-lead-sheet__filter--active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.cdet-lead-sheet__action {
+  height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--surface);
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  cursor: pointer;
+}
+.cdet-lead-sheet__identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cdet-lead-sheet__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.cdet-lead-sheet__mono {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+.cdet-lead-sheet__num {
+  font-variant-numeric: tabular-nums;
+}
+.cdet-lead-sheet__muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.cdet-lead-sheet__empty {
+  text-align: center;
+  padding: 48px 16px !important;
+  color: var(--text-muted);
+}
+.cdet-lead-sheet__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.cdet-lead-sheet__footer > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cdet-lead-sheet__footer button {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 13px;
+}
+.cdet-lead-sheet__footer button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.cdet-lead-sheet__page {
+  padding: 0 8px;
+}
+.cdet-lead-sheet__row--live {
+  /* Premium gradient background with subtle glass effect */
+  background: linear-gradient(135deg, rgba(239,246,255,0.9), rgba(219,234,254,0.9));
+  backdrop-filter: blur(4px);
+  border-left: 4px solid #2563EB;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+.cdet-lead-sheet__row--live:hover {
+  background: linear-gradient(135deg, rgba(219,234,254,0.95), rgba(191,219,254,0.95));
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+
+/* Left border accent */
+.cdet-lead-sheet__row--live td:first-child {
+  border-left: 6px solid #2563EB;
+}
+
+/* Animated LIVE badge for premium feel */
+.cdet-lead-sheet__row--live .cl-badge--live {
+  background: linear-gradient(45deg, #3B82F6, #60A5FA);
+  color: #fff;
+  animation: badge-pulse 2s infinite;
+}
+
+@keyframes badge-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(59,130,246,0); }
+  100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+}
+.pulsing-icon {
+  animation: pulse-blue 1.5s infinite;
+  display: inline-block;
+  color: #2563EB;
+  filter: drop-shadow(0 0 4px rgba(37,99,235,0.6));
+}
+
+@keyframes pulse-blue {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7);
+  }
+  70% {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
+}

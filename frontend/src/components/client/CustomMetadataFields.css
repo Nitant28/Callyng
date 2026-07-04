@@ -1,0 +1,98 @@
+.ent-custom-cols {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.ent-custom-cols__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ent-custom-cols__label {
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+}
+
+.ent-custom-cols__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  background: var(--surface-alt, #f8fafc);
+  color: var(--primary, #2563eb);
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ent-custom-cols__add:hover {
+  background: var(--primary-light, #eff6ff);
+  border-color: #bfdbfe;
+}
+
+.ent-custom-cols__add .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.ent-custom-cols__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ent-custom-cols__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.ent-custom-cols__row input {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text, #0f172a);
+  background: var(--surface, #fff);
+  outline: none;
+}
+
+.ent-custom-cols__row input:focus {
+  border-color: var(--primary, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.ent-custom-cols__remove {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  background: var(--surface-alt, #f8fafc);
+  color: var(--text-muted, #64748b);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.ent-custom-cols__remove:hover {
+  color: #b91c1c;
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.ent-custom-cols__remove .material-symbols-outlined {
+  font-size: 18px;
+}

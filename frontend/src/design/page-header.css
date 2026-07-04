@@ -1,0 +1,88 @@
+/* Unified page header — actions align with H1, not eyebrow */
+.page-header {
+  margin-bottom: var(--space-4);
+}
+
+.page-header__eyebrow {
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-2);
+}
+
+.page-header__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.page-header__copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.page-header__title {
+  font-size: var(--font-h1);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.02em;
+  line-height: var(--line-tight);
+  color: var(--text);
+  margin: 0;
+}
+
+.page-header__subtitle {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-small);
+  font-weight: var(--weight-normal);
+  line-height: var(--line-normal);
+  color: var(--text-muted);
+}
+
+.page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-self: flex-start;
+  padding-top: 4px;
+}
+
+.page-header--bordered {
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-4);
+}
+
+/* Page vertical rhythm */
+.page-toolbar {
+  margin-bottom: var(--space-3);
+}
+
+.page-tabs {
+  margin-bottom: var(--space-4);
+}
+
+.page-content {
+  margin-bottom: var(--space-4);
+}
+
+@media (max-width: 768px) {
+  .page-header__title {
+    font-size: clamp(32px, 8vw, var(--font-h1));
+  }
+
+  .page-header__title-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .page-header__actions {
+    width: 100%;
+    padding-top: 0;
+  }
+}

@@ -1,0 +1,74 @@
+.cmp-table-wrap {
+  background: var(--surface);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+}
+.cmp-table-scroll {
+  overflow-x: auto;
+}
+.cmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.cmp-table thead th {
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  white-space: nowrap;
+  background: rgba(15, 23, 42, 0.02);
+}
+.cmp-table__row {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.cmp-table__row:hover {
+  background: rgba(15, 23, 42, 0.02);
+}
+.cmp-table__row--selected {
+  background: rgba(59, 130, 246, 0.06);
+}
+.cmp-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.04);
+  vertical-align: middle;
+}
+.cmp-table__check {
+  width: 44px;
+}
+.cmp-table__name {
+  font-weight: 600;
+  color: var(--text);
+}
+.cmp-table__num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.cmp-table__muted {
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.cmp-table__action button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.cmp-table__action button:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--text);
+}

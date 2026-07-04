@@ -1,0 +1,150 @@
+:root {
+  /* ── Layout ── */
+  --sidebar-width: 280px;
+  --navbar-height: 72px;
+  --container-max: 1600px;
+  --page-gutter: 32px;
+  --input-height: 56px;
+  --button-height: 44px;
+  --sidebar-nav-height: 48px;
+
+  /* ── Typography scale (only these sizes) ── */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-h1: 48px;
+  --font-h2: 36px;
+  --font-section: 28px;
+  --font-card-title: 16px;
+  --font-metric: 40px;
+  --font-body: 14px;
+  --font-small: 14px;
+  --font-caption: 12px;
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --line-tight: 1.15;
+  --line-normal: 1.5;
+
+  /* Legacy aliases → typography scale */
+  --font-page-title: var(--font-h1);
+  --font-section: var(--font-h2);
+  --font-card-title: var(--font-h3);
+  --font-page-subtitle: var(--font-small);
+  --font-card-value: var(--font-h2);
+  --font-card-subtitle: var(--font-small);
+  --font-table-title: var(--font-small);
+  --font-table-body: var(--font-small);
+  --font-label: var(--font-caption);
+  --font-title: var(--font-h3);
+  --font-hero: var(--font-h1);
+  --font-greeting: var(--font-h1);
+  --font-subtitle: var(--font-small);
+  --font-stat-value: var(--font-h2);
+  --font-stat-sub: var(--font-small);
+  --font-metric: var(--font-h2);
+
+  /* ── Spacing (8px grid only) ── */
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 48px;
+  --space-6: 48px;
+  --space-7: 64px;
+  --space-8: 8px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-40: 40px;
+  --space-48: 48px;
+  --space-64: 64px;
+  --space-section: var(--space-4);
+  --space-card: var(--space-2);
+  --space-page-section: var(--space-4);
+
+  /* ── Radius (allowed only) ── */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+  --radius-card: var(--radius-xl);
+  --radius-button: var(--radius-md);
+  --radius-input: var(--radius-md);
+  --radius-full: var(--radius-pill);
+
+  /* ── Shadows (one card shadow) ── */
+  --shadow-card: 0 8px 30px rgba(0, 0, 0, 0.05);
+  --shadow-card-hover: 0 12px 40px rgba(0, 0, 0, 0.08);
+  --shadow-dropdown: var(--shadow-card-hover);
+  --shadow-navbar: 0 1px 0 rgba(15, 23, 42, 0.06);
+  --shadow-xs: var(--shadow-card);
+  --shadow-sm: var(--shadow-card);
+  --shadow-hover: var(--shadow-card-hover);
+  --shadow-glow-primary: 0 8px 24px rgba(37, 99, 235, 0.25);
+  --color-card-hover-shadow: var(--shadow-card-hover);
+
+  /* ── Semantic colors ── */
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-light: #dbeafe;
+  --success: #16a34a;
+  --success-light: #dcfce7;
+  --warning: #ea580c;
+  --warning-light: #fff7ed;
+  --danger: #dc2626;
+  --danger-light: #fee2e2;
+
+  --background: #f8fafc;
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --border: #e2e8f0;
+  --border-light: #f1f5f9;
+
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --text-subtle: #94a3b8;
+  --text-caption: var(--text-subtle);
+
+  --sidebar-bg: #08162c;
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+  --sidebar-active: #2563eb;
+  --text-sidebar: #94a3b8;
+  --text-sidebar-active: #ffffff;
+
+  /* Legacy color aliases */
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-bg: var(--background);
+  --color-sidebar: var(--sidebar-bg);
+  --color-card: var(--surface);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-outline-variant: var(--border);
+  --color-on-surface: var(--text);
+  --color-on-surface-variant: var(--text-muted);
+  --color-surface: var(--surface);
+  --color-surface-container: var(--surface-alt);
+  --color-primary-container: var(--primary-light);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-light);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-light);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-light);
+
+  /* ── Components ── */
+  --icon-size: 24px;
+  --button-height: 44px;
+  --input-height: 56px;
+  --progress-height: 4px;
+  --kpi-card-min-width: 300px;
+  --kpi-card-height: 128px;
+
+  /* ── Motion ── */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --transition-slow: 400ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition: var(--transition-base);
+}

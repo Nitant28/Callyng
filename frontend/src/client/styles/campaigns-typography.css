@@ -1,0 +1,59 @@
+/* Campaigns page typography — scoped to client shell */
+
+.client-app .cmp-card__head h3 {
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.client-app .cmp-card__metrics dd {
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.client-app .cmp-card__metrics dt,
+.client-app .cmp-table thead th {
+  font-family: 'Inter', sans-serif;
+}
+
+.client-app .cmp-table__name {
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.client-app .cmp-table td,
+.client-app .cmp-table__num {
+  font-family: 'Inter', sans-serif;
+}
+
+.client-app .cmp-toolbar__search input,
+.client-app .cmp-toolbar__select,
+.client-app .ent-tabs__tab {
+  font-family: 'Inter', sans-serif;
+}
+
+.client-app .cmp-page__pagination,
+.client-app .cmp-page__pagination button {
+  font-family: 'Inter', sans-serif;
+}
+
+.client-app .cmp-empty .page-empty__title,
+.client-app .cmp-empty h3 {
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.client-app .cmp-empty .page-empty__desc,
+.client-app .cmp-empty p {
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+}

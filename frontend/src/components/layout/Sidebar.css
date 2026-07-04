@@ -1,0 +1,116 @@
+.av-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--sidebar-width);
+  height: 100vh;
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3);
+  z-index: 100;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.av-sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.av-sidebar__spacer {
+  flex: 1;
+  min-height: var(--space-3);
+}
+
+.av-sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--sidebar-nav-height);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: var(--font-body);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.av-sidebar__label {
+  color: inherit;
+}
+
+.av-sidebar__link:hover:not(.av-sidebar__link--active) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.av-sidebar__link--active {
+  background: var(--primary);
+  color: #fff;
+  font-weight: var(--weight-semibold);
+}
+
+.av-sidebar__link--active .av-sidebar__icon {
+  color: #fff;
+}
+
+.av-sidebar__icon {
+  font-size: var(--icon-size);
+  width: var(--icon-size);
+  height: var(--icon-size);
+  flex-shrink: 0;
+  color: inherit;
+}
+
+.av-sidebar__credits {
+  padding: var(--space-2);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: var(--space-2);
+  flex-shrink: 0;
+}
+
+.av-sidebar__credits-label {
+  display: block;
+  font-size: var(--font-caption);
+  font-weight: var(--weight-semibold);
+  color: rgba(255, 255, 255, 0.78);
+  margin-bottom: var(--space-1);
+}
+
+.av-sidebar__credits-value {
+  display: block;
+  font-size: var(--font-section);
+  font-weight: var(--weight-bold);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.av-sidebar__credits-skeleton {
+  height: 32px;
+  width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.av-sidebar__signout {
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+@media (max-width: 1024px) {
+  .av-sidebar {
+    transform: translateX(-100%);
+    transition: transform var(--transition-base);
+  }
+
+  .av-sidebar--open {
+    transform: translateX(0);
+  }
+}

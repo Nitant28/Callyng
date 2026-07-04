@@ -1,0 +1,204 @@
+.ent-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(11, 15, 25, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--page-gutter, 20px);
+  animation: ent-fade-in 0.2s ease;
+}
+
+.ent-modal {
+  width: 100%;
+  background: var(--surface);
+  border-radius: var(--radius-card, 20px);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.2);
+  border: 1px solid var(--border);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  animation: ent-modal-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.ent-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ent-modal__title-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ent-modal__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--primary-light, #dbeafe);
+  color: var(--primary, #2563eb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ent-modal__icon .material-symbols-outlined {
+  font-size: 22px;
+}
+
+.ent-modal__title-copy {
+  min-width: 0;
+}
+
+.ent-modal__header h2 {
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--text, #0f172a);
+  margin: 0;
+}
+
+.ent-modal__subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text-muted, #64748b);
+}
+
+.ent-modal__close {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-alt, #f8fafc);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.ent-modal__close:hover {
+  background: var(--border-light, #f1f5f9);
+  color: var(--text);
+}
+
+.ent-modal__body {
+  padding: 20px 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.ent-modal__footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* Shared modal form */
+.ent-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ent-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  letter-spacing: 0.01em;
+}
+
+.ent-form input,
+.ent-form select,
+.ent-form textarea {
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text, #0f172a);
+  background: var(--surface, #fff);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.ent-form input::placeholder {
+  color: var(--text-subtle, #94a3b8);
+  font-weight: 400;
+}
+
+.ent-form input:focus,
+.ent-form select:focus,
+.ent-form textarea:focus {
+  border-color: var(--primary, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.ent-form textarea {
+  height: auto;
+  min-height: 88px;
+  padding: 12px 14px;
+  resize: vertical;
+}
+
+.ent-form input:disabled,
+.ent-form select:disabled {
+  background: var(--surface-alt, #f8fafc);
+  color: var(--text-muted, #64748b);
+  cursor: not-allowed;
+}
+
+.ent-form__hint {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.ent-form__warn {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+@keyframes ent-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ent-modal-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}

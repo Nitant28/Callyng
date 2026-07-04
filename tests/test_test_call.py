@@ -10,6 +10,7 @@ from scripts.test_call import (
     SANDBOX_BOT_CASCADED,
     SANDBOX_BOT_STS,
     SANDBOX_CAMPAIGN_ID,
+    _call_log_finalized,
     sandbox_bot_id_for_route,
     synthetic_lead_phone,
 )
@@ -51,3 +52,13 @@ def test_parse_post_call_snapshot_from_call_data_shape():
     snap = parse_post_call_snapshot(call_data)
     assert snap is not None
     assert snap["script_config_id"] == "abc"
+
+
+def test_call_log_finalized_waits_for_post_call():
+    assert not _call_log_finalized(None)
+    assert not _call_log_finalized({"in_progress": True})
+    assert not _call_log_finalized({"in_progress": False})
+    assert _call_log_finalized(
+        {"in_progress": False, "duration_seconds": 30, "ended_at": "2026-01-01"}
+    )
+    assert _call_log_finalized({"in_progress": False, "outcome": "Interested"})
