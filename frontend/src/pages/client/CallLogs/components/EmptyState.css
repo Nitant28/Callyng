@@ -1,0 +1,30 @@
+.cl-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 24px;
+  text-align: center;
+}
+.cl-empty__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--surface-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.cl-empty__icon .material-symbols-outlined {
+  font-size: 28px;
+  color: var(--text-muted);
+}
+.cl-empty h3,
+.cl-empty .page-empty__title {
+  margin-bottom: 8px;
+}
+.cl-empty p,
+.cl-empty .page-empty__desc {
+  max-width: 360px;
+}

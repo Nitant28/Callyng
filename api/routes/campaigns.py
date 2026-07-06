@@ -56,6 +56,13 @@ async def list_campaigns(
 ):
     cid = client_id_uuid(client)
     campaigns = await pg_db.list_campaigns(pool, cid)
+    interested_map = await pg_db.get_campaigns_interested_counts(pool, cid)
+    for camp in campaigns:
+        camp_id = str(camp.get("id"))
+        interested = interested_map.get(camp_id, 0)
+        camp["interested_leads"] = interested
+        total = int(camp.get("total_leads") or 0)
+        camp["conversion_rate"] = round((interested / total) * 100, 2) if total > 0 else None
     if search:
         q = search.lower()
         campaigns = [c for c in campaigns if q in (c.get("name") or "").lower()]
@@ -105,8 +112,30 @@ async def campaign_stats(
             pass
         bot["lead_schema"] = lead_schema
     camp["bot_config"] = bot
+
+    outcome_stats = await pg_db.get_campaign_outcome_stats(pool, cid, campaign_id)
+    camp.update(outcome_stats)
     
     return {"stats": camp}
+
+
+@router.get("/{campaign_id}/calls")
+async def list_campaign_calls(
+    campaign_id: UUID,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+):
+    cid = client_id_uuid(client)
+    camp = await pg_db.get_campaign(pool, campaign_id, cid)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    calls, total_count = await pg_db.list_call_logs(
+        pool, cid, limit=limit, offset=offset, search=search, campaign_id=campaign_id
+    )
+    return {"calls": calls, "total_count": total_count}
 
 
 @router.post("")

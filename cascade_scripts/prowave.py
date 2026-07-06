@@ -5,6 +5,7 @@ from __future__ import annotations
 from lead_context import LeadContext
 from sts_scripts.lead_schema_pyramid import PYRAMID_LEAD_SCHEMA as LEAD_SCHEMA
 from sts_scripts.pyramid_extraction import PYRAMID_EXTRACTION_SCHEMA as EXTRACTION_SCHEMA
+from sts_scripts.pyramid_extraction import PYRAMID_CASCADE_LIVE_TOOLS as CASCADE_LIVE_TOOLS
 
 SCRIPT_ID = "prowave"
 

@@ -1,57 +1,65 @@
 import { Link, useLocation } from 'react-router-dom';
+import { SIDEBAR_NAV } from '../../../constants/sidebar';
+import { useDashboardData } from '../../../contexts/DashboardDataContext';
 
-const Sidebar = ({ handleSignOut }) => {
+const formatCredits = (value) => {
+  if (value == null) return '0';
+  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(value);
+};
+
+const Sidebar = ({ onSignOut, isOpen = false }) => {
   const location = useLocation();
   const path = location.pathname;
+  const { credits, loading } = useDashboardData();
+  
+  // Try mapping balanceCredits or balance_credits
+  const balance = credits?.balanceCredits ?? credits?.balance_credits ?? null;
 
   return (
-    <aside className="fixed left-0 top-16 h-[calc(100vh-64px)] w-64 bg-arctic-bg dark:bg-molten-bg border-r border-outline-variant dark:border-[#2A345E] hidden lg:flex flex-col p-4 space-y-2 transition-colors duration-500 z-40">
-      <div className="mb-6 px-4 py-2">
-        <h2 className="font-headline-sm text-headline-sm font-bold text-on-surface dark:text-molten-text">Aakashvani Ops</h2>
-        <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted">AI Voice Platform</p>
+    <aside className={`cl-sidebar ${isOpen ? 'cl-sidebar--open' : ''}`}>
+      {/* Brand */}
+      <div className="cl-sidebar__logo">
+        <div className="cl-sidebar__brand">Dev Client</div>
+        <div className="cl-sidebar__subtitle">AI Voice Platform</div>
       </div>
-      <nav className="space-y-1 flex-grow">
-        <Link 
-          to="/app"
-          className={`flex items-center gap-3 px-4 py-3 rounded-lg font-bold transition-all ${
-            path === '/app' || path.startsWith('/app/campaigns')
-              ? 'bg-primary-container dark:bg-tertiary-container text-on-primary-container dark:text-on-tertiary-container active:scale-[0.98]'
-              : 'text-arctic-text-muted dark:text-molten-text-muted hover:bg-surface-container dark:hover:bg-surface-variant/10 hover:translate-x-1'
-          }`}
-        >
-          <span className="material-symbols-outlined">dashboard</span>
-          <span className="font-label-md text-label-md">Dashboard</span>
-        </Link>
-        <Link 
-          to="/app/calls"
-          className={`flex items-center gap-3 px-4 py-3 rounded-lg font-bold transition-all ${
-            path.startsWith('/app/calls')
-              ? 'bg-primary-container dark:bg-tertiary-container text-on-primary-container dark:text-on-tertiary-container active:scale-[0.98]'
-              : 'text-arctic-text-muted dark:text-molten-text-muted hover:bg-surface-container dark:hover:bg-surface-variant/10 hover:translate-x-1'
-          }`}
-        >
-          <span className="material-symbols-outlined">description</span>
-          <span className="font-label-md text-label-md">Logs</span>
-        </Link>
-        <Link 
-          to="/app/settings"
-          className={`flex items-center gap-3 px-4 py-3 rounded-lg font-bold transition-all ${
-            path === '/app/settings'
-              ? 'bg-primary-container dark:bg-tertiary-container text-on-primary-container dark:text-on-tertiary-container active:scale-[0.98]'
-              : 'text-arctic-text-muted dark:text-molten-text-muted hover:bg-surface-container dark:hover:bg-surface-variant/10 hover:translate-x-1'
-          }`}
-        >
-          <span className="material-symbols-outlined">settings</span>
-          <span className="font-label-md text-label-md">Settings</span>
-        </Link>
+
+      {/* Navigation */}
+      <nav className="cl-sidebar__nav" aria-label="Main navigation">
+        {SIDEBAR_NAV.map((item) => {
+          const isActive = item.match(path);
+          return (
+            <Link
+              key={item.id}
+              to={item.path}
+              className={`cl-sidebar__item ${isActive ? 'active' : ''}`}
+            >
+              <span className="material-symbols-outlined">{item.icon}</span>
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
       </nav>
-      <div className="pt-4 border-t border-outline-variant dark:border-[#2A345E] space-y-1">
+
+      {/* Credits Display */}
+      <div className="cl-sidebar__credits">
+        <div className="cl-sidebar__credits-label">Credits Remaining</div>
+        {loading && balance == null ? (
+          <div style={{ height: '24px', width: '80px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', animation: 'pulse 1.5s infinite' }} />
+        ) : (
+          <div className="cl-sidebar__credits-value">₹{formatCredits(balance)}</div>
+        )}
+        <div className="cl-sidebar__credits-sub">Prepaid balance</div>
+      </div>
+
+      {/* Sign Out */}
+      <div className="cl-sidebar__footer">
         <button
-          onClick={handleSignOut}
-          className="w-full flex items-center gap-3 text-arctic-text-muted dark:text-molten-text-muted px-4 py-3 hover:bg-surface-container dark:hover:bg-surface-variant/10 rounded-lg transition-all cursor-pointer text-left"
+          type="button"
+          className="cl-sidebar__item"
+          onClick={onSignOut}
         >
           <span className="material-symbols-outlined">logout</span>
-          <span className="font-label-md text-label-md">Sign Out</span>
+          <span>Sign Out</span>
         </button>
       </div>
     </aside>

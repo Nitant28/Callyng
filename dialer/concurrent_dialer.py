@@ -37,6 +37,10 @@ from dialer.plivo_balance import (
 )
 
 _active_tasks: dict[str, asyncio.Task] = {}
+import time as _time
+
+_last_release_stuck_at: dict[str, float] = {}
+_RELEASE_STUCK_COOLDOWN_S = 30.0
 
 
 def _campaign_key(campaign_id: UUID, client_id: UUID) -> str:
@@ -53,6 +57,26 @@ async def _release_lead_to_pending(
 ) -> None:
     """Return a claimed lead to pending when compliance blocks the dial."""
     lead_id = UUID(str(lead["id"]))
+    attempts = int(lead.get("attempts") or 0)
+    max_att = int(lead.get("max_attempts") or 3)
+    if attempts >= max_att:
+        await pool.execute(
+            """
+            UPDATE leads
+            SET status = 'failed',
+                outcome = COALESCE(NULLIF(TRIM(outcome), ''), 'Max_Attempts_Reached')
+            WHERE id = $1 AND client_id = $2 AND status = 'calling'
+            """,
+            lead_id,
+            client_id,
+        )
+        await pg_db.increment_campaign_counters(
+            pool,
+            campaign_id,
+            from_status="calling",
+            to_status="failed",
+        )
+        return
     grace = pg_db.live_call_grace_minutes()
     has_live_call = await pool.fetchval(
         """
@@ -455,6 +479,16 @@ async def run_campaign_dialer(
                 )
                 break
 
+            exhausted = await pg_db.terminalize_exhausted_leads(
+                pool, campaign_id, client_id
+            )
+            if exhausted:
+                logger.info(
+                    "Campaign {} terminalized {} exhausted lead(s)",
+                    campaign_id,
+                    exhausted,
+                )
+
             leads = await pg_db.claim_leads_for_dialer(
                 pool, campaign_id, client_id, slots
             )
@@ -466,16 +500,27 @@ async def run_campaign_dialer(
 
                 # Ghost ``calling`` rows (no live call_log) block the dialer. Skip live calls.
                 if calling > 0 or actual_calling_loop > 0:
-                    released = await pg_db.release_stuck_calling_leads(
-                        pool, campaign_id, client_id
-                    )
-                    if released:
-                        logger.info(
-                            "Campaign {} released {} lead(s) stuck in calling",
-                            campaign_id,
-                            released,
+                    ck = _campaign_key(campaign_id, client_id)
+                    now_mono = _time.monotonic()
+                    last = _last_release_stuck_at.get(ck, 0.0)
+                    if now_mono - last >= _RELEASE_STUCK_COOLDOWN_S:
+                        _last_release_stuck_at[ck] = now_mono
+                        released = await pg_db.release_stuck_calling_leads(
+                            pool, campaign_id, client_id
                         )
-                        continue
+                        if released:
+                            logger.info(
+                                "Campaign {} released {} lead(s) stuck in calling",
+                                campaign_id,
+                                released,
+                            )
+                            continue
+                    else:
+                        logger.debug(
+                            "Campaign {} skipping release_stuck (cooldown, {}s since last)",
+                            campaign_id,
+                            round(now_mono - last, 1),
+                        )
 
                 if pending == 0 and callback == 0 and calling == 0:
                     await complete_campaign(pool, campaign_id, client_id)
@@ -650,8 +695,10 @@ async def start_dialer(
 
 
 async def stop_dialer(campaign_id: UUID, client_id: UUID) -> None:
-    key = _campaign_key(campaign_id, client_id)
-    task = _active_tasks.get(key)
+    ck = _campaign_key(campaign_id, client_id)
+    _last_release_stuck_at.pop(ck, None)
+
+    task = _active_tasks.get(ck)
     if not task:
         return
     if not task.done():

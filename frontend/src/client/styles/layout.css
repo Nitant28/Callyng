@@ -1,0 +1,98 @@
+/* ── Layout & Containers ── */
+
+:root {
+  --sidebar-width: 280px;
+  --page-gutter: 32px;
+  --topbar-height: 56px;
+  --page-section-gap: 32px;
+}
+
+.cl-page-container {
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: var(--page-section-gap, 32px);
+  min-height: 0;
+  box-sizing: border-box;
+}
+
+/* Header/top navigation height adjustments */
+
+.cl-topbar {
+  height: var(--topbar-height, 56px) !important;
+  padding: 0 var(--page-gutter, 32px) !important;
+  left: var(--sidebar-width, 280px);
+}
+
+.cl-main {
+  margin-left: var(--sidebar-width, 280px) !important;
+  padding: var(--topbar-height, 56px) var(--page-gutter, 32px) var(--page-gutter, 32px) !important;
+}
+
+/* Sidebar clean structure and hover bug fix */
+.cl-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width, 280px);
+  background: #0B0F19;
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+  overflow: hidden;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cl-sidebar__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px !important;
+  height: 44px;
+  border-radius: 12px !important;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6) !important;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  border: none;
+  background: none;
+  width: calc(100% - 32px);
+  margin: 4px 16px !important;
+  box-sizing: border-box;
+}
+
+.cl-sidebar__item:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: rgba(255, 255, 255, 0.95) !important;
+}
+
+.cl-sidebar__item.active {
+  background: var(--blue) !important;
+  color: #FFFFFF !important;
+  font-weight: 600;
+}
+
+.cl-sidebar__item .material-symbols-outlined {
+  font-size: 20px !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  transition: color 0.15s;
+}
+
+/* Centered content container used by all pages */
+.cl-content-container {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 32px;
+  box-sizing: border-box;
+}
+
+.cl-sidebar__item:hover .material-symbols-outlined {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.cl-sidebar__item.active .material-symbols-outlined {
+  color: #FFFFFF !important;
+}

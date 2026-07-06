@@ -29,6 +29,12 @@ def test_outcome_to_event_mapping():
     assert outcome_to_event("Busy") == "lead_failed"
 
 
+def test_outcome_to_event_early_disconnect():
+    from n8n_webhook import outcome_to_event
+
+    assert outcome_to_event("Early_Disconnect") == "lead_callback"
+
+
 def test_resolve_post_call_transition_callee_hangup_from_calling():
     from datetime import datetime, timezone
 
@@ -48,7 +54,20 @@ def test_resolve_post_call_transition_callee_hangup_from_calling():
     assert new_status == "callback_scheduled"
     assert next_at is not None
     assert sched_cb == next_at
-    assert fire_webhook is True
+    assert fire_webhook is False
+
+    failed_status, _, _, _ = resolve_post_call_transition(
+        "calling",
+        "Unknown",
+        3,
+        3,
+        120,
+        {},
+        lead_next_attempt_at=None,
+        lead_scheduled_callback_at=None,
+        callee_hangup=True,
+    )
+    assert failed_status == "failed"
 
 
 def test_resolve_post_call_preserves_callback_scheduled():
@@ -364,7 +383,7 @@ async def test_release_stuck_ignore_wrap_grace():
         )
         assert released == 1
         status = await pool.fetchval("SELECT status FROM leads WHERE id = $1", lead_id)
-        assert status == "pending"
+        assert status == "callback_scheduled"
     finally:
         await pool.close()
 

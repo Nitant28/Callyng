@@ -1,0 +1,22 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@import "./styles/reset.css";
+@import "./styles/tokens.css";
+@import "./styles/typography.css";
+@import "./styles/layout.css";
+@import "./styles/buttons.css";
+@import "./styles/cards.css";
+@import "./styles/forms.css";
+@import "./styles/tables.css";
+@import "./styles/animations.css";
+
+/* Page CSS */
+@import "./pages/AdminOverview.css";
+@import "./pages/AdminClients.css";
+@import "./pages/AdminCalls.css";
+@import "./pages/AdminBotConfigs.css";
+@import "./pages/AdminClientDetail.css";
+@import "./pages/AdminScriptConfigs.css";
+@import "./pages/AdminLogin.css";

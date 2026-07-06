@@ -1,0 +1,12 @@
+.cmp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: var(--space-3);
+  align-items: stretch;
+}
+
+@media (max-width: 480px) {
+  .cmp-grid {
+    grid-template-columns: 1fr;
+  }
+}

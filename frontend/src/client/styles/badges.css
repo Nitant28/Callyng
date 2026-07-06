@@ -1,0 +1,58 @@
+/* ── Design Badges ── */
+
+.cl-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  border-radius: 6px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  width: fit-content;
+  white-space: nowrap;
+}
+
+.cl-badge--live {
+  background: #EFF6FF !important;
+  color: #2563EB !important;
+  border: 1px solid #BFDBFE !important;
+}
+
+.cl-badge--interested {
+  background: #DCFCE7 !important;
+  color: #16A34A !important;
+  border: 1px solid #BBF7D0 !important;
+}
+
+.cl-badge--busy {
+  background: #FFF7ED !important;
+  color: #EA580C !important;
+  border: 1px solid #FFEDD5 !important;
+}
+
+.cl-badge--callback {
+  background: #FEFCE8 !important;
+  color: #CA8A04 !important;
+  border: 1px solid #FEF9C3 !important;
+}
+
+.cl-badge--rejected {
+  background: #FEF2F2 !important;
+  color: #DC2626 !important;
+  border: 1px solid #FEE2E2 !important;
+}
+
+.cl-badge--failed {
+  background: #F1F5F9 !important;
+  color: #475569 !important;
+  border: 1px solid #E2E8F0 !important;
+}
+
+.cl-badge-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}

@@ -1,0 +1,15 @@
+.ent-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.ent-badge--success { background: var(--success-bg, #dcfce7); color: #15803d; }
+.ent-badge--warning { background: var(--warning-bg, #fef3c7); color: #b45309; }
+.ent-badge--danger { background: var(--danger-bg, #fee2e2); color: #b91c1c; }
+.ent-badge--info { background: #dbeafe; color: #1d4ed8; }
+.ent-badge--neutral { background: #f1f5f9; color: #475569; }

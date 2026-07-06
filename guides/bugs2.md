@@ -39,7 +39,7 @@
 
 - **BUG-39 [P2] / Feature — `api/routes/leads.py`: Manual lead status transitions too restrictive**
   - **Issue:** The `_MANUAL_TRANSITIONS` map (line 21) does not allow `pending → completed` or `callback_scheduled → completed`. `failed → completed` is also absent. When a campaign is paused, admins have no way to mark a lead as done if it was resolved offline.
-  - **Verified:** `_MANUAL_TRANSITIONS = { "pending": {"failed", "dnc", "callback_scheduled"}, "callback_scheduled": {"pending", "failed", "dnc"}, ... }` — `completed` is missing as a target from all three writable statuses.
+  - **Verified:** `_MANUAL_TRANSITIONS = { "pending": {"failed", "", "callback_scheduled"}, "callback_scheduled": {"pending", "failed", ""}, ... }` — `completed` is missing as a target from all three writable statuses.
   - **Impact:** Clients cannot cleanly close leads they handled offline without hacking the DB directly.
   - **Fix:** Add `"completed"` as an allowed target from `"pending"`, `"callback_scheduled"`, and `"failed"`. Requires no billing or counter side-effects since `require_campaign_modifiable` already ensures the campaign is paused/draft before the endpoint runs.
 
@@ -101,16 +101,16 @@
   - **Issue:** Calls taking >5 minutes to connect lose their CMS config.
 
 - **BUG-29 [P3] — `compliance.py`: `_DND_NUMBERS` is an in-memory set**
-  - **Issue:** DND logic isn't shared across workers.
+  - **Issue:**  logic isn't shared across workers.
 
 - **BUG-41 [P3] / Enhancement — `api/routes/campaigns.py` + `db/postgres.py`: CSV Upload ignores compliance window when setting `next_attempt_at`**
-  - **Issue:** During CSV upload, `is_call_allowed(phone)` is called but only the DND branch (`"DND" in reason`) changes the lead status. The time-window branch (`"outside 9am-9pm IST window"`) is silently ignored, so leads uploaded at night are inserted with `status = "pending"` and `next_attempt_at = NOW()`.
+  - **Issue:** During CSV upload, `is_call_allowed(phone)` is called but only the  branch (`"" in reason`) changes the lead status. The time-window branch (`"outside 9am-9pm IST window"`) is silently ignored, so leads uploaded at night are inserted with `status = "pending"` and `next_attempt_at = NOW()`.
   - **Critical DB-layer gap (not in original description):** `bulk_insert_leads` in `db/postgres.py` (line 1471) hardcodes `next_attempt_at = NOW()` directly in the SQL and does not read `next_attempt_at` from the lead dict at all. Any route-level fix that sets `next_attempt_at` in the payload will be silently ignored unless this SQL is also updated.
   - **Impact:** The dialer will immediately claim thousands of newly uploaded leads at night, fail the compliance check per lead, and defer them individually — causing massive unnecessary DB load and potential locking contention.
   - **Fix (two parts):**
     1. In `api/routes/campaigns.py` upload loop: if `is_call_allowed(phone)` returns `(False, "outside … IST window")`, set `lead["next_attempt_at"] = next_compliant_time()` (already importable from `compliance`).
     2. In `db/postgres.py` `bulk_insert_leads`: change `NOW()` in the `VALUES` clause to a `$9` parameter and pass `lead.get("next_attempt_at")` (defaulting to `None` so the DB column default `NOW()` applies for on-hours uploads).
-  - **Note:** The same pattern exists in the `add_lead` endpoint in `api/routes/leads.py` (line 174), which also calls `is_call_allowed` but only handles DND.
+  - **Note:** The same pattern exists in the `add_lead` endpoint in `api/routes/leads.py` (line 174), which also calls `is_call_allowed` but only handles .
 
 ---
 
@@ -206,14 +206,14 @@
 - **BUG-09**: Removed redundant `stop_dialer` import from `api/routes/internal.py`.
 - **BUG-10**: Improved `failedExtractions` filter in `AdminDiagnostics.jsx` by ignoring non-campaign calls (`!c.campaign_id`) and short calls (`c.duration_seconds < 15`).
 - **BUG-13**: Exposed `script_config_id` in `AdminBotConfigs.jsx` to display underneath the `script_id`.
-- **BUG-39 / Feature**: Added `"completed"` as an allowed transition from `"pending"`, `"callback_scheduled"`, `"failed"`, and `"dnc"` in `_MANUAL_TRANSITIONS` inside `api/routes/leads.py`. (The `"completed"` to `"pending"` transition was already present and kept intact).
+- **BUG-39 / Feature**: Added `"completed"` as an allowed transition from `"pending"`, `"callback_scheduled"`, `"failed"`, and `""` in `_MANUAL_TRANSITIONS` inside `api/routes/leads.py`. (The `"completed"` to `"pending"` transition was already present and kept intact).
 - **BUG-40 / Feature**: Added numeric inputs for `max_attempts` and `retry_delay_minutes` to the `Create Campaign` modal in both `AdminCampaigns.jsx` and `AdminClientDetail.jsx`.
 
 ---
 
 ## Phase 2 Fixes Applied
 
-- **BUG-06**: Updated `storage_uri` in `server.py` Limiter initialization to use `os.environ.get("REDIS_URL", "memory://")` instead of `redis_db.redis_url()`, avoiding module load crashes without Redis.
+- **BUG-06**: Updated `storage_uri` in `server.py` Limiter initialization to use `os.environ.get("REDIS_URL", "memory:/")` instead of `redis_db.redis_url()`, avoiding module load crashes without Redis.
 - **BUG-08**: Replaced bare `asyncio.create_task` with `spawn_background_task` in `server.py` `/answer` handler.
 - **BUG-28**: Replaced bare `asyncio.create_task` with `spawn_background_task` in `call_limits.py` (`_watchdog` and `_delayed_try_end`).
 - **BUG-36**: Replaced bare `loop.create_task` with `spawn_background_task` in `script_runtime.py` for `_run()`.
@@ -232,14 +232,14 @@
 - **BUG-27**: Added `json.dumps()` wrapper around the `blob` dictionary in `record_plivo_hangup`.
 - **BUG-41**: Added `next_attempt_at` handling if `is_call_allowed` fails due to time window during CSV upload or lead creation, and parameterised `bulk_insert_leads` to handle it.
 - **BUG-19**: Increased `PREFETCH_TTL_SECONDS` to 1800 (30 minutes) in `script_prefetch.py`.
-- **BUG-29**: Ripped out the DND feature entirely (removed `_DND_NUMBERS` logic in `compliance.py`, `add_dnd` calls in API endpoints, and DNC skipped counts in the frontend).
+- **BUG-29**: Ripped out the  feature entirely (removed `_DND_NUMBERS` logic in `compliance.py`, `add_dnd` calls in API endpoints, and  skipped counts in the frontend).
 
 
 ---
 
 ## Phase 4 Fixes Applied
 
-- **BUG-17**: Added missing state transitions for `callback_scheduled` to terminal states (`completed`, `failed`, `dnc`, `pending`) in `_COUNTER_DELTAS` within `db/postgres.py`.
+- **BUG-17**: Added missing state transitions for `callback_scheduled` to terminal states (`completed`, `failed`, ``, `pending`) in `_COUNTER_DELTAS` within `db/postgres.py`.
 - **BUG-16 / EDGE-01/02/03**: Implemented `settle_budget_for_stale_call_logs` in `db/postgres.py` to refund budget for stale call logs and wired it into `dialer/maintenance.py` `run_stale_call_log_sweep`.
 - **EDGE-01/02/03**: Implemented `settle_unanswered_call` in `db/postgres.py` to correctly refund 0 credits and requeue un-answered calls for retries, and hooked it up in `plivo_hangup.py`.
 - **BUG-26**: Updated `_MIN_BILLABLE_DURATION_S = 15` in `post_call_processor.py`.
@@ -273,4 +273,4 @@
 **Date:** 2026-06-20
 **Current Status:** Phases 1 through 6 are **100% complete**. All code fixes, UI cleanups, architectural adjustments, and test suite alignments are completed and passing.
 **Next Steps:** The codebase is fully stabilized. All documented bugs in this guide have been resolved.
-**Context Note:** The DND logic has been completely ripped out of the codebase. The `is_call_allowed()` function now only checks the 9am-9pm IST time window constraint.
+**Context Note:** The  logic has been completely ripped out of the codebase. The `is_call_allowed()` function now only checks the 9am-9pm IST time window constraint.

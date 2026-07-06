@@ -1,0 +1,40 @@
+.cdet-summary {
+  background: var(--surface);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 20px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.06);
+  padding: 8px 24px;
+  margin-bottom: 24px;
+}
+.cdet-summary__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  padding: 20px 0;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+.cdet-summary__row:last-child { border-bottom: none; }
+.cdet-summary__row--full { grid-template-columns: 1fr; }
+.cdet-summary__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cdet-summary__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cdet-summary__value {
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.cdet-summary__cell--full .cdet-summary__value {
+  font-size: 42px;
+}

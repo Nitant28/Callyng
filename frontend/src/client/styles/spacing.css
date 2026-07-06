@@ -1,0 +1,40 @@
+/* ── Spacing Scales ── */
+
+:root {
+  --space-section: 32px;
+  --space-card: 24px;
+  --space-content: 24px;
+  --space-label: 8px;
+}
+
+.cl-space-section {
+  gap: var(--space-section) !important;
+}
+
+.cl-space-card {
+  gap: var(--space-card) !important;
+}
+
+.cl-space-content {
+  gap: var(--space-content) !important;
+}
+
+.cl-space-label {
+  gap: var(--space-label) !important;
+}
+
+.cl-mb-section {
+  margin-bottom: var(--space-section) !important;
+}
+
+.cl-mb-card {
+  margin-bottom: var(--space-card) !important;
+}
+
+.cl-mb-content {
+  margin-bottom: var(--space-content) !important;
+}
+
+.cl-mb-label {
+  margin-bottom: var(--space-label) !important;
+}

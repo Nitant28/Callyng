@@ -69,3 +69,5 @@ recordings/
 *.mp3
 *.flac
 node_modules
+# Added by code-review-graph
+.code-review-graph/

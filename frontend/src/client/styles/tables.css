@@ -1,0 +1,55 @@
+/* ── SaaS Table Designs ── */
+
+.cl-table-container {
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+}
+
+.cl-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.cl-table th {
+  padding: 16px 24px !important;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94A3B8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid #E2E8F0;
+  background: #F8FAFC;
+}
+
+.cl-table td {
+  padding: 16px 24px !important;
+  border-bottom: 1px solid #F1F5F9;
+  font-size: 13px;
+  color: #0F172A;
+  vertical-align: middle;
+}
+
+.cl-table tr {
+  transition: background 150ms ease;
+}
+
+.cl-table tr--interactive {
+  cursor: pointer;
+}
+
+.cl-table tr--interactive:hover {
+  background: #F8FAFC !important;
+}
+
+.cl-table-footer {
+  padding: 16px 24px !important;
+  border-top: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-sizing: border-box;
+}

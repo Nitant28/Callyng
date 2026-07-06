@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
@@ -19,10 +20,9 @@ router = APIRouter(prefix="/api/campaigns", tags=["leads"])
 # ── Allowed manual status transitions ────────────────────────────────────────
 
 _MANUAL_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"failed", "dnc", "callback_scheduled", "completed"},
-    "callback_scheduled": {"pending", "failed", "dnc", "completed"},
+    "pending": {"failed", "callback_scheduled", "completed"},
+    "callback_scheduled": {"pending", "failed", "completed"},
     "failed": {"pending", "completed"},
-    "dnc": {"pending", "completed"},
     "completed": {"pending"},
 }
 
@@ -74,6 +74,7 @@ async def list_leads(
     offset: int = 0,
     status: str | None = None,
     search: str | None = None,
+    outcome: str | None = None,
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
 ):
@@ -89,8 +90,51 @@ async def list_leads(
         offset=offset,
         status=status,
         search=search,
+        outcome=outcome,
     )
-    return {"leads": leads, "limit": limit, "offset": offset, "status": status, "search": search, "total_count": total_count}
+    return {"leads": leads, "limit": limit, "offset": offset, "status": status, "search": search, "outcome": outcome, "total_count": total_count}
+
+
+@router.get("/{campaign_id}/leads/export", response_class=PlainTextResponse)
+async def export_leads(
+    campaign_id: UUID,
+    status: str | None = None,
+    search: str | None = None,
+    outcome: str | None = None,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    """Export campaign leads as CSV."""
+    cid = client_id_uuid(client)
+    camp = await _get_campaign_or_404(pool, campaign_id, cid)
+    rows = await pg_db.list_campaign_leads_for_export(
+        pool,
+        campaign_id,
+        cid,
+        status=status,
+        search=search,
+        outcome=outcome,
+    )
+    header = ["Name", "Phone", "Status", "Outcome", "Attempts", "Last Call Duration", "Updated"]
+    lines = [",".join(header)]
+    for row in rows:
+        values = [
+            row.get("name") or "",
+            row.get("phone") or "",
+            row.get("status") or "",
+            row.get("outcome") or "",
+            str(row.get("attempts") or 0),
+            str(row.get("last_call_duration_seconds") or ""),
+            str(row.get("updated_at") or ""),
+        ]
+        lines.append(",".join(f'"{str(v).replace(chr(34), chr(34) + chr(34))}"' for v in values))
+    csv_body = "\n".join(lines)
+    slug = (camp.get("name") or "campaign").replace(" ", "_")[:40]
+    return PlainTextResponse(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{slug}_leads.csv"'},
+    )
 
 
 @router.get("/{campaign_id}/leads/{lead_id}")
@@ -273,6 +317,16 @@ async def change_lead_status(
             f"Allowed targets: {', '.join(sorted(allowed_targets))}",
         )
 
+    attempts = int(lead.get("attempts") or 0)
+    max_attempts = int(lead.get("max_attempts") or 3)
+    
+    if target == "callback_scheduled" and attempts >= max_attempts:
+        raise HTTPException(
+            409,
+            "Cannot schedule a callback for a lead that has reached its maximum attempts. "
+            "Please move it to 'Pending' first to reset its attempt counter."
+        )
+
     # Compute next_attempt_at and scheduled_callback_at based on target
     next_attempt_at: datetime | None = None
     scheduled_callback_at: datetime | None = None
@@ -291,6 +345,7 @@ async def change_lead_status(
         target,
         next_attempt_at=next_attempt_at,
         scheduled_callback_at=scheduled_callback_at,
+        reset_to_fresh=(target == "pending"),
     )
     if not updated:
         raise HTTPException(404, "Lead not found")

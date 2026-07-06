@@ -20,43 +20,8 @@ _MIN_INTERRUPTED_ASSISTANT_CHARS = 15
 
 _GLOBAL_EXTRACTION_PREAMBLE = """Transcript reliability (critical):
 - role=assistant text is the bot's own generated speech and is MORE reliable than role=user text.
-- role=user text comes from phone speech-to-text and may mishear Hindi/Marathi (e.g. "2-3 location" heard as unrelated words).
-- When assistant explicitly confirms requirements (BHK, locations, site visit, callback) in a summary or closing turn, extract those fields from the assistant and do NOT mark Wrong_Requirement based only on a contradictory user phrase.
-- Use Wrong_Requirement only when the conversation clearly establishes the caller wants something outside scope (plot/shop/rent/wrong product) AND the assistant does not confirm valid property interest.
+- role=user text comes from phone speech-to-text and may contain errors.
 - Prefer the last assistant confirmation/summary turn when resolving conflicts."""
-
-_BHK_RE = re.compile(r"(\d)\s*BHK", re.IGNORECASE)
-_ASSISTANT_CONFIRM_RE = re.compile(
-    r"नोट\s*कर|noted|आवश्यकता|requirement|sales executive",
-    re.IGNORECASE,
-)
-_LOCATION_MARKERS = (
-    "baner",
-    "बानेर",
-    "kondhwa",
-    "kondwa",
-    "कोंढवा",
-    "katraj",
-    "कात्रज",
-    "pune",
-    "पुणे",
-    "पune",
-)
-_GARBLED_USER_NOTE_RE = re.compile(
-    r"tv|टीवी|television|selling|बेच",
-    re.IGNORECASE,
-)
-_CALLBACK_CONFIRM_RE = re.compile(
-    r"ज़रूर कॉल|जरूर कॉल|तय समय पर कॉल|नक्की कॉल|कॉल करेंगे|कॉल करू",
-    re.IGNORECASE,
-)
-_CALLBACK_TIME_RE = re.compile(
-    r"(\d{1,2}[:.]\d{2}|\d{1,2}\s*(?:बजे|baje|pm|am)|"
-    r"\d+\s*(?:minute|min|मिनट)\s*(?:baad|बाद)|"
-    r"kal|कल|tomorrow|shaam|शाम)",
-    re.IGNORECASE,
-)
-
 
 def validate_extraction_schema(schema: dict[str, Any]) -> None:
     """Raise ValueError if schema is missing required structure."""
@@ -180,124 +145,6 @@ def format_transcript_for_extraction(transcript: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
-def _extract_bhk_from_text(text: str) -> str | None:
-    match = _BHK_RE.search(text)
-    if not match:
-        return None
-    return f"{match.group(1)}BHK"
-
-
-def _extract_locations_from_text(text: str) -> list[str]:
-    lower = text.casefold()
-    found: list[str] = []
-    mapping = (
-        ("baner", "Baner"),
-        ("बानेर", "Baner"),
-        ("kondhwa", "Kondhwa"),
-        ("kondwa", "Kondhwa"),
-        ("कोंढवा", "Kondhwa"),
-        ("katraj", "Katraj"),
-        ("कात्रज", "Katraj"),
-    )
-    for needle, label in mapping:
-        if needle in lower and label not in found:
-            found.append(label)
-    return found
-
-
-def _assistant_confirms_property_interest(assistant_text: str) -> bool:
-    if not assistant_text.strip():
-        return False
-    has_bhk = bool(_BHK_RE.search(assistant_text))
-    has_confirm = bool(_ASSISTANT_CONFIRM_RE.search(assistant_text))
-    lower = assistant_text.casefold()
-    has_location = any(marker in lower for marker in _LOCATION_MARKERS)
-    return (has_bhk and has_confirm) or (has_bhk and has_location)
-
-
-def reconcile_extraction_with_assistant_turns(
-    parsed: dict[str, Any],
-    transcript: list[dict[str, Any]] | None,
-) -> dict[str, Any]:
-    """Deterministic fallback when Groq overweights garbled user STT."""
-    if not transcript:
-        return parsed
-    out = dict(parsed)
-    merged = merge_consecutive_turns(transcript)
-    assistant_turns = [t for t in merged if t.get("role") == "assistant"]
-    if not assistant_turns:
-        return out
-
-    recent_text = " ".join(
-        (t.get("content") or "").strip() for t in assistant_turns[-2:]
-    )
-
-    callback_time = out.get("callback_time")
-    has_callback = callback_time is not None and str(callback_time).strip().lower() not in (
-        "",
-        "null",
-        "none",
-    )
-    if _CALLBACK_CONFIRM_RE.search(recent_text):
-        if out.get("intent_status") not in ("Callback_Requested", "Interested"):
-            out["intent_status"] = "Callback_Requested"
-            logger.info(
-                "reconcile_extraction_with_assistant_turns: assistant callback "
-                "confirmation -> Callback_Requested"
-            )
-        if not has_callback:
-            time_match = _CALLBACK_TIME_RE.search(recent_text)
-            if time_match:
-                out["callback_time"] = time_match.group(0).strip()
-                has_callback = True
-        return out
-
-    if not _assistant_confirms_property_interest(recent_text):
-        return out
-
-    bhk = _extract_bhk_from_text(recent_text)
-    if bhk:
-        current_bhk = out.get("bhk_preference")
-        if current_bhk is None or str(current_bhk).strip().lower() in (
-            "",
-            "null",
-            "none",
-        ):
-            out["bhk_preference"] = bhk
-
-    locations = _extract_locations_from_text(recent_text)
-    if locations:
-        current_loc = out.get("location_preference")
-        if current_loc is None or str(current_loc).strip().lower() in (
-            "",
-            "null",
-            "none",
-        ):
-            out["location_preference"] = ", ".join(locations)
-
-    intent = str(out.get("intent_status") or "").strip()
-    callback_time = out.get("callback_time")
-    has_callback = callback_time is not None and str(callback_time).strip().lower() not in (
-        "",
-        "null",
-        "none",
-    )
-    if intent == "Wrong_Requirement":
-        out["intent_status"] = (
-            "Callback_Requested" if has_callback else "Interested"
-        )
-        logger.info(
-            "reconcile_extraction_with_assistant_turns: Wrong_Requirement overridden "
-            "using assistant confirmation"
-        )
-
-    notes = out.get("caller_notes")
-    if isinstance(notes, str) and _GARBLED_USER_NOTE_RE.search(notes):
-        if bhk or locations:
-            out["caller_notes"] = None
-
-    return out
-
 
 def build_extraction_system_prompt(schema: dict[str, Any]) -> str:
     """Compile Groq system prompt from script EXTRACTION_SCHEMA."""
@@ -370,9 +217,13 @@ def apply_normalization_rules(
         matched = False
         if "truthy" in when:
             truthy = when["truthy"]
-            is_truthy = val is True or (
-                isinstance(val, str) and val.strip().casefold() in ("true", "1", "yes")
-            )
+            if val is True:
+                is_truthy = True
+            elif isinstance(val, str):
+                s = val.strip().casefold()
+                is_truthy = s not in ("", "null", "none", "false", "0", "no")
+            else:
+                is_truthy = bool(val)
             matched = is_truthy if truthy else not is_truthy
         elif "eq" in when:
             matched = val == when["eq"]
@@ -405,11 +256,13 @@ def normalize_post_call_extraction(
     parsed: dict[str, Any],
     *,
     normalization_rules: list[Any] | None = None,
-    transcript: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Deterministic patch after Groq parse — known inconsistency patterns."""
     if normalization_rules:
         out = apply_normalization_rules(parsed, normalization_rules)
+        if "intent_status" not in out or not str(out.get("intent_status", "")).strip():
+            out["intent_status"] = "Unknown"
+        return out
     else:
         out = dict(parsed)
         raw_intent = out.get("intent_status")
@@ -447,10 +300,10 @@ def normalize_post_call_extraction(
             )
             out["intent_status"] = "Callback_Requested"
 
-    if "intent_status" not in out or not str(out.get("intent_status", "")).strip():
-        out["intent_status"] = "Unknown"
+        if "intent_status" not in out or not str(out.get("intent_status", "")).strip():
+            out["intent_status"] = "Unknown"
 
-    return reconcile_extraction_with_assistant_turns(out, transcript)
+        return out
 
 
 def _strip_json_fence(text: str) -> str:

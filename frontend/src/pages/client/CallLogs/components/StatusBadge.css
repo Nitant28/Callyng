@@ -1,0 +1,31 @@
+.cl-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cl-status--success { background: #dcfce7; color: #15803d; }
+.cl-status--info { background: #dbeafe; color: #1d4ed8; }
+.cl-status--danger { background: #fee2e2; color: #b91c1c; }
+.cl-status--neutral { background: #f1f5f9; color: #475569; }
+.cl-status--live { background: #ecfdf5; color: #059669; }
+.cl-status__pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: cl-pulse 1.5s ease-in-out infinite;
+}
+.cl-status__sub {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+@keyframes cl-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}

@@ -1,0 +1,14 @@
+.cw-overview {
+  animation: cw-fade-in 0.2s ease;
+}
+
+.cw-tab-empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--color-on-surface-variant, #64748b);
+}
+
+@keyframes cw-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

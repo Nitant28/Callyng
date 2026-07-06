@@ -1,0 +1,8 @@
+/* Admin globals — minimal, intentional */
+.admin-app { isolation: isolate; }
+.admin-app .material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  line-height: 1;
+  vertical-align: middle;
+}
+.tabular-nums { font-variant-numeric: tabular-nums; }

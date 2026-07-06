@@ -1,0 +1,91 @@
+/* Page header — shared by Campaigns and other client list pages */
+
+.page-header {
+  margin-bottom: var(--space-4);
+}
+
+.page-header__eyebrow {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-2);
+}
+
+.page-header__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.page-header__copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.page-header__title {
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.page-header__subtitle {
+  margin: 8px 0 0;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-self: flex-start;
+  padding-top: 4px;
+}
+
+.page-header--bordered {
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-4);
+}
+
+.page-toolbar {
+  margin-bottom: var(--space-3);
+}
+
+.page-tabs {
+  margin-bottom: var(--space-4);
+}
+
+.page-content {
+  margin-bottom: var(--space-4);
+}
+
+@media (max-width: 768px) {
+  .page-header__title {
+    font-size: clamp(24px, 7vw, 28px);
+  }
+
+  .page-header__title-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .page-header__actions {
+    width: 100%;
+    padding-top: 0;
+  }
+}

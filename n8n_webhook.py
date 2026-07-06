@@ -33,6 +33,7 @@ def outcome_to_event(outcome: str, event_map: dict[str, str] | None = None) -> s
         "interested": "lead_qualified",
         "not_interested": "lead_not_interested",
         "callback_requested": "lead_callback",
+        "early_disconnect": "lead_callback",
     }
     if oc in mapping:
         return mapping[oc]

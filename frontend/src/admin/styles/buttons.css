@@ -1,0 +1,76 @@
+/* ============================================================
+   ADMIN BUTTONS
+   ============================================================ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--admin-sp-2);
+  font-family: var(--admin-font-body);
+  font-size: var(--admin-text-base);
+  font-weight: 600;
+  padding: var(--admin-sp-2) var(--admin-sp-5);
+  height: 38px;
+  border-radius: var(--admin-radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  text-decoration: none;
+  transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+  outline: none;
+}
+
+.btn:active { transform: scale(0.97); }
+
+/* Primary */
+.btn-primary {
+  background-color: var(--admin-primary);
+  color: var(--admin-on-primary);
+  box-shadow: 0 1px 3px rgba(26,71,232,0.2);
+}
+.btn-primary:hover {
+  background-color: #1640d0;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(26,71,232,0.25);
+}
+
+/* Secondary / outline */
+.btn-secondary {
+  background-color: var(--admin-surface);
+  color: var(--admin-text-primary);
+  border-color: var(--admin-border);
+}
+.btn-secondary:hover {
+  background-color: var(--admin-surface-alt);
+}
+
+/* Danger */
+.btn-danger {
+  background-color: var(--admin-error-bg);
+  color: var(--admin-error);
+  border-color: var(--admin-error);
+}
+.btn-danger:hover { background-color: #f5c6c6; }
+
+/* Ghost */
+.btn-ghost {
+  background: none;
+  color: var(--admin-text-secondary);
+  border-color: transparent;
+}
+.btn-ghost:hover {
+  background-color: var(--admin-surface-alt);
+  color: var(--admin-text-primary);
+}
+
+/* Icon-only */
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: var(--admin-radius-sm);
+}
+
+/* Legacy aliases */
+.btn-tactile { box-shadow: inset 0 1px 0 rgba(255,255,255,.2); }

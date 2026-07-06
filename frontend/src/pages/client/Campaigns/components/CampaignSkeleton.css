@@ -1,0 +1,10 @@
+.cmp-skeleton {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card, 22px);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cmp-skeleton__line { margin-bottom: 4px; }

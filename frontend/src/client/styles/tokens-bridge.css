@@ -1,0 +1,75 @@
+/*
+ * Design-token aliases for client pages (campaigns, enterprise UI, page headers).
+ * Loaded after client.css so dashboard + campaigns share one typography system.
+ */
+:root,
+.client-app {
+  /* Typography scale — Plus Jakarta headlines, Inter body */
+  --font-h1: 28px;
+  --font-h2: 28px;
+  --font-h3: 16px;
+  --font-section: 28px;
+  --font-card-title: 16px;
+  --font-metric: 32px;
+  --font-body: 14px;
+  --font-small: 14px;
+  --font-caption: 12px;
+  --font-page-title: 28px;
+  --font-page-subtitle: 14px;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --line-tight: 1.2;
+  --line-normal: 1.5;
+
+  /* Colors */
+  --text: var(--text-primary, #0f172a);
+  --text-muted: #64748b;
+  --text-subtle: #94a3b8;
+  --text-caption: var(--text-subtle);
+  --background: var(--bg, #f8fafc);
+  --surface: #ffffff;
+  --surface-alt: #f8fafc;
+  --border: #e2e8f0;
+  --border-light: #f1f5f9;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-light: #eff6ff;
+  --success: #16a34a;
+  --success-light: #f0fdf4;
+  --warning: #ea580c;
+  --warning-light: #fff7ed;
+  --danger: #dc2626;
+  --danger-light: #fee2e2;
+
+  /* Spacing */
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 48px;
+  --space-card: 16px;
+  --space-content: 12px;
+  --space-section: 20px;
+  --page-section-gap: 16px;
+
+  /* Radius & elevation */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-card: 16px;
+  --radius-button: 12px;
+  --radius-pill: 999px;
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.06);
+  --shadow-card-hover: 0 12px 40px rgba(0, 0, 0, 0.08);
+
+  /* Components */
+  --icon-size: 20px;
+  --input-height: 48px;
+  --button-height: 44px;
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}

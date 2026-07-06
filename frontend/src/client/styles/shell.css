@@ -1,0 +1,11 @@
+/* Client shell — single import for all client routes (MainLayout) */
+@import '../client.css';
+@import './tokens-bridge.css';
+@import './typography.css';
+@import './spacing.css';
+@import './cards.css';
+@import './tables.css';
+@import './page-header.css';
+@import './dashboard.css';
+@import './campaign.css';
+@import './campaigns-typography.css';

@@ -32,7 +32,7 @@ from db.warmup_state import (
 )
 from plivo_hangup import handle_plivo_hangup
 from recording import handle_plivo_recording, start_plivo_recording
-from telephony import build_hangup_url, make_plivo_call
+from telephony import build_hangup_url, make_plivo_call, public_telephony_base_url
 
 from api.script_config_validation import normalize_route
 
@@ -259,7 +259,7 @@ app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://admin.aakashvani.ai", "https://app.aakashvani.ai", "http://localhost:3000"],
+    allow_origins=["https://admin.aakashvani.ai", "https://app.aakashvani.ai", "http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -299,8 +299,8 @@ async def start_call(request: Request) -> JSONResponse:
     asyncio.create_task(_prewarm_gemini(call_id))
 
     host = request.headers.get("host", "localhost")
-    protocol = "https" if not host.startswith(("localhost", "127.0.0.1")) else "http"
-    answer_url = f"{protocol}://{host}/answer?call_id={call_id}"
+    base = public_telephony_base_url(host)
+    answer_url = f"{base}/answer?call_id={call_id}"
     if body_data:
         encoded = urllib.parse.quote(json.dumps(body_data))
         answer_url += f"&body_data={encoded}"
@@ -378,7 +378,8 @@ async def answer_xml(
                 )
 
     host = request.headers.get("host", "localhost")
-    ws_url = f"wss://{host}/ws"
+    ws_base = public_telephony_base_url(host).replace("https://", "wss://").replace("http://", "ws://")
+    ws_url = f"{ws_base}/ws"
 
     # Pass body_data + call_id through to the WebSocket endpoint.
     params: list[str] = []
@@ -482,12 +483,13 @@ async def health():
 
 
 def _register_api_routes() -> None:
-    from api.routes import calls, campaigns, credits, internal, internal_script_configs, leads
+    from api.routes import calls, campaigns, client_leads, credits, internal, internal_script_configs, leads
 
     app.include_router(internal.router)
     app.include_router(internal_script_configs.router)
     app.include_router(campaigns.router)
     app.include_router(leads.router)
+    app.include_router(client_leads.router)
     app.include_router(calls.router)
     app.include_router(credits.router)
 

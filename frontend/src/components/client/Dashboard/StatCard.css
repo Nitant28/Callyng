@@ -1,0 +1,68 @@
+.cd-stat {
+  height: var(--kpi-card-height);
+  padding: var(--space-card);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.cd-stat__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.cd-stat__icon {
+  font-size: var(--icon-size);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.cd-stat__label {
+  font-size: var(--font-card-title);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.3;
+}
+
+.cd-stat__metric {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cd-stat__prefix {
+  font-size: var(--font-metric);
+  font-weight: var(--weight-bold);
+  color: var(--text);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-stat__value {
+  font-size: var(--font-metric);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-stat--skeleton {
+  gap: var(--space-2);
+}
+
+.cd-stat__skel-label {
+  height: var(--font-card-title);
+  width: 60%;
+  border-radius: var(--radius-sm);
+}
+
+.cd-stat__skel-value {
+  height: var(--font-metric);
+  width: 45%;
+  border-radius: var(--radius-sm);
+}

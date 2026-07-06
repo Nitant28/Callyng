@@ -1,0 +1,111 @@
+.ls-row__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.ls-row__avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: var(--weight-bold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ls-row__name-block {
+  min-width: 0;
+}
+.ls-row__name {
+  display: block;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ls-row__email {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ls-row__phone {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ls-row__muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.ls-row__num {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+}
+.ls-row__actions {
+  width: 120px;
+}
+.ls-row__actions-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.ls-row:hover .ls-row__actions-inner {
+  opacity: 1;
+}
+.ls-row__actions button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ls-row__actions button:hover {
+  background: #eef2f7;
+  color: var(--text);
+}
+.ls-row__actions .material-symbols-outlined {
+  font-size: 18px;
+}
+.ls-row__view {
+  width: auto !important;
+  padding: 0 10px !important;
+  font-size: 12px !important;
+  font-weight: var(--weight-semibold) !important;
+  color: var(--primary) !important;
+}
+.ls-row__action-btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+.ls-row__action-btn--primary {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+.ls-row--calling {
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.08) 0%, transparent 55%);
+}
+.ls-row--calling .ls-row__avatar {
+  background: #dbeafe;
+  color: #1d4ed8;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}

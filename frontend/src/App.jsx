@@ -1,31 +1,41 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
 import Login from './pages/client/Login';
 import ClientDashboard from './pages/client/Dashboard';
-import ClientCampaignDetail from './pages/client/CampaignDetail';
-import ClientCallLogs from './pages/client/CallLogs';
-import ClientSettings from './pages/client/Settings';
-import { ClientGuard, AdminGuard } from './components/shared/Guards';
-import Layout from './components/shared/layout/Layout';
+import ClientCampaigns from './pages/client/Campaigns';
+import CampaignWorkspace from './pages/client/CampaignWorkspace/CampaignWorkspace';
+import ClientGuard from './client/guards/ClientGuard';
+import AdminGuard from './admin/guards/AdminGuard';
 
-import AdminLogin from './pages/admin/AdminLogin';
+const MainLayout = lazy(() => import('./components/layout/MainLayout'));
 
-import AdminOverview from './pages/admin/AdminOverview';
-import AdminLayout from './components/shared/layout/AdminLayout';
+import AdminLogin from './admin/pages/AdminLogin';
 
-import AdminClients from './pages/admin/AdminClients';
+import AdminOverview from './admin/pages/AdminOverview';
+import AdminLayout from './admin/layouts/AdminLayout';
 
-import AdminClientDetail from './pages/admin/AdminClientDetail';
+import AdminClients from './admin/pages/AdminClients';
 
-import AdminBotConfigs from './pages/admin/AdminBotConfigs';
-import AdminCalls from './pages/admin/AdminCalls';
-import AdminCampaigns from './pages/admin/AdminCampaigns';
-import AdminDiagnostics from './pages/admin/AdminDiagnostics';
-import AdminWebhooks from './pages/admin/AdminWebhooks';
-import AdminScriptConfigs from './pages/admin/AdminScriptConfigs';
+import AdminClientDetail from './admin/pages/AdminClientDetail';
+
+import AdminBotConfigs from './admin/pages/AdminBotConfigs';
+import AdminCalls from './admin/pages/AdminCalls';
+import AdminCampaigns from './admin/pages/AdminCampaigns';
+import AdminDiagnostics from './admin/pages/AdminDiagnostics';
+import AdminWebhooks from './admin/pages/AdminWebhooks';
+import AdminScriptConfigs from './admin/pages/AdminScriptConfigs';
 
 import { ToastProvider } from './contexts/ToastContext';
-import { AdminAuthProvider } from './contexts/AdminAuthContext';
-import { AdminDataProvider } from './contexts/AdminDataContext';
+import { AdminAuthProvider } from './admin/contexts/AdminAuthContext';
+import { AdminDataProvider } from './admin/contexts/AdminDataContext';
+
+import ClientCampaignDetail from './pages/client/CampaignDetail';
+
+const ClientShell = ({ children }) => (
+  <Suspense fallback={null}>
+    <MainLayout>{children}</MainLayout>
+  </Suspense>
+);
 
 function App() {
   return (
@@ -40,42 +50,35 @@ function App() {
           path="/app"
           element={
             <ClientGuard>
-              <Layout>
+              <ClientShell>
                 <ClientDashboard />
-              </Layout>
+              </ClientShell>
             </ClientGuard>
           }
         />
         <Route
-          path="/app/campaigns/:id"
+          path="/app/campaigns"
           element={
             <ClientGuard>
-              <Layout>
+              <ClientShell>
+                <ClientCampaigns />
+              </ClientShell>
+            </ClientGuard>
+          }
+        />
+        <Route
+          path="/app/campaigns/:id/*"
+          element={
+            <ClientGuard>
+              <ClientShell>
                 <ClientCampaignDetail />
-              </Layout>
+              </ClientShell>
             </ClientGuard>
           }
         />
-        <Route
-          path="/app/calls"
-          element={
-            <ClientGuard>
-              <Layout>
-                <ClientCallLogs />
-              </Layout>
-            </ClientGuard>
-          }
-        />
-        <Route
-          path="/app/settings"
-          element={
-            <ClientGuard>
-              <Layout>
-                <ClientSettings />
-              </Layout>
-            </ClientGuard>
-          }
-        />
+        <Route path="/app/leads" element={<Navigate to="/app/campaigns" replace />} />
+        <Route path="/app/calls" element={<Navigate to="/app/campaigns" replace />} />
+        <Route path="/app/settings" element={<Navigate to="/app" replace />} />
 
         {/* Admin Routes */}
         <Route path="/admin/login" element={<AdminLogin />} />
