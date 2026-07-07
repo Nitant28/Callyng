@@ -60,9 +60,9 @@ const LeadTable = ({
             {!loading && rows.map((lead) => (
               <LeadRow
                 key={lead.id}
-               <td><LeadStatusBadge lead={lead} /></td>
-          <td className="ls-row__outcome">{lead.outcome || '—'}</td>
-          <td className="ls-row__num">{lead.attempts ?? 0}</td>              onToggleSelect={onToggleSelect}
+                lead={lead}
+                selected={selected.has(lead.id)}
+                onToggleSelect={onToggleSelect}
                 onClick={onRowClick}
                 onEdit={onEdit}
                 onDelete={onDelete}
@@ -77,6 +77,7 @@ const LeadTable = ({
         total={total}
         onPageChange={onPageChange}
         onLimitChange={onLimitChange}
+        limitOptions={[10, 25, 50, 100]}
       />
     </div>
   );

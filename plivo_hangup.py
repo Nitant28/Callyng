@@ -111,12 +111,13 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
 
                 async def _hangup_recover() -> None:
                     try:
-                        await pg_db.mark_call_log_not_in_progress(
-                            pool, sid, set_credits_charged_zero=True
+                        cleared = await pg_db.mark_call_log_not_in_progress(
+                            pool, sid
                         )
-                        from post_call_processor import recover_abandoned_session
+                        if cleared:
+                            from post_call_processor import recover_abandoned_session
 
-                        await recover_abandoned_session(pool, sid)
+                            await recover_abandoned_session(pool, sid)
                     except Exception as exc:
                         logger.error("plivo-hangup recovery failed session={}: {}", sid, exc)
 

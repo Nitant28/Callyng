@@ -48,7 +48,7 @@
   color: var(--primary);
 }
 .ent-table tbody tr {
-  height: 72px;
+  height: 52px;
   border-bottom: 1px solid #eef2f7;
   transition: background 120ms ease;
 }
@@ -59,7 +59,7 @@
   border-bottom: none;
 }
 .ent-table tbody td {
-  padding: 12px 20px;
+  padding: 8px 16px;
   font-size: 14px;
   color: var(--text);
   vertical-align: middle;

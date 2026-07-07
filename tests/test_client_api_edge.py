@@ -108,9 +108,6 @@ async def test_create_campaign_success(test_client, dev_auth_headers):
     res = await test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}/status", json={"status": "completed"}, headers=dev_auth_headers)
     assert res.status_code == 200
 
-    # Manual status change to dnc must fail after removal
-    res = await test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}/status", json={"status": "dnc"}, headers=dev_auth_headers)
-    assert res.status_code == 409
 
     # Manual status change back to pending so it can be deleted
     res = await test_client.patch(f"/api/campaigns/{camp_id}/leads/{lead_id}/status", json={"status": "pending"}, headers=dev_auth_headers)

@@ -18,8 +18,7 @@ def upgrade() -> None:
     # 2. Recompute campaign counters
     op.execute("""
         UPDATE campaigns c SET
-          completed_leads = sub.completed,
-          dnc_leads = 0
+          completed_leads = sub.completed
         FROM (
           SELECT campaign_id, COUNT(*) FILTER (WHERE status='completed')::int AS completed
           FROM leads GROUP BY campaign_id

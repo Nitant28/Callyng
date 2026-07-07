@@ -36,3 +36,24 @@ These updates are designed to resolve current single-server bottlenecks and ensu
 - **Audit Logs API:** Build a new route `GET /internal/audit-logs` that exposes a paginated list of security logs.
 - **Frontend Dashboard Integration:** Wire the "Security Logs" component in `AdminOverview.jsx` to fetch recent events from the backend, mapping them to icons (`verified_user`, `lock_reset`, `payments`), and implement a dedicated `/admin/security-logs` page for full administrative audits.
 - **Estimated Time to Implement:** 3-5 days.
+
+## 6. Pipecat Analytics & Cost Monitoring Integration
+**The Problem:** Currently, the system lacks granular tracing of LLM token usage, execution times, and agent-specific conversational metrics, making cost attribution and performance tuning difficult.
+**The Fix:**
+- Integrate **OpenInference** (`openinference-instrumentation-pipecat`) for comprehensive LLM tracing, allowing exact cost calculation based on token consumption and execution latency.
+- Integrate **Sentry** (`pipecat-ai[sentry]`) to track errors and performance bottlenecks in text-to-speech and LLM requests.
+- Explore specialized voice agent platforms (like **Roark** or **Future AGI**) to monitor conversational metrics (e.g., user interruption rates, average conversation lengths) to optimize the AI's behavior and estimate aggregate infrastructure costs.
+- **Estimated Time to Implement:** 3-5 days.
+
+## 7. Granular Per-Call Financial Cost Accounting
+**The Problem:** While the system deducts internal credits from a client's balance based on a fixed rate, it does not currently compute or store the exact real-world API costs incurred per call (e.g., Plivo SIP minutes, LLM tokens, STT seconds, TTS characters). This makes it impossible to track precise profit margins or identify runaway infrastructure costs per campaign.
+**The Fix:**
+- **Database Schema Expansion:** Add specific cost-tracking columns to the `call_logs` table: `llm_cost_usd`, `tts_cost_usd`, `stt_cost_usd`, `telephony_cost_usd`, and `total_api_cost_usd`.
+- **Pipeline Metrics Interception:** Update the Pipecat agent (`bot.py`) to subscribe to usage metrics events. As the call progresses, intercept the exact number of STT audio seconds processed, LLM input/output tokens generated, and TTS characters synthesized.
+- **Dynamic Cost Calculation:** At call termination (or inside the Plivo hangup webhook), calculate the precise costs:
+  - Plivo telephony cost (often provided directly in the hangup webhook payload, or computed via exact duration × SIP trunk rate).
+  - STT cost = seconds × Deepgram rate.
+  - LLM cost = (Input Tokens × input rate) + (Output Tokens × output rate).
+  - TTS cost = characters × Cartesia/ElevenLabs rate.
+- **Dashboard Profitability Metrics:** Aggregate the `total_api_cost_usd` against the `billed_credits` on the admin dashboard, providing a live "Gross Margin" metric and alerting the admin if a specific campaign is operating at a loss.
+- **Estimated Time to Implement:** 2-3 days.

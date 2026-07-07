@@ -160,13 +160,21 @@ async def finalize_stale_in_progress_call_logs(
     mins = grace_minutes if grace_minutes is not None else live_call_grace_minutes()
     rows = await pool.fetch(
         """
-        UPDATE call_logs SET
+        WITH stale_logs AS (
+            SELECT cl.id
+            FROM call_logs cl
+            JOIN campaigns c ON cl.campaign_id = c.id AND cl.client_id = c.client_id
+            WHERE cl.campaign_id = $1 AND cl.client_id = $2 AND cl.in_progress = TRUE
+              AND cl.started_at < NOW() - GREATEST(COALESCE(c.max_call_minutes, 0) + 2, $3) * INTERVAL '1 minute'
+            LIMIT 500
+        )
+        UPDATE call_logs cl SET
             in_progress = FALSE,
-            ended_at = COALESCE(ended_at, NOW()),
-            outcome = COALESCE(NULLIF(TRIM(outcome), ''), 'Unknown')
-        WHERE campaign_id = $1 AND client_id = $2 AND in_progress = TRUE
-          AND started_at < NOW() - ($3 * INTERVAL '1 minute')
-        RETURNING id
+            ended_at = COALESCE(cl.ended_at, NOW()),
+            outcome = COALESCE(NULLIF(TRIM(cl.outcome), ''), 'Unknown')
+        FROM stale_logs sl
+        WHERE cl.id = sl.id
+        RETURNING cl.id
         """,
         campaign_id,
         client_id,
@@ -193,13 +201,21 @@ async def finalize_all_stale_in_progress_call_logs(
     mins = grace_minutes if grace_minutes is not None else live_call_grace_minutes()
     rows = await pool.fetch(
         """
-        UPDATE call_logs SET
+        WITH stale_logs AS (
+            SELECT cl.id
+            FROM call_logs cl
+            JOIN campaigns c ON cl.campaign_id = c.id AND cl.client_id = c.client_id
+            WHERE cl.in_progress = TRUE
+              AND cl.started_at < NOW() - GREATEST(COALESCE(c.max_call_minutes, 0) + 2, $1) * INTERVAL '1 minute'
+            LIMIT 500
+        )
+        UPDATE call_logs cl SET
             in_progress = FALSE,
-            ended_at = COALESCE(ended_at, NOW()),
-            outcome = COALESCE(NULLIF(TRIM(outcome), ''), 'Unknown')
-        WHERE in_progress = TRUE
-          AND started_at < NOW() - ($1 * INTERVAL '1 minute')
-        RETURNING id
+            ended_at = COALESCE(cl.ended_at, NOW()),
+            outcome = COALESCE(NULLIF(TRIM(cl.outcome), ''), 'Unknown')
+        FROM stale_logs sl
+        WHERE cl.id = sl.id
+        RETURNING cl.id
         """,
         mins,
     )
@@ -222,7 +238,7 @@ async def settle_budget_for_stale_call_logs(pool: asyncpg.Pool) -> int:
         WHERE cl.in_progress = FALSE
           AND cl.credits_charged IS NULL
           AND cl.ended_at IS NOT NULL
-          AND cl.ended_at > NOW() - INTERVAL '1 hour'
+          AND cl.ended_at > NOW() - INTERVAL '7 days'
           AND cl.call_data IS NOT NULL
         """
     )
@@ -234,20 +250,23 @@ async def settle_budget_for_stale_call_logs(pool: asyncpg.Pool) -> int:
         try:
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    await settle_call_budget(
-                        conn,
-                        row["campaign_id"],
-                        row["client_id"],
-                        Decimal("0"),
-                        reserved,
-                    )
-                    await conn.execute(
+                    result = await conn.execute(
                         """
                         UPDATE call_logs
                         SET credits_charged = 0, billed_minutes = 0
                         WHERE session_call_id = $1 AND credits_charged IS NULL
                         """,
                         row["session_call_id"],
+                    )
+                    if result.split()[-1] == "0":
+                        continue
+                    
+                    await settle_call_budget(
+                        conn,
+                        row["campaign_id"],
+                        row["client_id"],
+                        Decimal("0"),
+                        reserved,
                     )
             settled += 1
         except Exception as exc:
@@ -1349,23 +1368,41 @@ async def try_settle_campaign_budget(
     if row["budget_returned_at"] is not None:
         return Decimal("0"), False
 
-    calling = int(row["calling_leads"] or 0)
-    if final_status == "cancelled" and calling > 0:
-        await conn.execute(
+    if final_status == "cancelled":
+        has_calling_leads = await conn.fetchval(
             """
-            UPDATE campaigns SET status = 'cancelled'
-            WHERE id = $1 AND client_id = $2
-              AND status NOT IN ('completed', 'cancelled')
+            SELECT 1 FROM leads
+            WHERE campaign_id = $1 AND client_id = $2
+              AND status = 'calling'
+            LIMIT 1
             """,
             campaign_id,
             client_id,
         )
-        return Decimal("0"), False
+        if has_calling_leads:
+            await conn.execute(
+                """
+                UPDATE campaigns SET status = 'cancelled'
+                WHERE id = $1 AND client_id = $2
+                  AND status NOT IN ('completed', 'cancelled')
+                """,
+                campaign_id,
+                client_id,
+            )
+            return Decimal("0"), False
 
     if final_status == "completed":
-        pending = int(row["pending_leads"] or 0)
-        callback = int(row["callback_leads"] or 0)
-        if pending > 0 or callback > 0 or calling > 0:
+        has_active_leads = await conn.fetchval(
+            """
+            SELECT 1 FROM leads
+            WHERE campaign_id = $1 AND client_id = $2
+              AND status IN ('pending', 'callback_scheduled', 'calling')
+            LIMIT 1
+            """,
+            campaign_id,
+            client_id,
+        )
+        if has_active_leads:
             return Decimal("0"), False
         if row["status"] != "running":
             return Decimal("0"), False
@@ -1831,11 +1868,8 @@ async def release_stuck_calling_leads(
             camp = await get_campaign(conn, campaign_id, client_id)
             delay = int(camp.get("retry_delay_minutes") or 120) if camp else 120
             
-            failed_ids: list[UUID] = []
-            callback_ids: list[UUID] = []
-            callback_next_at = None
-            failed_outcome = None
-            callback_outcome = None
+            failed_count = 0
+            callback_count = 0
             
             for lr in lead_rows:
                 status, next_at, outcome = resolve_lead_retry_or_failed(
@@ -1845,55 +1879,52 @@ async def release_stuck_calling_leads(
                     base_outcome="Unknown"
                 )
                 if status == "failed":
-                    failed_ids.append(lr["id"])
-                    failed_outcome = outcome
+                    await conn.execute(
+                        """
+                        UPDATE leads
+                        SET status = 'failed',
+                            outcome = COALESCE(NULLIF(TRIM(outcome), ''), $3)
+                        WHERE id = $1 AND client_id = $2 AND status = 'calling'
+                        """,
+                        lr["id"],
+                        client_id,
+                        outcome,
+                    )
+                    failed_count += 1
                 else:
-                    callback_ids.append(lr["id"])
-                    callback_outcome = outcome
-                    callback_next_at = next_at
+                    await conn.execute(
+                        """
+                        UPDATE leads
+                        SET status = 'callback_scheduled',
+                            outcome = COALESCE(NULLIF(TRIM(outcome), ''), $4),
+                            next_attempt_at = COALESCE($3, NOW()),
+                            scheduled_callback_at = COALESCE($3, NOW())
+                        WHERE id = $1 AND client_id = $2 AND status = 'calling'
+                        """,
+                        lr["id"],
+                        client_id,
+                        next_at,
+                        outcome,
+                    )
+                    callback_count += 1
                     
-            if failed_ids:
-                await conn.execute(
-                    """
-                    UPDATE leads
-                    SET status = 'failed',
-                        outcome = COALESCE(NULLIF(TRIM(outcome), ''), $3)
-                    WHERE id = ANY($1::uuid[]) AND client_id = $2 AND status = 'calling'
-                    """,
-                    failed_ids,
-                    client_id,
-                    failed_outcome,
+            if failed_count > 0:
+                await increment_campaign_counters(
+                    conn,
+                    campaign_id,
+                    from_status="calling",
+                    to_status="failed",
+                    count=failed_count,
                 )
-                for _ in failed_ids:
-                    await increment_campaign_counters(
-                        conn,
-                        campaign_id,
-                        from_status="calling",
-                        to_status="failed",
-                    )
-            if callback_ids:
-                await conn.execute(
-                    """
-                    UPDATE leads
-                    SET status = 'callback_scheduled',
-                        outcome = COALESCE(NULLIF(TRIM(outcome), ''), $4),
-                        next_attempt_at = COALESCE($3, NOW()),
-                        scheduled_callback_at = COALESCE($3, NOW())
-                    WHERE id = ANY($1::uuid[]) AND client_id = $2 AND status = 'calling'
-                    """,
-                    callback_ids,
-                    client_id,
-                    callback_next_at,
-                    callback_outcome,
+            if callback_count > 0:
+                await increment_campaign_counters(
+                    conn,
+                    campaign_id,
+                    from_status="calling",
+                    to_status="callback_scheduled",
+                    count=callback_count,
                 )
-                for _ in callback_ids:
-                    await increment_campaign_counters(
-                        conn,
-                        campaign_id,
-                        from_status="calling",
-                        to_status="callback_scheduled",
-                    )
-
+            
             ids = [r["id"] for r in rows]
             await release_campaign_budget_reservation(
                 conn, campaign_id, client_id, len(ids)
@@ -1946,7 +1977,7 @@ async def finalize_orphaned_in_progress_call_logs(
 
 async def release_all_stuck_calling_leads(pool: asyncpg.Pool) -> int:
     """Run release_stuck_calling_leads for all campaigns with calling_leads > 0."""
-    rows = await pool.fetch("SELECT id, client_id FROM campaigns WHERE calling_leads > 0")
+    rows = await pool.fetch("SELECT DISTINCT campaign_id AS id, client_id FROM leads WHERE status = 'calling'")
     total_released = 0
     for r in rows:
         released = await release_stuck_calling_leads(pool, r["id"], r["client_id"])
@@ -1978,20 +2009,47 @@ async def reconcile_campaign_counters(
     """
     row = await pool.fetchrow(
         """
-        SELECT
-            COUNT(*)::int AS total_leads,
-            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_leads,
-            COUNT(*) FILTER (WHERE status = 'calling')::int AS calling_leads,
-            COUNT(*) FILTER (WHERE status = 'callback_scheduled')::int AS callback_leads,
-            COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_leads,
-            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_leads
-        FROM leads
-        WHERE campaign_id = $1 AND client_id = $2
+        WITH lead_counts AS (
+            SELECT
+                $1::uuid AS campaign_id,
+                $2::uuid AS client_id,
+                COUNT(*)::int AS total_leads,
+                COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_leads,
+                COUNT(*) FILTER (WHERE status = 'calling')::int AS calling_leads,
+                COUNT(*) FILTER (WHERE status = 'callback_scheduled')::int AS callback_leads,
+                COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_leads,
+                COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_leads
+            FROM leads
+            WHERE campaign_id = $1 AND client_id = $2
+        )
+        UPDATE campaigns c
+        SET
+            total_leads = lc.total_leads,
+            pending_leads = lc.pending_leads,
+            calling_leads = lc.calling_leads,
+            callback_leads = lc.callback_leads,
+            completed_leads = lc.completed_leads,
+            failed_leads = lc.failed_leads
+        FROM lead_counts lc
+        WHERE c.id = lc.campaign_id AND c.client_id = lc.client_id
+        RETURNING
+            c.total_leads, c.pending_leads, c.calling_leads,
+            c.callback_leads, c.completed_leads, c.failed_leads
         """,
         campaign_id,
         client_id,
     )
-    counts = {
+    if not row:
+        return {
+            "total_leads": 0,
+            "pending_leads": 0,
+            "calling_leads": 0,
+            "callback_leads": 0,
+            "completed_leads": 0,
+            "failed_leads": 0,
+        }
+    
+    return {
         "total_leads": int(row["total_leads"] or 0),
         "pending_leads": int(row["pending_leads"] or 0),
         "calling_leads": int(row["calling_leads"] or 0),
@@ -1999,27 +2057,49 @@ async def reconcile_campaign_counters(
         "completed_leads": int(row["completed_leads"] or 0),
         "failed_leads": int(row["failed_leads"] or 0),
     }
-    await pool.execute(
+
+async def reconcile_all_campaign_counters(pool: asyncpg.Pool) -> int:
+    """Reconcile counters for all running or pausing campaigns."""
+    rows = await pool.fetch(
         """
-        UPDATE campaigns SET
-            total_leads = $1,
-            pending_leads = $2,
-            calling_leads = $3,
-            callback_leads = $4,
-            completed_leads = $5,
-            failed_leads = $6
-        WHERE id = $7 AND client_id = $8
-        """,
-        counts["total_leads"],
-        counts["pending_leads"],
-        counts["calling_leads"],
-        counts["callback_leads"],
-        counts["completed_leads"],
-        counts["failed_leads"],
-        campaign_id,
-        client_id,
+        WITH lead_counts AS (
+            SELECT
+                c.id AS campaign_id,
+                c.client_id,
+                COUNT(l.id)::int AS total_leads,
+                COUNT(l.id) FILTER (WHERE l.status = 'pending')::int AS pending_leads,
+                COUNT(l.id) FILTER (WHERE l.status = 'calling')::int AS calling_leads,
+                COUNT(l.id) FILTER (WHERE l.status = 'callback_scheduled')::int AS callback_leads,
+                COUNT(l.id) FILTER (WHERE l.status = 'completed')::int AS completed_leads,
+                COUNT(l.id) FILTER (WHERE l.status = 'failed')::int AS failed_leads
+            FROM campaigns c
+            LEFT JOIN leads l ON l.campaign_id = c.id AND l.client_id = c.client_id
+            WHERE c.status IN ('running', 'pausing')
+            GROUP BY c.id, c.client_id
+        )
+        UPDATE campaigns c
+        SET
+            total_leads = lc.total_leads,
+            pending_leads = lc.pending_leads,
+            calling_leads = lc.calling_leads,
+            callback_leads = lc.callback_leads,
+            completed_leads = lc.completed_leads,
+            failed_leads = lc.failed_leads
+        FROM lead_counts lc
+        WHERE c.id = lc.campaign_id AND c.client_id = lc.client_id
+          AND c.status IN ('running', 'pausing')
+          AND (
+              c.total_leads != lc.total_leads OR
+              c.pending_leads != lc.pending_leads OR
+              c.calling_leads != lc.calling_leads OR
+              c.callback_leads != lc.callback_leads OR
+              c.completed_leads != lc.completed_leads OR
+              c.failed_leads != lc.failed_leads
+          )
+        RETURNING c.id
+        """
     )
-    return counts
+    return len(rows)
 
 
 async def fetch_active_lead_for_post_call(
@@ -2766,28 +2846,15 @@ async def patch_call_log_post_call_snapshot(
 async def mark_call_log_not_in_progress(
     pool: asyncpg.Pool,
     session_call_id: str,
-    *,
-    set_credits_charged_zero: bool = False,
 ) -> bool:
     """Clear live flag as soon as the pipeline ends (before post-call extraction)."""
-    if set_credits_charged_zero:
-        sql = """
-            UPDATE call_logs SET
-                in_progress = FALSE,
-                ended_at = COALESCE(ended_at, NOW()),
-                credits_charged = 0,
-                billed_minutes = 0
-            WHERE session_call_id = $1 AND in_progress = TRUE
-            RETURNING id
-            """
-    else:
-        sql = """
-            UPDATE call_logs SET
-                in_progress = FALSE,
-                ended_at = COALESCE(ended_at, NOW())
-            WHERE session_call_id = $1 AND in_progress = TRUE
-            RETURNING id
-            """
+    sql = """
+        UPDATE call_logs SET
+            in_progress = FALSE,
+            ended_at = COALESCE(ended_at, NOW())
+        WHERE session_call_id = $1 AND in_progress = TRUE
+        RETURNING id
+        """
     row = await pool.fetchrow(sql, session_call_id)
     return row is not None
 
@@ -3342,8 +3409,10 @@ async def increment_campaign_counters(
         for col, delta in deltas.items():
             if col not in _ALLOWED_COUNTER_COLS:
                 continue
-            sign = "+" if delta > 0 else "-"
-            parts.append(f"{col} = {col} {sign} ${idx}")
+            if delta > 0:
+                parts.append(f"{col} = {col} + ${idx}")
+            else:
+                parts.append(f"{col} = GREATEST(0, {col} - ${idx})")
             args_list.append(abs(delta) * count)
             idx += 1
         if not parts:

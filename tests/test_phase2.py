@@ -370,7 +370,7 @@ async def test_release_stuck_ignore_wrap_grace():
             budget_reserved_credits=2.0,
         )
         await pg_db.mark_call_log_not_in_progress(
-            pool, sid, set_credits_charged_zero=True
+            pool, sid
         )
 
         blocked = await pg_db.release_stuck_calling_leads(
@@ -471,7 +471,7 @@ async def test_recover_abandoned_session_moves_calling_lead():
             campaign_id,
         )
         await pg_db.mark_call_log_not_in_progress(
-            pool, sid, set_credits_charged_zero=True
+            pool, sid
         )
 
         recovered = await recover_abandoned_session(pool, sid)
@@ -564,7 +564,7 @@ async def test_client_release_stuck_calling_endpoint(client):
             datetime.now(timezone.utc),
         )
         await pg_db.mark_call_log_not_in_progress(
-            pool, sid, set_credits_charged_zero=True
+            pool, sid
         )
 
         res = await client.post(

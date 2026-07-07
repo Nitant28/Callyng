@@ -727,7 +727,7 @@ export default function AdminScriptConfigs() {
       {isEditorOpen && editingConfig && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-on-surface/40 dark:bg-black/60 backdrop-blur-sm p-4 sm:p-6">
           <div className="bg-arctic-surface dark:bg-[#1A1A24] rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col border border-outline-variant/50 dark:border-[#2A345E] overflow-hidden">
-            <div className="flex justify-between items-center px-6 py-4 bg-surface dark:bg-[#1C1810] border-b border-outline-variant dark:border-[#2A345E]">
+            <div className="flex flex-wrap justify-between items-center gap-4 px-6 py-4 bg-surface dark:bg-[#1C1810] border-b border-outline-variant dark:border-[#2A345E]">
               <div className="flex items-center gap-4">
                 <h3 className="font-headline-md text-on-surface dark:text-molten-text truncate pr-4">
                   {editingConfig.id ? `Edit Template: ${editingConfig.script_id} (v${editingConfig.version})` : `Create Template: ${editingConfig.script_id}`}
@@ -740,8 +740,8 @@ export default function AdminScriptConfigs() {
                   Guide
                 </button>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
-                {saveError && !saveError.includes('intent_status') && !saveError.includes('unmapped') && !saveError.includes('stale') && <span className="text-arctic-error dark:text-molten-error text-sm max-w-[200px] md:max-w-[300px] truncate" title={saveError}>{saveError}</span>}
+              <div className="flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap justify-end">
+                {saveError && !saveError.includes('intent_status') && !saveError.includes('unmapped') && !saveError.includes('stale') && <span className="hidden md:block text-arctic-error dark:text-molten-error text-sm max-w-[200px] md:max-w-[300px] truncate" title={saveError}>{saveError}</span>}
                 <button onClick={() => setIsEditorOpen(false)} className="px-4 py-2 border border-outline-variant dark:border-[#2A345E] rounded-lg text-on-surface dark:text-molten-text hover:bg-surface-container-low dark:hover:bg-[#2A345E]">Cancel</button>
                 {editingConfig.id && (
                   <button onClick={() => setIsTestCallOpen(true)} className="px-4 py-2 border border-primary dark:border-molten-primary text-primary dark:text-molten-primary rounded-lg font-bold hover:bg-primary/10 dark:hover:bg-molten-primary/10 transition-colors">

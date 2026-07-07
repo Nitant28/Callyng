@@ -10,7 +10,7 @@ export function useLeads(initialFilters = {}, { live = false } = {}) {
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState(10);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filters, setFilters] = useState({
@@ -24,7 +24,6 @@ export function useLeads(initialFilters = {}, { live = false } = {}) {
   const [statsLoading, setStatsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(() => new Set());
-  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), DEBOUNCE_MS);
@@ -35,8 +34,8 @@ export function useLeads(initialFilters = {}, { live = false } = {}) {
     setPage(1);
   }, [debouncedSearch, filters.campaignId, filters.status, limit]);
 
-  const loadStats = useCallback(async () => {
-    setStatsLoading(true);
+  const loadStats = useCallback(async (silent = false) => {
+    if (!silent) setStatsLoading(true);
     try {
       const data = await leadService.stats({ campaignId: filters.campaignId || undefined });
       setStats(data);
@@ -45,10 +44,10 @@ export function useLeads(initialFilters = {}, { live = false } = {}) {
     } finally {
       setStatsLoading(false);
     }
-  }, [filters.campaignId, refreshKey]);
+  }, [filters.campaignId]);
 
-  const loadLeads = useCallback(async () => {
-    setLoading(true);
+  const loadLeads = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const data = await leadService.list({
@@ -92,33 +91,39 @@ export function useLeads(initialFilters = {}, { live = false } = {}) {
       setRows(displayRows);
       setTotal(data.total);
       setPages(data.pages);
-      setSelected(new Set());
+      if (!silent) setSelected(new Set());
     } catch (err) {
       setError(err.customErrorMessage || err.message || 'Failed to load leads');
-      setRows([]);
-      setTotal(0);
+      if (!silent) {
+        setRows([]);
+        setTotal(0);
+      }
     } finally {
       setLoading(false);
     }
-  }, [page, limit, debouncedSearch, filters, sort, refreshKey, live]);
+  }, [page, limit, debouncedSearch, filters, sort, live]);
 
   useEffect(() => {
-    loadStats();
+    loadStats(false);
   }, [loadStats]);
 
   useEffect(() => {
-    loadLeads();
+    loadLeads(false);
   }, [loadLeads]);
 
   useEffect(() => {
     if (!live) return undefined;
     const interval = setInterval(() => {
-      setRefreshKey((k) => k + 1);
+      loadStats(true);
+      loadLeads(true);
     }, LIVE_POLL_MS);
     return () => clearInterval(interval);
-  }, [live]);
+  }, [live, loadStats, loadLeads]);
 
-  const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+  const refresh = useCallback(() => {
+    loadStats(false);
+    loadLeads(false);
+  }, [loadStats, loadLeads]);
 
   const toggleSort = useCallback((field) => {
     setSort((prev) => {

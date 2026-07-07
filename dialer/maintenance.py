@@ -43,6 +43,10 @@ async def run_stale_call_log_sweep(pool: asyncpg.Pool) -> int:
     if transitioned:
         logger.info("Global sweep transitioned {} pausing campaign(s) to paused", transitioned)
 
+    reconciled = await pg_db.reconcile_all_campaign_counters(pool)
+    if reconciled:
+        logger.info("Global sweep reconciled counters for {} campaign(s)", reconciled)
+
     await sweep_stale_prefetched_configs(pool)
 
     return n

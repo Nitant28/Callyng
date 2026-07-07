@@ -54,8 +54,8 @@ const MobileNav = () => {
 
 const MainLayoutInner = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { credits } = useDashboardData();
-  const clientName = credits?.clientName || localStorage.getItem('client_name') || 'Client';
+  const { balance } = useDashboardData();
+  const clientName = balance?.client_name || localStorage.getItem('client_name') || 'Client';
   const searchRef = useRef(null);
 
   const handleSignOut = () => {

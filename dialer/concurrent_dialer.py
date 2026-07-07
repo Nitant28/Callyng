@@ -59,67 +59,57 @@ async def _release_lead_to_pending(
     lead_id = UUID(str(lead["id"]))
     attempts = int(lead.get("attempts") or 0)
     max_att = int(lead.get("max_attempts") or 3)
-    if attempts >= max_att:
-        await pool.execute(
-            """
-            UPDATE leads
-            SET status = 'failed',
-                outcome = COALESCE(NULLIF(TRIM(outcome), ''), 'Max_Attempts_Reached')
-            WHERE id = $1 AND client_id = $2 AND status = 'calling'
-            """,
-            lead_id,
-            client_id,
-        )
-        await pg_db.increment_campaign_counters(
-            pool,
-            campaign_id,
-            from_status="calling",
-            to_status="failed",
-        )
-        return
-    grace = pg_db.live_call_grace_minutes()
-    has_live_call = await pool.fetchval(
-        """
-        SELECT 1 FROM call_logs
-        WHERE lead_id = $1 AND in_progress = TRUE
-          AND started_at > NOW() - ($2 * INTERVAL '1 minute')
-        LIMIT 1
-        """,
-        lead_id,
-        grace,
-    )
-    if defer_until:
-        await pool.execute(
-            """
-            UPDATE leads
-            SET status = 'pending',
-                next_attempt_at = $3
-            WHERE id = $1 AND client_id = $2 AND status = 'calling'
-            """,
-            lead_id,
-            client_id,
-            defer_until,
-        )
-    else:
-        await pool.execute(
-            """
-            UPDATE leads
-            SET status = 'pending',
-                next_attempt_at = NOW()
-            WHERE id = $1 AND client_id = $2 AND status = 'calling'
-            """,
-            lead_id,
-            client_id,
-        )
-    await pg_db.increment_campaign_counters(
-        pool,
-        campaign_id,
-        from_status="calling",
-        to_status="pending",
-    )
-    if not has_live_call:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT status FROM leads WHERE id = $1 AND client_id = $2 FOR UPDATE",
+                lead_id, client_id
+            )
+            if not row or row["status"] != "calling":
+                return
+                
+            if attempts >= max_att:
+                await conn.execute(
+                    """
+                    UPDATE leads
+                    SET status = 'failed',
+                        outcome = COALESCE(NULLIF(TRIM(outcome), ''), 'Max_Attempts_Reached')
+                    WHERE id = $1
+                    """,
+                    lead_id,
+                )
+                await pg_db.increment_campaign_counters(
+                    conn, campaign_id, from_status="calling", to_status="failed"
+                )
+            else:
+                next_at = defer_until or datetime.now(timezone.utc)
+                await conn.execute(
+                    """
+                    UPDATE leads
+                    SET status = 'pending',
+                        next_attempt_at = $2
+                    WHERE id = $1
+                    """,
+                    lead_id,
+                    next_at,
+                )
+                await pg_db.increment_campaign_counters(
+                    conn, campaign_id, from_status="calling", to_status="pending"
+                )
+
+            grace = pg_db.live_call_grace_minutes()
+            has_live_call = await conn.fetchval(
+                """
+                SELECT 1 FROM call_logs
+                WHERE lead_id = $1 AND in_progress = TRUE
+                  AND started_at > NOW() - ($2 * INTERVAL '1 minute')
+                LIMIT 1
+                """,
+                lead_id,
+                grace,
+            )
+            if not has_live_call:
                 await pg_db.release_campaign_budget_reservation(
                     conn, campaign_id, client_id, 1
                 )
@@ -334,6 +324,8 @@ async def fire_call(
             call_id,
             exc,
         )
+        if lead_uuid:
+            await _release_lead_to_pending(pool, lead, camp_id, cid)
         raise
 
     try:
@@ -457,6 +449,21 @@ async def run_campaign_dialer(
             )
             slots = campaign_max - effective_calling
             if slots <= 0:
+                ck = _campaign_key(campaign_id, client_id)
+                now_mono = _time.monotonic()
+                last = _last_release_stuck_at.get(ck, 0.0)
+                if now_mono - last >= _RELEASE_STUCK_COOLDOWN_S:
+                    _last_release_stuck_at[ck] = now_mono
+                    released = await pg_db.release_stuck_calling_leads(
+                        pool, campaign_id, client_id
+                    )
+                    if released:
+                        logger.info(
+                            "Campaign {} released {} lead(s) stuck in calling (slots full)",
+                            campaign_id,
+                            released,
+                        )
+                        continue
                 await asyncio.sleep(2)
                 continue
 

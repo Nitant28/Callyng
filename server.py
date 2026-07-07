@@ -225,7 +225,10 @@ async def lifespan(app: FastAPI):
                 host = (os.getenv("DIALER_CALLBACK_HOST") or os.getenv("NGROK_URL") or "localhost:7860").strip()
                 logger.info(f"[startup] Found {len(running_camps)} running campaigns. Auto-resuming...")
                 for camp in running_camps:
-                    await start_dialer(app, camp["id"], camp["client_id"], host=host)
+                    try:
+                        await start_dialer(app, camp["id"], camp["client_id"], host=host)
+                    except Exception as e:
+                        logger.warning(f"[startup] Failed to auto-resume campaign {camp['id']}: {e}")
         except Exception as exc:
             logger.warning("[startup] Failed to auto-resume campaigns: {}", exc)
     yield
@@ -367,14 +370,17 @@ async def answer_xml(
     if call_id and CallUUID:
         pool = getattr(request.app.state, "pool", None)
         if pool is not None:
-            asyncio.create_task(
-                pg_db.link_call_log_plivo_sid(pool, call_id, CallUUID)
+            from background_tasks import spawn_background_task
+            spawn_background_task(
+                pg_db.link_call_log_plivo_sid(pool, call_id, CallUUID),
+                name=f"link_sid_{call_id}"
             )
             session = getattr(request.app.state, "session", None)
             if session is not None:
                 host = request.headers.get("host", "localhost")
-                asyncio.create_task(
-                    start_plivo_recording(session, CallUUID, call_id, host=host)
+                spawn_background_task(
+                    start_plivo_recording(session, CallUUID, call_id, host=host),
+                    name=f"start_rec_{call_id}"
                 )
 
     host = request.headers.get("host", "localhost")
@@ -469,7 +475,7 @@ async def ws_endpoint(
                 call_log = await pg_db.get_call_log_by_session(app.state.pool, call_id)
                 if call_log and call_log.get("in_progress"):
                     logger.warning(f"Cleaning up stuck in_progress call {call_id} after WS closed")
-                    await pg_db.mark_call_log_not_in_progress(app.state.pool, call_id, set_credits_charged_zero=True)
+                    await pg_db.mark_call_log_not_in_progress(app.state.pool, call_id)
                     from post_call_processor import recover_abandoned_session
 
                     await recover_abandoned_session(app.state.pool, call_id)

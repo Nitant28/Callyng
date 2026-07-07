@@ -10,10 +10,10 @@ const formatCredits = (value) => {
 const Sidebar = ({ onSignOut, isOpen = false }) => {
   const location = useLocation();
   const path = location.pathname;
-  const { credits, loading } = useDashboardData();
+  const { balance: creditsData, loading } = useDashboardData();
   
   // Try mapping balanceCredits or balance_credits
-  const balance = credits?.balanceCredits ?? credits?.balance_credits ?? null;
+  const balance = creditsData?.balanceCredits ?? creditsData?.balance_credits ?? null;
 
   return (
     <aside className={`cl-sidebar ${isOpen ? 'cl-sidebar--open' : ''}`}>
