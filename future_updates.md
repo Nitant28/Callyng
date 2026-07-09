@@ -57,3 +57,30 @@ These updates are designed to resolve current single-server bottlenecks and ensu
   - TTS cost = characters × Cartesia/ElevenLabs rate.
 - **Dashboard Profitability Metrics:** Aggregate the `total_api_cost_usd` against the `billed_credits` on the admin dashboard, providing a live "Gross Margin" metric and alerting the admin if a specific campaign is operating at a loss.
 - **Estimated Time to Implement:** 2-3 days.
+
+## 8. Gemini Live (STS) Bot Optimization (First-Sentence Dead Air Fix)
+**The Problem:** Using Pipecat's `MuteUntilFirstBotCompleteUserMuteStrategy` to make the first sentence uninterruptible with a native STS (Speech-to-Speech) model like Gemini Live causes a 50% dead air pause. Because STS takes raw audio directly, muting the user physically discards their speech frames. When the bot finishes its greeting, the user is waiting for a reply to the words they just spoke, but Gemini heard nothing.
+**The Fix Options:**
+- **Option 1: Audio Buffering Strategy (Best Technical Solution):** Build a custom Pipecat component to replace the mute strategy. It will buffer incoming `AudioRawFrame`s while the bot speaks its first sentence, then immediately flush them to the Gemini API upon completion, solving the pause.
+- **Option 2: Pre-recorded Initial Greeting (Enterprise Standard):** Use Pipecat's `PlayAudioAction` (or the telephony provider directly) to play a static `.wav` greeting file before connecting the live audio stream to Gemini, guaranteeing an uninterruptible greeting without causing STS sync issues.
+- **Option 3: Lean into STS Superpowers (AI Native):** Remove the Pipecat mute strategy entirely and allow interruptions. Rely on Gemini Live's native full-duplex ability to handle early interjections gracefully, supported by a strict system prompt to keep the first sentence extremely brief.
+
+## 9. Cascade Route Upgrades (TTS / STT Resilience)
+**The Problem:** To achieve maximum reliability and localization (especially for Indian languages), the STT -> LLM -> TTS cascaded pipeline requires best-in-class models and failover options.
+**The Fix (In Progress):**
+- **Sarvam AI (COMPLETED):** Sarvam AI is already integrated and successfully connected in `bot_cascade.py` (`SarvamSTTService`) to handle native Indian language speech-to-text with superior accuracy and lower latency.
+- **ElevenLabs Integration (PENDING):** While the `elevenlabs` extension is already installed via `pyproject.toml`, the current pipeline in `bot_cascade.py` hardcodes Cartesia (`CartesiaTTSService`) for text-to-speech. We need to wire ElevenLabs into the bot as a premium fallback or alternative TTS provider to offer highly realistic, emotive voices.
+
+## 10. Dynamic Provider Injection (Frontend Configurable STT / LLM / TTS)
+**The Problem:** Currently, the cascade pipeline in `bot_cascade.py` hardcodes the providers (`SarvamSTTService`, `GroqLLMService`, `CartesiaTTSService`). This prevents admins or clients from seamlessly swapping out AI models (e.g., switching from Cartesia to ElevenLabs, or Groq to OpenAI) directly from the frontend UI without changing backend code.
+**The Fix:**
+- **Provider Factory Pattern:** Implement factory functions (e.g., `create_stt_service(provider_name, config)`, `create_tts_service(...)`) that map string identifiers from the frontend to their respective Pipecat service classes. 
+- **API/Frontend Payload Extension:** Update the dashboard to send provider preferences in the call payload (e.g., `body["bot_config"]["tts_provider"] = "elevenlabs"`).
+- **Dynamic Pipeline Assembly:** In `bot_cascade.py`, replace the hardcoded instantiations with the factory outputs. Because Pipecat's `Pipeline` accepts generic service instances, the pipeline architecture (`Pipeline([transport.input(), stt, user_aggregator, llm, tts, transport.output()...])`) remains identical regardless of the underlying providers.
+- **Unified Settings Management:** Since different providers have different setting structures (e.g., `ElevenLabsTTSService.Settings` vs `CartesiaTTSService.Settings`), the factory must abstract the mapping of frontend values (like voice IDs and speeds) into the provider-specific Pydantic models.
+
+## 11. Model-Specific Parameter Validation & UI Constraints
+**The Problem:** As you introduce dynamic providers, you will encounter the issue that different models have distinct configuration capabilities. For example, ElevenLabs v3 models might not support `speed` adjustments, while v2.5 does. Cartesia might support emotion controls that ElevenLabs does not. If the frontend blindly sends unsupported parameters in the configuration payload, the provider's API will reject the connection or Pipecat will crash upon initialization.
+**The Fix:**
+- **Backend Validation Schemas:** Build strict Pydantic schemas for each provider/model combination. When `body["bot_config"]` is received, the backend must validate the requested parameters against the known capabilities of that specific model before passing them to the Pipecat factory.
+- **Dynamic Frontend UI:** The admin dashboard must become context-aware. When a user selects a specific TTS or LLM model from a dropdown, the frontend should dynamically show/hide the relevant configuration fields (e.g., hiding the "Speed" slider if the selected ElevenLabs model doesn't support it).
