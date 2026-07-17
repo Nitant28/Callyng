@@ -36,15 +36,31 @@ services:
     ports:
       - "127.0.0.1:5678:5678"
     environment:
-      - N8N_HOST=localhost
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - NODE_ENV=production
-      - WEBHOOK_URL=http://localhost:5678/
-      - GENERIC_TIMEZONE=Asia/Kolkata
-      - N8N_ENFORCEMENT_SECURITY=false
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      NODE_ENV: production
+      WEBHOOK_URL: http://localhost:5678/
+      GENERIC_TIMEZONE: Asia/Kolkata
+      N8N_ENFORCEMENT_SECURITY: "false"
     volumes:
       - n8n_data:/home/node/.n8n
+
+  backend:
+    image: aakashvani-backend:latest
+    container_name: aakashvani-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/app/data
 
 volumes:
   pgdata:
