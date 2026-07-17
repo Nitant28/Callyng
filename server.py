@@ -310,6 +310,7 @@ async def start_call(request: Request) -> JSONResponse:
     hangup_url = build_hangup_url(call_id, host=host)
 
     try:
+        logger.info(f"DEBUG PLIVO_PHONE_NUMBER={os.getenv('PLIVO_PHONE_NUMBER')}")
         result = await make_plivo_call(
             session=request.app.state.session,
             to_number=phone_number,
