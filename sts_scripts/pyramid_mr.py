@@ -6,6 +6,8 @@ from lead_context import LeadContext
 from pipecat.services.google.gemini_live.llm import GeminiVADParams
 from google.genai.types import EndSensitivity, StartSensitivity
 from pipecat.transcriptions.language import Language
+from sts_scripts.lead_schema_pyramid import PYRAMID_LEAD_SCHEMA as LEAD_SCHEMA  # noqa: F401
+from sts_scripts.pyramid_extraction import PYRAMID_EXTRACTION_SCHEMA as EXTRACTION_SCHEMA  # noqa: F401
 
 GOODBYE_HANGUP_MARKERS = (
     "tumacha divas chhan jaau",
