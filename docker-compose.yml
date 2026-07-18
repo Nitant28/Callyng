@@ -47,21 +47,28 @@ services:
       - n8n_data:/home/node/.n8n
 
   backend:
-    image: aakashvani-backend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
     container_name: aakashvani-backend
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Override localhost URLs for Docker networking
+      DATABASE_URL: postgresql://aakashvani:devpassword@postgres:5432/aakashvani
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "7860:7860"
+      - "127.0.0.1:7860:7860"
     volumes:
       - ./data:/app/data
 
 volumes:
   pgdata:
+  redisdata:
   n8n_data:
