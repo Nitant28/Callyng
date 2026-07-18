@@ -6,17 +6,79 @@ on:
       - main
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aakashvani
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: aakashvani
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://aakashvani:testpassword@localhost:5432/aakashvani
+          REDIS_URL: redis://localhost:6379/0
+          ADMIN_API_KEY: test-key-for-ci
+        run: |
+          uv run alembic upgrade head
+          uv run pytest -x --tb=short
+
   deploy:
+    needs: test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
       - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_KEY }}
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             cd /opt/aakashvani/app
             git pull origin main
-            docker compose up -d --build
+
+            # Rebuild backend image from the updated code
+            docker build -f Dockerfile.prod -t aakashvani-backend:latest .
+
+            # Restart only the backend using the PRODUCTION compose file
+            cd /opt/aakashvani
+            docker compose --env-file .env up -d backend
+
+            # Run any pending migrations
+            docker exec aakashvani-backend uv run alembic upgrade head
+
+            # Verify health
+            sleep 10
+            curl -f http://localhost:7860/health || exit 1
+
+            echo "✅ Deploy successful"
