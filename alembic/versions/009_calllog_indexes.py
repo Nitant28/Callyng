@@ -1,7 +1,6 @@
 """Add partial indexes for dialer call_logs hot-path."""
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = "009_calllog_indexes"

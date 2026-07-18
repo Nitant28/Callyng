@@ -18,7 +18,6 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from server import app
 from db import postgres as pg_db
-import redis.asyncio as redis
 from db import redis_client as redis_db
 import aiohttp
 from unittest.mock import patch

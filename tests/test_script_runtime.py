@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 
-import pytest
 from google.genai.types import EndSensitivity, StartSensitivity
 from pipecat.transcriptions.language import Language
 

@@ -2413,7 +2413,7 @@ async def list_client_leads(
     sort_col = _LEAD_SORT_COLUMNS.get(sort, "l.created_at")
     order_dir = "ASC" if (order or "").lower() == "asc" else "DESC"
 
-    query = f"""
+    query = """
         SELECT l.*,
                c.name AS campaign_name,
                lc.duration_seconds AS last_call_duration_seconds,

@@ -1,7 +1,6 @@
 """Remove DNC status and campaign counters."""
 
 from alembic import op
-import sqlalchemy as sa
 
 revision = "007_remove_dnc"
 down_revision = "006_script_configs"

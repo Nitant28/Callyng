@@ -3,7 +3,6 @@
 from pathlib import Path
 import re
 from alembic import op
-from sqlalchemy import text
 
 revision = "004_campaign_max_call_minutes"
 down_revision = "003_campaign_settlement"

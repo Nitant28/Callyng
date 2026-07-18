@@ -7,18 +7,13 @@ from __future__ import annotations
 
 import os
 import io
-import re
-import uuid
-import asyncio
 import subprocess
-from datetime import datetime, timezone, timedelta
-from decimal import Decimal
+from datetime import datetime, timezone
 
 import pytest
 
 from dotenv import load_dotenv
 
-from server import app
 from db import postgres as pg_db
 
 load_dotenv(override=True)
