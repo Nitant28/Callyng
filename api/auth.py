@@ -8,7 +8,7 @@ from typing import Annotated
 from uuid import UUID
 
 from dotenv import load_dotenv
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Header, HTTPException, Request
 
 from db import postgres as pg_db
 

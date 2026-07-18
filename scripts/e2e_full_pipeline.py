@@ -14,10 +14,8 @@ import argparse
 import asyncio
 import json
 import os
-import sys
 import time
 from pathlib import Path
-from uuid import UUID
 
 import aiohttp
 from dotenv import load_dotenv

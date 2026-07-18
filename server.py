@@ -20,7 +20,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from background_tasks import bind_background_tasks, drain_background_tasks, spawn_background_task
+from background_tasks import bind_background_tasks, drain_background_tasks
 from call_log_db import init_db
 from db import postgres as pg_db
 from db import redis_client as redis_db

@@ -3,7 +3,6 @@
 from pathlib import Path
 import re
 from alembic import op
-from sqlalchemy import text
 
 revision = "002_compat"
 down_revision = "001_initial"

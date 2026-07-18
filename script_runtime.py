@@ -17,7 +17,6 @@ from pipecat.services.google.gemini_live.llm import GeminiVADParams
 from pipecat.transcriptions.language import Language
 
 from lead_context import LeadContext
-from script_prefetch import build_lead_dict
 from background_tasks import spawn_background_task
 
 _STS_SCRIPT_ATTRS = (

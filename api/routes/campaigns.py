@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 import re
 from uuid import UUID
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -10,12 +9,10 @@ from unittest.mock import AsyncMock, patch
 import asyncpg
 import pytest
 from dotenv import load_dotenv
-from httpx import AsyncClient
 
 load_dotenv(override=True)
 
 from db import postgres as pg_db
-from server import app
 
 
 

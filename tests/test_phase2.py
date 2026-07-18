@@ -36,7 +36,6 @@ def test_outcome_to_event_early_disconnect():
 
 
 def test_resolve_post_call_transition_callee_hangup_from_calling():
-    from datetime import datetime, timezone
 
     from post_call_processor import resolve_post_call_transition
 
@@ -98,7 +97,6 @@ def test_resolve_post_call_preserves_callback_scheduled():
 )
 @pytest.mark.asyncio
 async def test_create_client_roundtrip():
-    import asyncio
 
     import asyncpg
 
@@ -127,7 +125,6 @@ async def test_create_client_roundtrip():
 )
 @pytest.mark.asyncio
 async def test_try_settle_campaign_budget_idempotent():
-    import asyncio
     from decimal import Decimal
     from uuid import uuid4
 
@@ -207,8 +204,6 @@ async def test_try_settle_campaign_budget_idempotent():
 @pytest.mark.asyncio
 async def test_finalize_call_log_after_early_in_progress_clear():
     """Post-call must finalize even after mark_call_log_not_in_progress (dialer unblock)."""
-    import asyncio
-    import json
     from datetime import datetime, timezone
     from uuid import uuid4
 
@@ -583,7 +578,6 @@ async def test_client_release_stuck_calling_endpoint(client):
 async def test_auth_admin_rejects_client_token(test_client):
     
 
-    import server
 
     os.environ.setdefault("ADMIN_API_KEY", "test-admin-key-for-pytest")
     client = test_client

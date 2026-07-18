@@ -14,7 +14,7 @@ depends_on = None
 def upgrade() -> None:
     rules_json = json.dumps(PYRAMID_NORMALIZATION_RULES)
     bind = op.get_bind()
-    result = bind.execute(sa.text(f"""
+    result = bind.execute(sa.text("""
         UPDATE script_configs
         SET normalization_rules = CAST(:rules AS jsonb)
         WHERE script_id IN ('pyramid_bilingual', 'pyramid_hi', 'pyramid_mr', 'prowave')

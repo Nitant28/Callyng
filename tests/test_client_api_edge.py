@@ -1,14 +1,11 @@
 """Edge case tests for the client API."""
 
 import pytest
-from fastapi.testclient import TestClient
 from uuid import uuid4
 
-from server import app
 from db import postgres as pg_db
 
 
-from httpx import AsyncClient, ASGITransport
 import pytest_asyncio
 
 
