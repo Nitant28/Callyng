@@ -40,7 +40,7 @@ jobs:
         run: uv sync --locked
 
       - name: Lint
-        run: uv run ruff check .
+        run: uvx ruff check .
 
       - name: Run tests
         env:
