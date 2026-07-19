@@ -30,6 +30,8 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
+from pipecat.frames.frames import TranscriptionFrame, Frame
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
@@ -137,9 +139,27 @@ async def run_bot(
     )
 
     end_gate = BotSpeechEndGate()
+    class STSTranscriptionCatcher(FrameProcessor):
+        def __init__(self, tb):
+            super().__init__()
+            self._tb = tb
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.UPSTREAM:
+                import db.postgres as pg_db
+                from call_transcript import _pg_pool, _pg_write
+                ts = datetime.now(timezone.utc).isoformat()
+                self._tb.turns.append({"role": "user", "content": frame.text, "timestamp": ts})
+                pool = _pg_pool()
+                if pool and self._tb._session_call_id:
+                    asyncio.create_task(_pg_write(pg_db.append_transcript_turn(pool, self._tb._session_call_id, "user", frame.text, datetime.now(timezone.utc))))
+
+    catcher = STSTranscriptionCatcher(transcript_buffer)
+
     pipeline = Pipeline([
         transport.input(),
         user_aggregator,
+        catcher,
         llm,
         transport.output(),
         end_gate,
