@@ -182,7 +182,15 @@ async def test_test_endpoint_mocked(client):
             sc = res2.json()["script_config"]
             sc_id = sc["id"]
 
-            with patch.dict(os.environ, {"GROQ_API_KEY": "test-key"}):
+            with patch.dict(
+                os.environ,
+                {
+                    "POST_CALL_PROVIDER": "openai",
+                    "GROQ_API_KEY": "test-key",
+                    "OPENAI_API_KEY": "",
+                },
+                clear=False,
+            ):
                 with patch(
                     "api.routes.internal_script_configs.extract_post_call",
                     new_callable=AsyncMock,

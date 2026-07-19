@@ -1,4 +1,4 @@
-"""Post-call structured lead extraction via Groq (OpenAI-compatible chat API)."""
+"""Post-call structured lead extraction via OpenAI-compatible, Anthropic, or Gemini APIs."""
 
 from __future__ import annotations
 
@@ -6,13 +6,66 @@ import json
 import os
 import re
 from typing import Any
+from urllib.parse import urlencode
 
 import aiohttp
 from loguru import logger
 
-GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
-
 _DEFAULT_MODEL = "llama-3.3-70b-versatile"
+_DEFAULT_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
+_DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+_GEMINI_GENERATE_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
+_VALID_PROVIDERS = frozenset({"openai", "anthropic", "gemini"})
+_ANTHROPIC_VERSION = "2023-06-01"
+_ANTHROPIC_MAX_TOKENS = 4096
+
+
+def post_call_provider() -> str:
+    """Return normalized ``POST_CALL_PROVIDER`` (default ``openai``)."""
+    raw = (os.getenv("POST_CALL_PROVIDER") or "openai").strip().lower()
+    return raw or "openai"
+
+
+def _resolve_openai_key(api_key: str | None = None) -> str:
+    return (
+        (api_key or "").strip()
+        or (os.getenv("OPENAI_API_KEY") or "").strip()
+        or (os.getenv("GROQ_API_KEY") or "").strip()
+    )
+
+
+def _resolve_provider_key(provider: str, api_key: str | None = None) -> str:
+    if api_key and api_key.strip():
+        return api_key.strip()
+    if provider == "openai":
+        return _resolve_openai_key(None)
+    if provider == "anthropic":
+        return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if provider == "gemini":
+        return (os.getenv("GOOGLE_API_KEY") or "").strip()
+    return ""
+
+
+def post_call_llm_configured() -> bool:
+    """True when the active ``POST_CALL_PROVIDER`` has an API key set."""
+    provider = post_call_provider()
+    if provider not in _VALID_PROVIDERS:
+        return False
+    return bool(_resolve_provider_key(provider))
+
+
+def post_call_missing_key_message() -> str:
+    """Human-readable missing-key message for the active provider."""
+    provider = post_call_provider()
+    if provider == "anthropic":
+        return "ANTHROPIC_API_KEY not configured"
+    if provider == "gemini":
+        return "GOOGLE_API_KEY not configured"
+    if provider == "openai":
+        return "OPENAI_API_KEY or GROQ_API_KEY not configured"
+    return f"unsupported POST_CALL_PROVIDER={provider!r} (expected openai|anthropic|gemini)"
 
 _VALID_MODES = frozenset({"fields", "summary", "both"})
 
@@ -324,7 +377,7 @@ def _first_markdown_json_block(text: str) -> str | None:
 
 
 def _parse_model_json_object(content: str) -> tuple[dict[str, Any] | None, str | None]:
-    """Parse one JSON object from Groq ``message.content`` (empty, fences, leading prose)."""
+    """Parse one JSON object from model message.content (empty, fences, leading prose)."""
     if not isinstance(content, str):
         return None, "missing_message_content"
     text = content.strip()
@@ -370,6 +423,165 @@ def _parse_model_json_object(content: str) -> tuple[dict[str, Any] | None, str |
     return obj, None
 
 
+def _user_extraction_message(transcript_payload: str) -> str:
+    return "Extract the JSON object from this transcript:\n\n" + transcript_payload
+
+
+async def _post_json(
+    url: str,
+    *,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    timeout_sec: float,
+) -> tuple[Any | None, str | None]:
+    """POST JSON; return (parsed_json, error)."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=timeout_sec)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, headers=headers, json=body) as resp:
+                raw = await resp.text()
+                if resp.status != 200:
+                    err = f"LLM HTTP {resp.status}: {raw[:500]}"
+                    logger.warning("post_call_extract {}", err)
+                    return None, err
+                return json.loads(raw), None
+    except Exception as exc:
+        err = f"{type(exc).__name__}: {exc}"
+        logger.warning("post_call_extract request failed: {}", err)
+        return None, err
+
+
+def _openai_content_from_response(data: Any) -> tuple[str | None, str | None]:
+    if not isinstance(data, dict):
+        return None, "unexpected response type"
+    choices = data.get("choices") or []
+    if not choices:
+        return None, "no choices in response"
+    choice0 = choices[0]
+    msg = choice0.get("message") or {}
+    content = msg.get("content")
+    if content is None:
+        fr = choice0.get("finish_reason")
+        return None, f"missing message content (finish_reason={fr!r})"
+    if not isinstance(content, str):
+        return None, f"unexpected message content type: {type(content).__name__}"
+    return content, None
+
+
+def _anthropic_content_from_response(data: Any) -> tuple[str | None, str | None]:
+    if not isinstance(data, dict):
+        return None, "unexpected response type"
+    blocks = data.get("content") or []
+    if not blocks:
+        return None, "no content in response"
+    parts: list[str] = []
+    for block in blocks:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    if not parts:
+        return None, "no text blocks in response"
+    return "".join(parts), None
+
+
+def _gemini_content_from_response(data: Any) -> tuple[str | None, str | None]:
+    if not isinstance(data, dict):
+        return None, "unexpected response type"
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return None, "no candidates in response"
+    content = (candidates[0] or {}).get("content") or {}
+    parts = content.get("parts") or []
+    texts: list[str] = []
+    for part in parts:
+        if isinstance(part, dict):
+            text = part.get("text")
+            if isinstance(text, str):
+                texts.append(text)
+    if not texts:
+        return None, "no text parts in response"
+    return "".join(texts), None
+
+
+async def _chat_openai_compat(
+    *,
+    system_prompt: str,
+    user_content: str,
+    model: str,
+    api_key: str,
+    timeout_sec: float,
+) -> tuple[str | None, str | None]:
+    base = (os.getenv("OPENAI_BASE_URL") or _DEFAULT_OPENAI_BASE_URL).rstrip("/")
+    url = f"{base}/chat/completions"
+    body = {
+        "model": model,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    data, err = await _post_json(url, headers=headers, body=body, timeout_sec=timeout_sec)
+    if err:
+        return None, err
+    return _openai_content_from_response(data)
+
+
+async def _chat_anthropic(
+    *,
+    system_prompt: str,
+    user_content: str,
+    model: str,
+    api_key: str,
+    timeout_sec: float,
+) -> tuple[str | None, str | None]:
+    base = (os.getenv("ANTHROPIC_BASE_URL") or _DEFAULT_ANTHROPIC_BASE_URL).rstrip("/")
+    url = f"{base}/v1/messages"
+    body = {
+        "model": model,
+        "max_tokens": _ANTHROPIC_MAX_TOKENS,
+        "temperature": 0.1,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_content}],
+    }
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": _ANTHROPIC_VERSION,
+        "Content-Type": "application/json",
+    }
+    data, err = await _post_json(url, headers=headers, body=body, timeout_sec=timeout_sec)
+    if err:
+        return None, err
+    return _anthropic_content_from_response(data)
+
+
+async def _chat_gemini(
+    *,
+    system_prompt: str,
+    user_content: str,
+    model: str,
+    api_key: str,
+    timeout_sec: float,
+) -> tuple[str | None, str | None]:
+    model_id = model.removeprefix("models/")
+    url = _GEMINI_GENERATE_URL.format(model=model_id) + "?" + urlencode({"key": api_key})
+    body = {
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+        "generationConfig": {"temperature": 0.1},
+    }
+    headers = {"Content-Type": "application/json"}
+    data, err = await _post_json(url, headers=headers, body=body, timeout_sec=timeout_sec)
+    if err:
+        return None, err
+    return _gemini_content_from_response(data)
+
+
 async def extract_post_call(
     transcript: list[dict[str, Any]],
     *,
@@ -378,63 +590,53 @@ async def extract_post_call(
     model: str | None = None,
     timeout_sec: float = 60.0,
 ) -> tuple[dict[str, Any] | None, str | None, str]:
-    """Call Groq; return ``(parsed_dict_or_none, error_or_none, model_used)``."""
+    """Call the configured post-call LLM; return (parsed, error, model_used)."""
     system_prompt = build_extraction_system_prompt(extraction_schema)
-    key = api_key or os.getenv("GROQ_API_KEY", "")
     mdl = model or os.getenv("POST_CALL_MODEL", _DEFAULT_MODEL)
+    provider = post_call_provider()
+    if provider not in _VALID_PROVIDERS:
+        err = (
+            f"unsupported POST_CALL_PROVIDER={provider!r} "
+            f"(expected {sorted(_VALID_PROVIDERS)})"
+        )
+        logger.warning("post_call_extract {}", err)
+        return None, err, mdl
+
+    key = _resolve_provider_key(provider, api_key)
     if not key:
         return None, None, mdl
 
-    user_payload = format_transcript_for_extraction(transcript)
-    body = {
-        "model": mdl,
-        "temperature": 0.1,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    "Extract the JSON object from this transcript:\n\n" + user_payload
-                ),
-            },
-        ],
-    }
+    user_content = _user_extraction_message(format_transcript_for_extraction(transcript))
 
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
+    if provider == "openai":
+        content, err = await _chat_openai_compat(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            model=mdl,
+            api_key=key,
+            timeout_sec=timeout_sec,
+        )
+    elif provider == "anthropic":
+        content, err = await _chat_anthropic(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            model=mdl,
+            api_key=key,
+            timeout_sec=timeout_sec,
+        )
+    else:
+        content, err = await _chat_gemini(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            model=mdl,
+            api_key=key,
+            timeout_sec=timeout_sec,
+        )
 
-    try:
-        timeout = aiohttp.ClientTimeout(total=timeout_sec)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                GROQ_CHAT_COMPLETIONS_URL,
-                headers=headers,
-                json=body,
-            ) as resp:
-                raw = await resp.text()
-                if resp.status != 200:
-                    err = f"Groq HTTP {resp.status}: {raw[:500]}"
-                    logger.warning("post_call_extract {}", err)
-                    return None, err, mdl
-                data = json.loads(raw)
-    except Exception as exc:
-        err = f"{type(exc).__name__}: {exc}"
-        logger.warning("post_call_extract request failed: {}", err)
+    if err:
         return None, err, mdl
-
-    choices = data.get("choices") or []
-    if not choices:
-        return None, "no choices in Groq response", mdl
-    choice0 = choices[0]
-    msg = choice0.get("message") or {}
-    content = msg.get("content")
     if content is None:
-        fr = choice0.get("finish_reason")
-        return None, f"missing message content (finish_reason={fr!r})", mdl
-    if not isinstance(content, str):
-        return None, f"unexpected message content type: {type(content).__name__}", mdl
+        return None, "empty LLM content", mdl
 
     parsed, parse_err = _parse_model_json_object(content)
     if parse_err:

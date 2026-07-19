@@ -20,6 +20,8 @@ from n8n_webhook import send_call_completed_webhook
 from post_call_extract import (
     extract_post_call,
     normalize_post_call_extraction,
+    post_call_llm_configured,
+    post_call_missing_key_message,
     prepare_transcript_for_storage,
 )
 from pricing_sts import compute_sts_cost_inr
@@ -522,7 +524,7 @@ def attach_pipeline_finalize(
             "tts_characters": tts_c,
         }
 
-        if os.getenv("GROQ_API_KEY"):
+        if post_call_llm_configured():
 
             async def _extract_patch_and_webhook() -> None:
                 extraction: dict[str, Any] | None = None
@@ -629,7 +631,7 @@ def attach_pipeline_finalize(
 
             spawn_background_task(_extract_patch_and_webhook())
         else:
-            logger.debug("post_call_extract skipped: GROQ_API_KEY not set")
+            logger.debug("post_call_extract skipped: {}", post_call_missing_key_message())
             if session_call_id and _pg_context_has_campaign_fields(resolved_ctx):
                 spawn_background_task(
                     _run_campaign_post_call(
