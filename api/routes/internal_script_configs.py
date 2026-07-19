@@ -16,7 +16,12 @@ from api.script_config_validation import (
     validate_script_config_payload,
 )
 from db import postgres as pg_db
-from post_call_extract import extract_post_call, normalize_post_call_extraction
+from post_call_extract import (
+    extract_post_call,
+    normalize_post_call_extraction,
+    post_call_llm_configured,
+    post_call_missing_key_message,
+)
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -262,8 +267,8 @@ async def test_script_config_extraction(
         raw_rules = row.get("normalization_rules") or []
         rules = raw_rules if raw_rules else None
 
-    if not (os.getenv("GROQ_API_KEY") or "").strip():
-        raise HTTPException(503, "GROQ_API_KEY not configured")
+    if not post_call_llm_configured():
+        raise HTTPException(503, post_call_missing_key_message())
 
     try:
         validate_script_config_payload(

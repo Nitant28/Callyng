@@ -848,14 +848,18 @@ async def cmd_rerun_extraction(args):
             print(f"{_RED}No extraction schema found — cannot determine what to extract{_RESET}", file=sys.stderr)
             sys.exit(1)
 
-        groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
-        if not groq_key:
-            print(f"{_RED}GROQ_API_KEY not set in .env{_RESET}", file=sys.stderr)
+        from post_call_extract import (
+            extract_post_call,
+            normalize_post_call_extraction,
+            post_call_llm_configured,
+            post_call_missing_key_message,
+        )
+
+        if not post_call_llm_configured():
+            print(f"{_RED}{post_call_missing_key_message()}{_RESET}", file=sys.stderr)
             sys.exit(1)
 
         print(f"  {_BOLD}Re-running extraction on {len(transcript)} turns…{_RESET}")
-
-        from post_call_extract import extract_post_call, normalize_post_call_extraction
 
         parsed, err, model_used = await extract_post_call(
             transcript, extraction_schema=extraction_schema,

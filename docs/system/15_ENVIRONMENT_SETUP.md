@@ -83,8 +83,13 @@ ngrok http 7860
 | `ADMIN_API_KEY` | admin API | `/internal/*` auth |
 | `NGROK_URL` / `DIALER_CALLBACK_HOST` | real calls | public telephony base URL |
 | `PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN`, `PLIVO_PHONE_NUMBER` | real calls | outbound PSTN |
-| `GOOGLE_API_KEY` | STS route | Gemini Live |
-| `GROQ_API_KEY` | post-call + cascade | extraction LLM |
+| `GOOGLE_API_KEY` | STS route; also post-call when `POST_CALL_PROVIDER=gemini` | Gemini Live + optional extraction |
+| `GROQ_API_KEY` | cascade; post-call openai fallback | cascaded live LLM; extraction if `OPENAI_API_KEY` empty |
+| `OPENAI_API_KEY` | optional | post-call when `POST_CALL_PROVIDER=openai` (preferred over `GROQ_API_KEY`) |
+| `OPENAI_BASE_URL` | optional | OpenAI-compatible base (default `https://api.groq.com/openai/v1`) |
+| `ANTHROPIC_API_KEY` | optional | post-call when `POST_CALL_PROVIDER=anthropic` |
+| `ANTHROPIC_BASE_URL` | optional | default `https://api.anthropic.com` |
+| `POST_CALL_PROVIDER` | optional | `openai` (default), `anthropic`, or `gemini` |
 | `POST_CALL_MODEL` | optional | default `llama-3.3-70b-versatile` |
 | `BOT_ROUTE` | dev fallback | `sts` or `cascaded` |
 | `STS_SCRIPT` / `CASCADE_SCRIPT` | dev fallback | script module name |

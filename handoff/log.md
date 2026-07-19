@@ -621,3 +621,88 @@ return "callback_scheduled", ts + timedelta(minutes=retry_delay_minutes), base_o
 - Run `alembic upgrade head` (applies `010_early_disconnect_outcome`) before deploying.
 - Verified: **165 tests passed**; `npm run build` succeeded.
 
+---
+
+## Addendum: Multi-Protocol Post-Call Extraction (2026-07-19)
+
+> Date: 2026-07-19
+> Scope: post-call LLM transport only (cascade live LLM in `bot_cascade.py` unchanged)
+> Author: Cursor agent
+
+### Summary
+
+Post-call extraction no longer hardcodes Groq. `POST_CALL_PROVIDER` selects one of three HTTP protocols — OpenAI-compatible chat completions (default), Anthropic Messages, or Gemini `generateContent` — while prompt build, JSON parse, and normalization stay shared. Existing Groq deployments keep working with no `.env` change.
+
+### Config
+
+| Variable | Role |
+|---|---|
+| `POST_CALL_PROVIDER` | `openai` (default) \| `anthropic` \| `gemini` |
+| `POST_CALL_MODEL` | model id (default still `llama-3.3-70b-versatile`) |
+| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | openai provider; base defaults to `https://api.groq.com/openai/v1` |
+| `GROQ_API_KEY` | openai key fallback; still required for cascaded live LLM |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | anthropic provider |
+| `GOOGLE_API_KEY` | gemini provider (reuse STS key) |
+
+**Key resolution (openai):** explicit `api_key` arg → `OPENAI_API_KEY` → `GROQ_API_KEY`.
+
+### 1. `post_call_extract.py` — provider dispatch
+
+- Removed sole hard-coded `GROQ_CHAT_COMPLETIONS_URL` path.
+- Added helpers: `post_call_provider()`, `post_call_llm_configured()`, `post_call_missing_key_message()`, `_resolve_openai_key` / `_resolve_provider_key`.
+- Transport split (all via existing `aiohttp`, no new deps):
+  - `_chat_openai_compat` — `POST {base}/chat/completions`, Bearer auth
+  - `_chat_anthropic` — `POST {base}/v1/messages`, `x-api-key` + `anthropic-version: 2023-06-01`
+  - `_chat_gemini` — Google `generateContent` with `systemInstruction` + query `key=`
+- Shared `_post_json` + per-provider response content extractors; log strings provider-neutral (`LLM HTTP …`).
+- `extract_post_call` signature unchanged; missing key still returns `(None, None, model)` (skip).
+
+### 2. Call-site gates (no longer Groq-only)
+
+- **`call_transcript.py`:** runs extraction when `post_call_llm_configured()`; skip log uses `post_call_missing_key_message()`.
+- **`api/routes/internal_script_configs.py`:** 503 uses the same helper (names the active provider’s key).
+- **`scripts/cli.py` (`rerun-extraction`):** same gate before calling `extract_post_call`.
+
+### 3. Env + docs
+
+- **`env.example`:** `POST_CALL_PROVIDER`, commented `OPENAI_BASE_URL` / `ANTHROPIC_*`, usage notes for OpenRouter / Anthropic / Gemini.
+- **`docs/system/15_ENVIRONMENT_SETUP.md`:** table rows for the new vars; cascade still documented as `GROQ_API_KEY`-dependent.
+
+### 4. Tests (CI-hardened)
+
+- **Added** `tests/test_post_call_providers.py`:
+  - Patches `_post_json` (not `ClientSession`) so tests are stable under CI’s session-scoped asyncio loop.
+  - Autouse fixture clears provider-related env keys so local `.env` cannot leak.
+  - Covers openai (custom base + Groq fallback + key preference), anthropic body/headers, gemini URL/body, unsupported provider, missing-key skip, HTTP error propagation, `post_call_llm_configured` per provider.
+- **Updated** `tests/test_script_config_api.py` extraction test env patch to set `POST_CALL_PROVIDER=openai` alongside `GROQ_API_KEY`.
+
+### Example `.env` snippets
+
+```bash
+# OpenRouter (or any OpenAI-compatible endpoint)
+POST_CALL_PROVIDER=openai
+OPENAI_API_KEY=sk-or-...
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+POST_CALL_MODEL=meta-llama/llama-3.3-70b-instruct
+
+# Anthropic
+POST_CALL_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+POST_CALL_MODEL=claude-sonnet-4-20250514
+
+# Gemini
+POST_CALL_PROVIDER=gemini
+GOOGLE_API_KEY=...
+POST_CALL_MODEL=gemini-2.0-flash
+
+# Unchanged Groq default
+# POST_CALL_PROVIDER unset → openai + Groq base URL
+GROQ_API_KEY=gsk_...
+```
+
+### Verification
+
+- `tests/test_post_call_providers.py`: **9 passed** (including under `asyncio_default_test_loop_scope=session`).
+- Ruff clean on touched modules/tests.
+- Full suite still requires Postgres/Redis via session `setup_globals` (same as existing CI).
+
