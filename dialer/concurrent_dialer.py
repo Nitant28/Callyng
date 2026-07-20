@@ -716,3 +716,19 @@ async def stop_dialer(campaign_id: UUID, client_id: UUID) -> None:
         pass
     except Exception as exc:
         logger.warning("stop_dialer: dialer teardown raised: {}", exc)
+
+
+async def shutdown_all_dialers(app) -> None:
+    """Cancel and await all campaign dialer tasks (server lifespan shutdown)."""
+    dialer_tasks = getattr(getattr(app, "state", None), "dialer_tasks", None)
+    if not dialer_tasks:
+        return
+    pending = []
+    for key, task in list(dialer_tasks.items()):
+        if task is not None and not task.done():
+            task.cancel()
+            pending.append(task)
+        dialer_tasks.pop(key, None)
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    _active_tasks.clear()

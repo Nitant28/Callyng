@@ -174,6 +174,30 @@ def parse_gemini_language(code: str) -> Language:
     return _BCP47_TO_LANGUAGE.get(key, Language.HI_IN)
 
 
+def _safe_int(val: Any, default: int, *, field: str) -> int:
+    if val is None or val == "":
+        return default
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid {}={!r}; using default {}", field, val, default
+        )
+        return default
+
+
+def _safe_float(val: Any, default: float, *, field: str) -> float:
+    if val is None or val == "":
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid {}={!r}; using default {}", field, val, default
+        )
+        return default
+
+
 def build_gemini_vad(config: dict[str, Any]) -> GeminiVADParams:
     start_key = str(config.get("vad_start_sensitivity") or "HIGH").upper()
     end_key = str(config.get("vad_end_sensitivity") or "LOW").upper()
@@ -184,8 +208,16 @@ def build_gemini_vad(config: dict[str, Any]) -> GeminiVADParams:
         end_sensitivity=_END_SENSITIVITY.get(
             end_key, EndSensitivity.END_SENSITIVITY_LOW
         ),
-        silence_duration_ms=int(config.get("vad_silence_duration_ms") or 800),
-        prefix_padding_ms=int(config.get("vad_prefix_padding_ms") or 300),
+        silence_duration_ms=_safe_int(
+            config.get("vad_silence_duration_ms") or 800,
+            800,
+            field="vad_silence_duration_ms",
+        ),
+        prefix_padding_ms=_safe_int(
+            config.get("vad_prefix_padding_ms") or 300,
+            300,
+            field="vad_prefix_padding_ms",
+        ),
     )
 
 
@@ -222,8 +254,6 @@ def _coerce_extraction_override(raw: Any) -> dict[str, Any] | None:
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):
-        import json
-
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
@@ -354,10 +384,11 @@ def schedule_post_call_snapshot_write(
         except Exception as exc:
             logger.warning("post_call_snapshot schedule failed: {}", exc)
 
+    coro = _run()
     try:
-        spawn_background_task(_run(), "post_call_snapshot")
+        spawn_background_task(coro, "post_call_snapshot")
     except RuntimeError:
-        pass
+        coro.close()  # prevent "coroutine was never awaited" warning
 
 
 def _load_sts_script(script_id_override: str | None = None) -> ModuleType:
@@ -385,7 +416,11 @@ def _load_cascade_script(script_id_override: str | None = None) -> ModuleType:
             f"Invalid CASCADE_SCRIPT={raw!r}; use a snake_case module under cascade_scripts/"
         )
     mod_name = f"cascade_scripts.{raw}"
-    mod = importlib.import_module(mod_name)
+    try:
+        mod = importlib.import_module(mod_name)
+    except ImportError as exc:
+        logger.error("Failed to import cascade script {}: {}", mod_name, exc)
+        raise
     missing = [a for a in _CASCADE_SCRIPT_ATTRS if not hasattr(mod, a)]
     if missing:
         raise ValueError(f"Cascade script {mod_name} missing: {', '.join(missing)}")
@@ -406,7 +441,11 @@ def _sts_from_prefetch(prefetch: dict[str, Any]) -> StsRuntime:
         gemini_voice=str(prefetch.get("gemini_voice") or ""),
         gemini_language=parse_gemini_language(str(prefetch.get("gemini_language") or "")),
         gemini_vad=build_gemini_vad(prefetch),
-        gemini_temperature=float(prefetch.get("gemini_temperature") or 0.5),
+        gemini_temperature=_safe_float(
+            prefetch.get("gemini_temperature") or 0.5,
+            0.5,
+            field="gemini_temperature",
+        ),
         extraction_schema=dict(prefetch.get("extraction_schema") or {}),
         gemini_enable_affective_dialog=False,
     )

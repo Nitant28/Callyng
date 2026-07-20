@@ -14,7 +14,7 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext, LLMSpecificMessage
 
 from background_tasks import spawn_background_task
-from call_log_db import insert_call_log, update_call_log_extraction
+from call_log_db import get_row_id_by_session, insert_call_log, update_call_log_extraction
 from call_metrics import UsageMetricsAccumulator
 from n8n_webhook import send_call_completed_webhook
 from post_call_extract import (
@@ -84,8 +84,12 @@ def _pg_context_from_call_log(row: dict[str, Any]) -> dict[str, Any] | None:
         if call_data.get("is_test_call"):
             is_test_call = True
     elif call_data and isinstance(call_data, str):
-        if '"is_test_call": true' in call_data.lower() or '"is_test_call":true' in call_data.lower():
-            is_test_call = True
+        try:
+            parsed = json.loads(call_data)
+            if isinstance(parsed, dict) and parsed.get("is_test_call"):
+                is_test_call = True
+        except json.JSONDecodeError:
+            pass
 
     if not is_test_call:
         if not all(row.get(k) for k in _CAMPAIGN_PG_FIELDS):
@@ -147,8 +151,6 @@ async def _run_campaign_post_call(
                 pool = _pg_pool()
                 if pool:
                     try:
-                        from db import postgres as pg_db
-                        
                         test_outcome = (extraction or {}).get("intent_status", "Test Call")
                         await pg_db.finalize_call_log(
                             pool,
@@ -181,7 +183,12 @@ async def _run_campaign_post_call(
         pool = _pg_pool()
         if pool is None:
             return
-        assert resolved_ctx is not None
+        if resolved_ctx is None:
+            logger.error(
+                "post_call_processor skipped: resolved_ctx is None for session={}",
+                session_call_id,
+            )
+            return
         await process_post_call(
             pool,
             session_call_id,
@@ -203,8 +210,6 @@ async def _run_campaign_post_call(
 
 def _pg_pool():
     try:
-        from db import postgres as pg_db
-
         return pg_db.get_pool()
     except Exception as exc:
         logger.error("Failed to get pg_pool in transcript writer: {}", exc)
@@ -217,6 +222,39 @@ async def _pg_write(coro):
     except Exception as exc:
         logger.warning("postgres call_log write skipped: {}", exc)
         return None
+
+
+def _schedule_call_completed_webhook(payload: dict[str, Any]) -> None:
+    """Fire-and-forget n8n webhook; failures must not abort pipeline finalize."""
+
+    async def _send() -> None:
+        try:
+            await send_call_completed_webhook(payload)
+        except Exception as exc:
+            logger.exception("n8n webhook failed: {}", exc)
+
+    spawn_background_task(_send(), "call_completed_webhook")
+
+
+def _resolve_sqlite_row_id(row_id: int, session_call_id: str | None) -> int:
+    """Recover a valid SQLite row id when insert failed (row_id <= 0)."""
+    if row_id > 0:
+        return row_id
+    if not session_call_id:
+        return row_id
+    recovered = get_row_id_by_session(session_call_id)
+    if recovered is not None and recovered > 0:
+        logger.info(
+            "Recovered SQLite row_id={} for session={}",
+            recovered,
+            session_call_id,
+        )
+        return recovered
+    logger.warning(
+        "No SQLite row_id for session={}; extraction update will be skipped",
+        session_call_id,
+    )
+    return row_id
 
 # STS bootstrap user message prefix (see bot_sts.py) — omit from stored transcripts.
 _STS_BOOTSTRAP_PREFIX = "The call has just connected."
@@ -241,7 +279,6 @@ class TranscriptBuffer:
             pool = _pg_pool()
             if pool is None:
                 return
-            from db import postgres as pg_db
 
             when = datetime.now(timezone.utc)
             if ts:
@@ -478,7 +515,8 @@ def attach_pipeline_finalize(
         )
 
         try:
-            row_id = insert_call_log(
+            row_id = await asyncio.to_thread(
+                insert_call_log,
                 session_call_id=session_call_id,
                 plivo_call_id=plivo_call_id,
                 route=route,
@@ -497,6 +535,7 @@ def attach_pipeline_finalize(
             logger.error("call_log_db insert failed: {}", exc)
             row_id = -1
 
+        row_id = _resolve_sqlite_row_id(row_id, session_call_id)
         pg_ctx = await pop_pg_context(session_call_id)
         pool = _pg_pool()
         resolved_ctx = await resolve_pg_context(pool, session_call_id, pg_ctx)
@@ -537,7 +576,6 @@ def attach_pipeline_finalize(
                 pool = _pg_pool()
                 if pool is not None and session_call_id:
                     try:
-                        from db import postgres as pg_db
                         from script_runtime import parse_post_call_snapshot
 
                         call_log = await pg_db.get_call_log_by_session(
@@ -663,4 +701,4 @@ def attach_pipeline_finalize(
                     extraction_model=None,
                     post_call_extraction_skipped=True,
                 )
-                await send_call_completed_webhook(payload)
+                _schedule_call_completed_webhook(payload)

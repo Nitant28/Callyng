@@ -139,12 +139,9 @@ class CallEndCoordinator:
         self._scheduled = None
 
     async def _delayed_end(self) -> None:
-        try:
-            if self._hangup_delay_s > 0:
-                await asyncio.sleep(self._hangup_delay_s)
-            await self.try_end(self._arm_reason)
-        except asyncio.CancelledError:
-            raise
+        if self._hangup_delay_s > 0:
+            await asyncio.sleep(self._hangup_delay_s)
+        await self.try_end(self._arm_reason)
 
     async def try_end(self, reason: str) -> bool:
         """Hang up now (idempotent). Hard-cancels the pipeline task."""
@@ -182,11 +179,8 @@ def schedule_max_call_duration(
         return ScheduledCallLimits(coordinator=coordinator, watchdog_task=None)
 
     async def _watchdog() -> None:
-        try:
-            await asyncio.sleep(minutes * 60.0)
-            await coordinator.try_end(label)
-        except asyncio.CancelledError:
-            raise
+        await asyncio.sleep(minutes * 60.0)
+        await coordinator.try_end(label)
 
     watchdog_task = spawn_background_task(_watchdog(), "max_call_duration_watchdog")
     coordinator.attach_watchdog_task(watchdog_task)
@@ -194,10 +188,6 @@ def schedule_max_call_duration(
     return ScheduledCallLimits(
         coordinator=coordinator, watchdog_task=watchdog_task
     )
-
-
-# Docs / backward-friendly name for ``ScheduledCallLimits``.
-ScheduledCall = ScheduledCallLimits
 
 
 def parse_goodbye_hangup_enabled() -> bool:
@@ -264,11 +254,8 @@ def register_goodbye_hangup_fallback(
         return noop
 
     async def _delayed_try_end() -> None:
-        try:
-            await asyncio.sleep(delay_s)
-            await coordinator.try_end("goodbye_detected")
-        except asyncio.CancelledError:
-            raise
+        await asyncio.sleep(delay_s)
+        await coordinator.try_end("goodbye_detected")
 
     @user_aggregator.event_handler("on_user_turn_stopped")
     async def _on_user_turn_stopped(_aggregator, _strategy, _message):

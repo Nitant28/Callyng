@@ -87,6 +87,7 @@ db-reset:
     just db-wait
     just db-migrate
     just db-seed
+    just migrate-scripts
 
 db-psql:
     docker compose exec postgres psql -U aakashvani -d aakashvani

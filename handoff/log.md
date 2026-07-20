@@ -706,3 +706,166 @@ GROQ_API_KEY=gsk_...
 - Ruff clean on touched modules/tests.
 - Full suite still requires Postgres/Redis via session `setup_globals` (same as existing CI).
 
+---
+
+## 2026-07-21 — Deep Audit Remediation (calling pipeline)
+
+> Date: 2026-07-21
+> Scope: bot STS/cascade, call finalize, server lifespan, script_runtime, call_limits
+> Author: Cursor agent
+> Plan: `.cursor/plans/deep_audit_fix_plan_07c2afc5.plan.md` (not edited)
+
+### Summary
+
+Line-by-line audit of the calling pipeline found 20 issues (1 false positive skipped). All confirmed bugs and cleanups were implemented with production/CI constraints: no new deps, no migrations, no new env vars. Local gate: `uvx ruff check .` clean; `uv run pytest -x --tb=short` → **184 passed, 6 skipped**.
+
+### Architecture context (Bug #1)
+
+`TranscriptBuffer()` was constructed without `session_call_id`, so `_maybe_pg_append` always early-returned. Live per-turn Postgres transcript writes were dead; only finalize-time SQLite/PG paths ran. Crash mid-call lost incremental turns. Docs (`guides/aakash_arch.md`) assume turn-by-turn PG growth for live polling.
+
+---
+
+### P0 — Real bugs
+
+#### 1. Pass `session_call_id` to `TranscriptBuffer`
+- **Files:** `bot_sts.py`, `bot_cascade.py`
+- Hoist `session_call_id = body.get("_session_call_id")` at start of `run_bot()`.
+- `TranscriptBuffer(session_call_id=session_call_id)`.
+- Removed duplicate `pg = body.get("_pg") or {}` (audit #13).
+- **STSTranscriptionCatcher:** replace orphan `asyncio.create_task(_pg_write(...))` with `spawn_background_task(..., "sts_transcription_pg")`.
+
+#### 2. Protect webhook on non-post-call-LLM path
+- **File:** `call_transcript.py`
+- Added `_schedule_call_completed_webhook(payload)` — wraps `send_call_completed_webhook` in try/except + `spawn_background_task(..., "call_completed_webhook")`.
+- Bare `await send_call_completed_webhook` on the skip-LLM branch can no longer abort `_on_pipeline_finished`.
+
+#### 3. Gemini prewarm strong reference
+- **File:** `server.py`
+- Extended import: `from background_tasks import bind_background_tasks, drain_background_tasks, spawn_background_task`.
+- `/start`: `spawn_background_task(_prewarm_gemini(call_id), f"prewarm_gemini:{call_id}")` instead of discarding `asyncio.create_task`.
+
+#### 4. Non-blocking SQLite insert
+- **File:** `call_transcript.py`
+- `row_id = await asyncio.to_thread(insert_call_log, ...)` inside `_on_pipeline_finished` so sync sqlite3 does not block the event loop.
+
+---
+
+### P1 — Medium
+
+#### 5. `row_id = -1` silent extraction loss
+- **Files:** `call_log_db.py`, `call_transcript.py`
+- Added `get_row_id_by_session(session_call_id)` (calls `init_db` first).
+- `_resolve_sqlite_row_id(row_id, session_call_id)` recovers via lookup when insert fails.
+- `update_call_log_extraction`: early-return + warning when `row_id <= 0`.
+
+#### 6. Remove debug Plivo phone log
+- **File:** `server.py` — deleted `logger.info(f"DEBUG PLIVO_PHONE_NUMBER=...")` on every `/start`.
+
+#### 7. Safe WebSocket close
+- **File:** `server.py` `/ws` bot error handler — nested try/except around `await websocket.close()` so already-closed WS does not mask the original error.
+
+#### 8. Redis init fail-fast logging
+- **File:** `server.py` lifespan — wrap `init_redis()` in try/except, log that `REDIS_URL` is required for rate limiting + call state, then re-raise (still required; not optional like PG).
+
+#### 9. Cancel dialers on shutdown
+- **Files:** `dialer/concurrent_dialer.py`, `server.py`
+- Added `shutdown_all_dialers(app)` — cancel all `app.state.dialer_tasks`, gather with `return_exceptions=True`, clear `_active_tasks`.
+- Called in lifespan teardown before `drain_background_tasks()`.
+
+#### 10. Dangling coroutine on RuntimeError
+- **File:** `script_runtime.py` `schedule_post_call_snapshot_write`
+- Capture `coro = _run()`; on `RuntimeError` from `spawn_background_task`, call `coro.close()` (not `_run.close()` — `_run` is the function).
+
+#### 11. Cascade ImportError logging
+- **File:** `script_runtime.py` `_load_cascade_script` — mirror STS loader: log + re-raise on `ImportError`.
+
+#### 12. Safe numeric coercion
+- **File:** `script_runtime.py`
+- Added `_safe_int` / `_safe_float` (warn + default on bad input).
+- Used in `build_gemini_vad` and `_sts_from_prefetch` (`gemini_temperature`).
+
+---
+
+### P2 — Code quality
+
+| # | Change |
+|---|--------|
+| 13 | Duplicate `pg` reads removed (with #1) |
+| 14 | Redundant `import json` inside `_coerce_extraction_override` removed |
+| 15 | Redundant `from db import postgres as pg_db` inside `call_transcript` functions removed; use module-level import |
+| 16 | `assert resolved_ctx is not None` → explicit None check + log + return |
+| 17 | `_pg_context_from_call_log`: parse `call_data` string via `json.loads` instead of substring match for `is_test_call` |
+| 18 | **Skipped** — `time` import is used (`time.perf_counter` in finalize) |
+| 19 | Removed no-op `except asyncio.CancelledError: raise` in `call_limits.py` (×3) |
+| 20 | Removed unused `ScheduledCall = ScheduledCallLimits` alias |
+
+---
+
+### Tests added / extended
+
+| File | Coverage |
+|------|----------|
+| `tests/test_transcript_buffer.py` (new) | PG append skipped without sid; append with sid (user + assistant) |
+| `tests/test_call_transcript_finalize.py` (new) | Webhook spawn swallows failures; row_id recovery; invalid row_id guard; `get_row_id_by_session` |
+| `tests/test_background_tasks.py` | Strong-reference / registry retain regression |
+| `tests/test_script_runtime.py` | Invalid VAD/float fallbacks; cascade ImportError |
+| `tests/test_concurrent_dialer_unit.py` | `shutdown_all_dialers` |
+
+### Files touched (implementation)
+
+- `bot_sts.py`, `bot_cascade.py`
+- `call_transcript.py`, `call_log_db.py`
+- `server.py`, `script_runtime.py`, `call_limits.py`
+- `dialer/concurrent_dialer.py`
+- tests listed above
+
+### Not touched (by design)
+
+- `pyproject.toml` / `uv.lock` — no new dependencies
+- Alembic migrations — none
+- `tests/conftest.py` session fixture — left alone
+- Unrelated local `justfile` diff (`migrate-scripts` after `db-seed`) left as-is
+
+### Deploy / rollback notes
+
+- Merge to `main` triggers CI then VPS restart; dialers cancelled cleanly via #9.
+- Bug #1 starts writing live PG transcript turns on new processes.
+- Rollback: `git revert` + redeploy; no migration rollback.
+
+---
+
+## 2026-07-21 — Dial-test 404 after `just db-reset` (ops note)
+
+### Symptom
+
+```
+POST /internal/script-configs/895f47c4-088b-4399-bd90-b51dbdeafc30/dial-test?client_id=00000000-0000-4000-8000-000000000001
+→ 404 Not Found
+```
+
+### Root cause (not a missing route)
+
+- Route exists: `api/routes/internal_script_configs.py` → `POST /script-configs/{id}/dial-test`, mounted via `server.py` `include_router(internal_script_configs.router)`.
+- Handler raises `HTTPException(404, "script_config not found or inactive")` when `pg_db.get_script_config(..., active=TRUE)` returns None.
+- `just db-reset` does `docker compose down -v` then migrate + seed + `migrate-scripts` — **new UUIDs** every time.
+- ID `895f47c4-...` was a **stale pre-reset** id still held in Admin UI `editingConfig` state / open tab.
+
+### DB state after reset (seed client)
+
+| id | script_id | route |
+|----|-----------|-------|
+| `d1ccfc04-8b37-4166-943e-f0456ea47789` | prowave | cascaded |
+| `eea5f09c-ed97-42ec-a2b9-ce020d7f2512` | pyramid_hi | sts |
+
+Query confirmed `895f47c4-...` → 0 rows.
+
+### Fix for operators
+
+1. Hard-refresh admin Script Configs (or reopen page).
+2. Select a listed config (`pyramid_hi` / `prowave`) so dial-test uses a current id.
+3. Optional curl smoke against `eea5f09c-...` with `X-Admin-Key`; 404 should stop (503 only if Plivo env missing).
+
+### Takeaway
+
+404 on dial-test after reset almost always means **stale script_config UUID in the UI**, not a broken route or failed seed. Always re-list configs after `db-reset`.
+
