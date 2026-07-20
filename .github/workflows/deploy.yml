@@ -55,19 +55,34 @@ jobs:
     needs: test
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1
         env:
           DEPLOY_SHA: ${{ github.sha }}
+          GH_REPO: ${{ github.repository }}
+          # Private repo: use a classic/fine-grained PAT with Contents: Read.
+          # Repo Settings → Secrets → Actions → GH_DEPLOY_TOKEN
+          # Do NOT use GITHUB_TOKEN here — baking it into the VPS remote expires
+          # after the job and breaks the next deploy ("Invalid username or token").
+          GH_TOKEN: ${{ secrets.GH_DEPLOY_TOKEN }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: DEPLOY_SHA
+          envs: DEPLOY_SHA,GH_REPO,GH_TOKEN
           script: |
             set -euo pipefail
+
+            if [ -z "${GH_TOKEN:-}" ]; then
+              echo "ERROR: GH_DEPLOY_TOKEN secret is not set."
+              echo "This is a private repo — create a PAT (Contents: Read) and add it as"
+              echo "repo secret GH_DEPLOY_TOKEN, then re-run deploy."
+              exit 1
+            fi
 
             mkdir -p ~/.ssh
             ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true
@@ -78,9 +93,21 @@ jobs:
             cd /opt/aakashvani/app
 
             echo "Expected SHA: ${DEPLOY_SHA}"
-            git fetch origin main
-            git checkout main
+
+            # Clear any stale credentials baked into origin by older deploy scripts
+            # (expired token in the URL → "Invalid username or token").
+            git remote set-url origin "https://github.com/${GH_REPO}.git"
+
+            # Authenticated one-shot fetch; do not store the token in origin.
+            git fetch --force \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" \
+              "+refs/heads/main:refs/remotes/origin/main"
+
+            git checkout -B main origin/main
             git reset --hard origin/main
+
+            # Ensure origin stays credential-free for the next run
+            git remote set-url origin "https://github.com/${GH_REPO}.git"
 
             DEPLOYED_SHA="$(git rev-parse HEAD)"
             echo "Deployed SHA: ${DEPLOYED_SHA}"
