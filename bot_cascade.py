@@ -95,7 +95,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     ctx = LeadContext.from_body(body, default_lead_name="Sir")
     runtime = resolve_cascade_runtime(body)
     pg = body.get("_pg") or {}
-    schedule_post_call_snapshot_write(body.get("_session_call_id"), runtime, pg)
+    session_call_id = body.get("_session_call_id")
+    schedule_post_call_snapshot_write(session_call_id, runtime, pg)
 
     logger.info("Starting cascaded bot — Diya (script %s)", runtime.script_id)
 
@@ -138,7 +139,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         ),
     )
 
-    transcript_buffer = TranscriptBuffer()
+    transcript_buffer = TranscriptBuffer(session_call_id=session_call_id)
     usage_accumulator = UsageMetricsAccumulator()
     usage_tap = UsageMetricsTap(usage_accumulator)
     transcript_buffer.register(user_aggregator, assistant_aggregator)
@@ -167,7 +168,6 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         ),
     )
 
-    pg = body.get("_pg") or {}
     max_minutes = parse_max_call_minutes(pg.get("max_call_minutes"))
     call_limits = schedule_max_call_duration(
         task,
@@ -201,7 +201,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
         transcript_buffer,
         context,
         route=normalize_route(os.getenv("BOT_ROUTE", "cascaded")),
-        session_call_id=body.get("_session_call_id"),
+        session_call_id=session_call_id,
         plivo_call_id=plivo_call_id,
         started_at_iso=started_at_iso,
         perf_start=perf_pipeline,

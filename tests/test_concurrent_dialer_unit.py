@@ -1,7 +1,12 @@
 import asyncio
 import uuid
 import pytest
-from dialer.concurrent_dialer import stop_dialer, _active_tasks, _campaign_key
+from dialer.concurrent_dialer import (
+    stop_dialer,
+    shutdown_all_dialers,
+    _active_tasks,
+    _campaign_key,
+)
 
 @pytest.mark.asyncio
 async def test_stop_dialer_robustness():
@@ -52,3 +57,39 @@ async def test_stop_dialer_robustness():
     assert lock_released is True
     assert key not in _active_tasks
     assert key not in app.state.dialer_tasks
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_dialers():
+    campaign_id = uuid.uuid4()
+    client_id = uuid.uuid4()
+    key = _campaign_key(campaign_id, client_id)
+
+    class MockApp:
+        class State:
+            dialer_tasks = {}
+        state = State()
+
+    app = MockApp()
+    started = asyncio.Event()
+
+    async def fake_dialer_runner():
+        started.set()
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            _active_tasks.pop(key, None)
+
+    task = asyncio.create_task(fake_dialer_runner())
+    _active_tasks[key] = task
+    app.state.dialer_tasks[key] = task
+    await started.wait()
+
+    await shutdown_all_dialers(app)
+
+    assert task.done()
+    assert key not in app.state.dialer_tasks
+    assert key not in _active_tasks

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-
+import pytest
 from google.genai.types import EndSensitivity, StartSensitivity
 from pipecat.transcriptions.language import Language
 
@@ -204,3 +204,28 @@ def test_build_post_call_snapshot_from_runtime_module_defaults():
     assert snap["version"] is None
     assert snap["outcome_terminal"] == sr.DEFAULT_OUTCOME_TERMINAL
     assert snap["outcome_retry"] == sr.DEFAULT_OUTCOME_RETRY
+
+
+def test_build_gemini_vad_invalid_numeric_falls_back():
+    vad = sr.build_gemini_vad(
+        {
+            "vad_silence_duration_ms": "not-a-number",
+            "vad_prefix_padding_ms": "bad",
+        }
+    )
+    assert vad.silence_duration_ms == 800
+    assert vad.prefix_padding_ms == 300
+
+
+def test_safe_float_invalid_falls_back():
+    assert sr._safe_float("nope", 0.5, field="gemini_temperature") == 0.5
+    assert sr._safe_float(0.7, 0.5, field="gemini_temperature") == 0.7
+
+
+def test_load_cascade_script_logs_import_error(monkeypatch):
+    def boom(name):
+        raise ImportError("missing module")
+
+    monkeypatch.setattr(sr.importlib, "import_module", boom)
+    with pytest.raises(ImportError):
+        sr._load_cascade_script("nonexistent_mod")

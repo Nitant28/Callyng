@@ -50,6 +50,7 @@ from call_limits import (
     schedule_max_call_duration,
 )
 from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
+from background_tasks import spawn_background_task
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 from lead_context import LeadContext
 from script_runtime import resolve_sts_runtime, schedule_post_call_snapshot_write
@@ -89,7 +90,8 @@ async def run_bot(
     ctx = LeadContext.from_body(body)
     runtime = resolve_sts_runtime(body)
     pg = body.get("_pg") or {}
-    schedule_post_call_snapshot_write(body.get("_session_call_id"), runtime, pg)
+    session_call_id = body.get("_session_call_id")
+    schedule_post_call_snapshot_write(session_call_id, runtime, pg)
 
     end_tools = ToolsSchema(standard_tools=[end_call_function_schema()])
     _affective = runtime.gemini_enable_affective_dialog
@@ -126,7 +128,7 @@ async def run_bot(
     )
     _lap(t0, "GeminiLiveLLMService object created (not yet connected)")
 
-    transcript_buffer = TranscriptBuffer()
+    transcript_buffer = TranscriptBuffer(session_call_id=session_call_id)
     usage_accumulator = UsageMetricsAccumulator()
     usage_tap = UsageMetricsTap(usage_accumulator)
 
@@ -152,7 +154,19 @@ async def run_bot(
                 self._tb.turns.append({"role": "user", "content": frame.text, "timestamp": ts})
                 pool = _pg_pool()
                 if pool and self._tb._session_call_id:
-                    asyncio.create_task(_pg_write(pg_db.append_transcript_turn(pool, self._tb._session_call_id, "user", frame.text, datetime.now(timezone.utc))))
+                    spawn_background_task(
+                        _pg_write(
+                            pg_db.append_transcript_turn(
+                                pool,
+                                self._tb._session_call_id,
+                                "user",
+                                frame.text,
+                                datetime.now(timezone.utc),
+                            )
+                        ),
+                        "sts_transcription_pg",
+                    )
+            await self.push_frame(frame, direction)
 
     catcher = STSTranscriptionCatcher(transcript_buffer)
 
@@ -180,7 +194,6 @@ async def run_bot(
     )
     _lap(t0, "PipelineTask created — registering event handlers")
 
-    pg = body.get("_pg") or {}
     max_minutes = parse_max_call_minutes(pg.get("max_call_minutes"))
     call_limits = schedule_max_call_duration(
         task,
@@ -205,7 +218,6 @@ async def run_bot(
     )
     extraction_schema = pg.get("extraction_schema_override") or runtime.extraction_schema
 
-    session_call_id = body.get("_session_call_id")
     attach_pipeline_finalize(
         task,
         transcript_buffer,

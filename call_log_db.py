@@ -8,6 +8,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 
 def _db_path(path: str | None = None) -> str:
     return path or os.getenv("CALL_LOG_DB_PATH", "./data/call_logs.db")
@@ -131,6 +133,11 @@ def update_call_log_extraction(
     extraction_model: str | None,
     path: str | None = None,
 ) -> None:
+    if row_id <= 0:
+        logger.warning(
+            "update_call_log_extraction skipped: invalid row_id={}", row_id
+        )
+        return
     path = _db_path(path)
     with sqlite3.connect(path) as conn:
         conn.execute(
@@ -142,3 +149,23 @@ def update_call_log_extraction(
             (extraction_json, extraction_error, extraction_model, row_id),
         )
         conn.commit()
+
+
+def get_row_id_by_session(session_call_id: str, path: str | None = None) -> int | None:
+    """Look up the most recent SQLite call_logs row id for a session."""
+    if not session_call_id:
+        return None
+    path = _db_path(path)
+    init_db(path)
+    with sqlite3.connect(path) as conn:
+        cur = conn.execute(
+            """
+            SELECT id FROM call_logs
+            WHERE session_call_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (session_call_id,),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else None

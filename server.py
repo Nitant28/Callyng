@@ -20,7 +20,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from background_tasks import bind_background_tasks, drain_background_tasks
+from background_tasks import bind_background_tasks, drain_background_tasks, spawn_background_task
 from call_log_db import init_db
 from db import postgres as pg_db
 from db import redis_client as redis_db
@@ -187,7 +187,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"[startup] PostgreSQL pool init failed ({exc}); continuing without Postgres")
 
-    await redis_db.init_redis()
+    try:
+        await redis_db.init_redis()
+    except Exception as exc:
+        logger.error(
+            "[startup] Redis init failed ({}). REDIS_URL is required for rate limiting "
+            "and call state; refusing to start.",
+            exc,
+        )
+        raise
 
     app.state.background_tasks: set[asyncio.Task] = set()
     bind_background_tasks(app.state.background_tasks)
@@ -239,6 +247,9 @@ async def lifespan(app: FastAPI):
             await stale_task
         except asyncio.CancelledError:
             pass
+    from dialer.concurrent_dialer import shutdown_all_dialers
+
+    await shutdown_all_dialers(app)
     await drain_background_tasks()
     await app.state.session.close()
     import sys
@@ -299,7 +310,7 @@ async def start_call(request: Request) -> JSONResponse:
     await set_warmup_pending(call_id)
 
     # Fire pre-warm in the background — overlaps with the Plivo dial request.
-    asyncio.create_task(_prewarm_gemini(call_id))
+    spawn_background_task(_prewarm_gemini(call_id), f"prewarm_gemini:{call_id}")
 
     host = request.headers.get("host", "localhost")
     base = public_telephony_base_url(host)
@@ -310,7 +321,6 @@ async def start_call(request: Request) -> JSONResponse:
     hangup_url = build_hangup_url(call_id, host=host)
 
     try:
-        logger.info(f"DEBUG PLIVO_PHONE_NUMBER={os.getenv('PLIVO_PHONE_NUMBER')}")
         result = await make_plivo_call(
             session=request.app.state.session,
             to_number=phone_number,
@@ -469,7 +479,10 @@ async def ws_endpoint(
     except Exception as e:
         import traceback
         logger.error(f"Bot error: {e}\n{traceback.format_exc()}")
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass  # already closed / disconnect in flight
     finally:
         if call_id and app.state.pool is not None:
             try:
