@@ -70,6 +70,7 @@ jobs:
             git config --global --add safe.directory /opt/aakashvani/app
             git config --global --add safe.directory /opt/aakashvani
             cd /opt/aakashvani/app || cd /opt/aakashvani
+            git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
             git pull origin main
 
             # Rebuild backend image from the updated code
