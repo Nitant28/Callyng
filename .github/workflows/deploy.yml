@@ -64,7 +64,10 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            cd /opt/aakashvani/app
+            set -euo pipefail
+            git config --global --add safe.directory /opt/aakashvani/app
+            git config --global --add safe.directory /opt/aakashvani
+            cd /opt/aakashvani/app || cd /opt/aakashvani
             git pull origin main
 
             # Rebuild backend image from the updated code
