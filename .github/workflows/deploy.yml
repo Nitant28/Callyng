@@ -65,6 +65,8 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             set -euo pipefail
+            mkdir -p ~/.ssh
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
             git config --global --add safe.directory /opt/aakashvani/app
             git config --global --add safe.directory /opt/aakashvani
             cd /opt/aakashvani/app || cd /opt/aakashvani
