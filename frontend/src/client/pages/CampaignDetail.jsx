@@ -27,12 +27,6 @@ const OUTCOME_LABELS = {
   Campaign_Cancelled: 'Campaign Cancelled',
 };
 
-const OUTCOME_FILTER_OPTIONS = [
-  { value: '', label: 'All Outcomes' },
-  { value: 'Interested', label: 'Interested' },
-  { value: 'Not_Interested', label: 'Not Interested' },
-];
-
 function normalizeOutcome(outcome) {
   const raw = (outcome || '').toString().trim();
   if (!raw) return '';
@@ -99,9 +93,10 @@ const CampaignDetail = () => {
   const [leadsSearch, setLeadsSearch] = useState('');
   const [leadsStatusFilter, setLeadsStatusFilter] = useState('');
   const [leadsOutcomeFilter, setLeadsOutcomeFilter] = useState('');
+  const [outcomes, setOutcomes] = useState([]);
   const [leadsAttemptsFilter, setLeadsAttemptsFilter] = useState('');
   const [leadsDateFilter, setLeadsDateFilter] = useState('');
-  
+
   const [loading, setLoading] = useState(true);
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('leads'); // default tab
@@ -143,7 +138,7 @@ const CampaignDetail = () => {
     const schema = campaign?.bot_config?.lead_schema;
     if (!schema) return [];
     if (schema.fields && Array.isArray(schema.fields)) return schema.fields;
-    
+
     return Object.entries(schema).map(([key, value]) => {
       if (typeof value === 'object') {
         return { key, ...value };
@@ -160,11 +155,11 @@ const CampaignDetail = () => {
       const hour = istTime.getHours();
       const minutes = istTime.getMinutes();
       const isInside = hour >= 9 && hour < 21;
-      
+
       const ampm = hour >= 12 ? 'PM' : 'AM';
       const displayHour = hour % 12 || 12;
       const displayMin = minutes < 10 ? '0' + minutes : minutes;
-      
+
       setIstStatus({
         isInside,
         formattedIst: `${displayHour}:${displayMin} ${ampm} IST`
@@ -192,6 +187,7 @@ const CampaignDetail = () => {
     try {
       const response = await clientApi.get(`/api/campaigns/${id}/stats`);
       if (response.data && response.data.stats) {
+        console.log(response.data.stats);
         setCampaign(response.data.stats);
         setLiveCallingCount(response.data.stats.calling_leads || 0);
       } else {
@@ -273,6 +269,20 @@ const CampaignDetail = () => {
   }, [loadLeads]);
 
   useEffect(() => {
+    if (!id) return;
+    const loadOutcomes = async () => {
+      try {
+        const response = await clientApi.get(`/api/campaigns/${id}/outcomes`);
+        setOutcomes(response.data?.outcomes || []);
+      } catch (err) {
+        console.error('Failed to load outcomes', err);
+      }
+    };
+
+    loadOutcomes();
+  }, [id]);
+
+  useEffect(() => {
     setLeadsOffset(0);
   }, [leadsOutcomeFilter, leadsStatusFilter, leadsAttemptsFilter, leadsDateFilter, leadsSearch, leadsLimit]);
 
@@ -300,7 +310,7 @@ const CampaignDetail = () => {
     if (!campaign) return;
     const isPausing = campaign.status === 'pausing' || (campaign.status === 'paused' && campaign.calling_leads > 0);
     if (campaign.status !== 'running' && !isPausing) return;
-    
+
     const pollInterval = isPausing ? 2000 : 5000;
     const interval = setInterval(() => {
       loadCampaignDetails(false);
@@ -434,7 +444,7 @@ const CampaignDetail = () => {
 
   const handleCancelCampaign = async () => {
     if (!window.confirm('Are you sure you want to cancel this campaign? Any allocated remaining budget will be refunded.')) return;
-    
+
     try {
       const response = await clientApi.patch(`/api/campaigns/${id}/cancel`);
       if (response.data) {
@@ -578,7 +588,7 @@ const CampaignDetail = () => {
 
   const handleDeleteLead = async (leadId) => {
     if (!window.confirm('Are you sure you want to delete this lead?')) return;
-    
+
     try {
       const response = await clientApi.delete(`/api/campaigns/${id}/leads/${leadId}`);
       if (response.data) {
@@ -592,7 +602,43 @@ const CampaignDetail = () => {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const response = await clientApi.get(
+        `/api/campaigns/${id}/leads/export`,
+        {
+          params: {
+            search: leadsSearch || undefined,
+            status: leadsStatusFilter || undefined,
+            outcome: leadsOutcomeFilter || undefined,
+            attempts: leadsAttemptsFilter || undefined,
+            date: leadsDateFilter || undefined,
+          },
+          responseType: "blob",
+        }
+      );
 
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${campaign.name}-leads.xlsx`;
+
+      document.body.appendChild(link);
+      link.click();
+
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      showToast("Export completed successfully.", "success");
+    } catch (err) {
+      console.error(err);
+      showToast(
+        err.customErrorMessage || "Failed to export leads.",
+        "error"
+      );
+    }
+  };
 
   // Settings Save
   const handleSaveSettings = async (e) => {
@@ -659,7 +705,7 @@ const CampaignDetail = () => {
     else if (isYellow) barColor = '#CA8A04';
 
     return (
-      <div 
+      <div
         className="cl-kpi-card animate-fade-in cursor-pointer hover:shadow-lg transition-shadow"
         onClick={onClick}
         style={{ opacity: onClick ? 1 : 1 }}
@@ -749,13 +795,12 @@ const CampaignDetail = () => {
               </div>
               <div className="cl-campaign-header__meta-item">
                 <span className="material-symbols-outlined">bolt</span>
-                <span>Status: <span className={`cl-badge ${
-                    campaign.status === 'running'   ? 'cl-badge--running' :
-                    campaign.status === 'paused'    ? 'cl-badge--paused' :
-                    campaign.status === 'pausing'   ? 'cl-badge--paused' :
-                    campaign.status === 'completed' ? 'cl-badge--completed' :
-                    campaign.status === 'cancelled' ? 'cl-badge--cancelled' :
-                    'cl-badge--draft'
+                <span>Status: <span className={`cl-badge ${campaign.status === 'running' ? 'cl-badge--running' :
+                  campaign.status === 'paused' ? 'cl-badge--paused' :
+                    campaign.status === 'pausing' ? 'cl-badge--paused' :
+                      campaign.status === 'completed' ? 'cl-badge--completed' :
+                        campaign.status === 'cancelled' ? 'cl-badge--cancelled' :
+                          'cl-badge--draft'
                   }`}>{campaign.status}</span></span>
               </div>
             </div>
@@ -808,21 +853,21 @@ const CampaignDetail = () => {
 
         <section className="campaign-kpi-section">
           <div className="campaign-kpi-grid">
-            {renderKpiCard('Total Leads',  total.toLocaleString(),                                           `${(campaign.completed_leads || 0).toLocaleString()} completed`,                                                       total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-blue',   'groups', () => { setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
-            {renderKpiCard('Interested',   (campaign.interested_leads || 0).toLocaleString(),                `${total > 0 ? ((campaign.interested_leads || 0) / total * 100).toFixed(1) : 0}% conversion`,                          total > 0 ? ((campaign.interested_leads || 0) / total) * 100 : 0, 'icon-green',  'thumb_up', () => { setLeadsOutcomeFilter('Interested'); setActiveTab('leads'); })}
-            {renderKpiCard('On Call',      liveCallingCount.toLocaleString(),                                liveCallingCount > 0 ? 'Active right now' : 'Idle',                                                                    total > 0 ? (liveCallingCount / total) * 100 : 0,                  'icon-purple', 'ring_volume', () => { setLeadsStatusFilter('calling'); setActiveTab('leads'); })}
-            {renderKpiCard('Answered',     (campaign.answered_leads || 0).toLocaleString(),                  `${total > 0 ? ((campaign.answered_leads || 0) / total * 100).toFixed(1) : 0}% answer rate`,                           total > 0 ? ((campaign.answered_leads || 0) / total) * 100 : 0, 'icon-teal',   'call', () => { setLeadsStatusFilter('completed'); setActiveTab('leads'); })}
-            {renderKpiCard('Pending',      (campaign.pending_leads || 0).toLocaleString(),                   `${total > 0 ? ((campaign.pending_leads || 0) / total * 100).toFixed(1) : 0}% remaining`,                              total > 0 ? ((campaign.pending_leads || 0) / total) * 100 : 0, 'icon-orange', 'pending', () => { setLeadsStatusFilter('pending'); setActiveTab('leads'); })}
+            {renderKpiCard('Total Leads', total.toLocaleString(), `${(campaign.completed_leads || 0).toLocaleString()} completed`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-blue', 'groups', () => { setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
+            {renderKpiCard('Interested', (campaign.interested_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.interested_leads || 0) / total * 100).toFixed(1) : 0}% conversion`, total > 0 ? ((campaign.interested_leads || 0) / total) * 100 : 0, 'icon-green', 'thumb_up', () => { setLeadsOutcomeFilter('Interested'); setActiveTab('leads'); })}
+            {renderKpiCard('On Call', liveCallingCount.toLocaleString(), liveCallingCount > 0 ? 'Active right now' : 'Idle', total > 0 ? (liveCallingCount / total) * 100 : 0, 'icon-purple', 'ring_volume', () => { setLeadsStatusFilter('calling'); setActiveTab('leads'); })}
+            {renderKpiCard('Answered', (campaign.answered_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.answered_leads || 0) / total * 100).toFixed(1) : 0}% answer rate`, total > 0 ? ((campaign.answered_leads || 0) / total) * 100 : 0, 'icon-teal', 'call', () => { setLeadsStatusFilter('completed'); setActiveTab('leads'); })}
+            {renderKpiCard('Pending', (campaign.pending_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.pending_leads || 0) / total * 100).toFixed(1) : 0}% remaining`, total > 0 ? ((campaign.pending_leads || 0) / total) * 100 : 0, 'icon-orange', 'pending', () => { setLeadsStatusFilter('pending'); setActiveTab('leads'); })}
           </div>
 
           {/* See more / secondary stats */}
           {showMoreStats && (
             <div className="campaign-kpi-grid campaign-kpi-grid--secondary animate-fade-in">
-              {renderKpiCard('Not Answered', (campaign.no_answer_leads || 0).toLocaleString(),              `${total > 0 ? ((campaign.no_answer_leads || 0) / total * 100).toFixed(1) : 0}% rate`,                               total > 0 ? ((campaign.no_answer_leads || 0) / total) * 100 : 0, 'icon-orange', 'call_missed', () => { setLeadsStatusFilter('completed'); setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
-              {renderKpiCard('Failed',        (campaign.failed_leads || 0).toLocaleString(),                 `${total > 0 ? ((campaign.failed_leads || 0) / total * 100).toFixed(1) : 0}% rate`,                                  total > 0 ? ((campaign.failed_leads || 0) / total) * 100 : 0, 'icon-red',    'cancel', () => { setLeadsStatusFilter('failed'); setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
-              {renderKpiCard('Callback',      (campaign.callback_leads || 0).toLocaleString(),               `${total > 0 ? ((campaign.callback_leads || 0) / total * 100).toFixed(1) : 0}% scheduled`,                           total > 0 ? ((campaign.callback_leads || 0) / total) * 100 : 0, 'icon-blue',   'event_available', () => { setLeadsOutcomeFilter(''); setLeadsStatusFilter('callback_scheduled'); setActiveTab('leads'); })}
-              {renderKpiCard('Completed',     (campaign.completed_leads || 0).toLocaleString(),              `${total > 0 ? ((campaign.completed_leads || 0) / total * 100).toFixed(1) : 0}% done`,                               total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-green',  'task_alt', () => { setLeadsStatusFilter('completed'); setActiveTab('leads'); })}
-              {renderKpiCard('Budget Used',   `₹${(campaign.budget_used_credits || 0).toLocaleString()}`,   `of ₹${(campaign.budget_credits || 0).toLocaleString()} allocated`,                                                   campaign.budget_credits > 0 ? ((campaign.budget_used_credits || 0) / campaign.budget_credits) * 100 : 0, 'icon-purple', 'monetization_on', null)}
+              {renderKpiCard('Not Answered', (campaign.no_answer_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.no_answer_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.no_answer_leads || 0) / total) * 100 : 0, 'icon-orange', 'call_missed', () => { setLeadsStatusFilter('completed'); setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
+              {renderKpiCard('Failed', (campaign.failed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.failed_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.failed_leads || 0) / total) * 100 : 0, 'icon-red', 'cancel', () => { setLeadsStatusFilter('failed'); setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
+              {renderKpiCard('Callback', (campaign.callback_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.callback_leads || 0) / total * 100).toFixed(1) : 0}% scheduled`, total > 0 ? ((campaign.callback_leads || 0) / total) * 100 : 0, 'icon-blue', 'event_available', () => { setLeadsOutcomeFilter(''); setLeadsStatusFilter('callback_scheduled'); setActiveTab('leads'); })}
+              {renderKpiCard('Completed', (campaign.completed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.completed_leads || 0) / total * 100).toFixed(1) : 0}% done`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-green', 'task_alt', () => { setLeadsStatusFilter('completed'); setActiveTab('leads'); })}
+              {renderKpiCard('Budget Used', `₹${(campaign.budget_used_credits || 0).toLocaleString()}`, `of ₹${(campaign.budget_credits || 0).toLocaleString()} allocated`, campaign.budget_credits > 0 ? ((campaign.budget_used_credits || 0) / campaign.budget_credits) * 100 : 0, 'icon-purple', 'monetization_on', null)}
             </div>
           )}
 
@@ -908,9 +953,9 @@ const CampaignDetail = () => {
             <div className="animate-fade-in">
               <div className="cl-card flex flex-col">
                 {/* Compact toolbar: search + filter + import/add controls in one row */}
-                <div className="p-4 border-b" style={{ borderColor: 'var(--border)' }}>
-                  <div className="flex flex-wrap gap-3 items-center justify-between">
-                    <div className="cl-search-wrap" style={{ flex: '1 1 220px', maxWidth: '320px' }}>
+                <div className="p-4 border-b overflow-x-auto" style={{ borderColor: 'var(--border)' }}>
+                  <div className="flex flex-nowrap gap-3 items-center min-w-max">
+                    <div className="cl-search-wrap flex-shrink-0" style={{ flex: '0 0 220px', maxWidth: '320px' }}>
                       <span className="material-symbols-outlined cl-search-icon">search</span>
                       <input
                         type="text"
@@ -921,7 +966,7 @@ const CampaignDetail = () => {
                       />
                     </div>
                     {/* Filter dropdowns on the right */}
-                    <div className="flex flex-wrap gap-2 items-center">
+                    <div className="flex flex-nowrap gap-2 items-center flex-shrink-0">
                       {/* Outcome Filter */}
                       <select
                         value={leadsOutcomeFilter}
@@ -929,9 +974,10 @@ const CampaignDetail = () => {
                         className="cl-select"
                         title="Filter by outcome"
                       >
-                        {OUTCOME_FILTER_OPTIONS.map((option) => (
-                          <option key={option.value || 'all'} value={option.value}>
-                            {option.label}
+                        <option value="">All Outcomes</option>
+                        {outcomes.map((outcome) => (
+                          <option key={outcome} value={outcome}>
+                            {friendlyOutcome(outcome)}
                           </option>
                         ))}
                       </select>
@@ -997,40 +1043,67 @@ const CampaignDetail = () => {
                         </button>
                       )}
 
-                      {(campaign.status === 'draft' || campaign.status === 'paused') && (
+                      {
                         <>
-                          <input
-                            type="file"
-                            ref={fileInputRef}
-                            onChange={handleFileBrowse}
-                            className="hidden"
-                            accept=".csv,.xlsx"
-                          />
+                          {(campaign.status === 'draft' || campaign.status === 'paused') && (
+                            <>
+                              <input
+                                type="file"
+                                ref={fileInputRef}
+                                onChange={handleFileBrowse}
+                                className="hidden"
+                                accept=".csv,.xlsx"
+                              />
+
+                              <button
+                                onClick={() => fileInputRef.current?.click()}
+                                className="cl-btn cl-btn--secondary cl-btn--sm"
+                                title="Import CSV"
+                              >
+                                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                                  upload_file
+                                </span>
+                                {isUploading ? 'Uploading...' : 'Import'}
+                              </button>
+
+                              <button
+                                onClick={handleDownloadTemplate}
+                                className="cl-btn cl-btn--secondary cl-btn--sm"
+                                title="Download template"
+                              >
+                                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                                  download
+                                </span>
+                                Template
+                              </button>
+
+                              <button
+                                onClick={() => setIsAddLeadOpen(true)}
+                                className="cl-btn cl-btn--primary cl-btn--sm"
+                              >
+                                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                                  person_add
+                                </span>
+                                Add Lead
+                              </button>
+                            </>
+                          )}
+
                           <button
-                            onClick={() => fileInputRef.current?.click()}
+                            onClick={handleExport}
                             className="cl-btn cl-btn--secondary cl-btn--sm"
-                            title="Import CSV"
+                            title="Export Leads"
                           >
-                            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>upload_file</span>
-                            {isUploading ? 'Uploading...' : 'Import'}
-                          </button>
-                          <button
-                            onClick={handleDownloadTemplate}
-                            className="cl-btn cl-btn--secondary cl-btn--sm"
-                            title="Download template"
-                          >
-                            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>download</span>
-                            Template
-                          </button>
-                          <button
-                            onClick={() => setIsAddLeadOpen(true)}
-                            className="cl-btn cl-btn--primary cl-btn--sm"
-                          >
-                            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>person_add</span>
-                            Add Lead
+                            <span
+                              className="material-symbols-outlined"
+                              style={{ fontSize: "16px" }}
+                            >
+                              download
+                            </span>
+                            Export
                           </button>
                         </>
-                      )}
+                      }
                     </div>
                   </div>
                 </div>
@@ -1068,15 +1141,14 @@ const CampaignDetail = () => {
                             <td>{renderStatusBadges(lead)}</td>
                             <td>
                               {lead.outcome ? (
-                                <span className={`cl-badge ${
-                                  lead.outcome === 'Interested'         ? 'cl-badge--interested' :
-                                  lead.outcome === 'Not_Interested'    ? 'cl-badge--not_interested' :
-                                  lead.outcome === 'Callback_Requested'? 'cl-badge--callback' :
-                                  lead.outcome === 'No_Answer'         ? 'cl-badge--queued' :
-                                  lead.outcome === 'Busy'              ? 'cl-badge--busy' :
-                                  lead.outcome === 'Early_Disconnect'  ? 'cl-badge--paused' :
-                                  'cl-badge--queued'
-                                }`}>
+                                <span className={`cl-badge ${lead.outcome === 'Interested' ? 'cl-badge--interested' :
+                                  lead.outcome === 'Not_Interested' ? 'cl-badge--not_interested' :
+                                    lead.outcome === 'Callback_Requested' ? 'cl-badge--callback' :
+                                      lead.outcome === 'No_Answer' ? 'cl-badge--queued' :
+                                        lead.outcome === 'Busy' ? 'cl-badge--busy' :
+                                          lead.outcome === 'Early_Disconnect' ? 'cl-badge--paused' :
+                                            'cl-badge--queued'
+                                  }`}>
                                   {friendlyOutcome(lead.outcome)}
                                 </span>
                               ) : (
@@ -1175,7 +1247,7 @@ const CampaignDetail = () => {
           {activeTab === 'settings' && (
             <form onSubmit={handleSaveSettings} className="space-y-6 animate-fade-in max-w-xl p-6">
               <h3 className="text-lg font-semibold text-primary border-b border-slate-200 pb-3">Campaign Settings</h3>
-              
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-bold text-on-surface dark:text-molten-text mb-1">Campaign Objective Name</label>

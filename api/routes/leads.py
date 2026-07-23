@@ -5,6 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from io import BytesIO
+
+from fastapi.responses import StreamingResponse
+
+from openpyxl import Workbook
+from openpyxl.styles import Font
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -95,7 +102,7 @@ async def list_leads(
     return {"leads": leads, "limit": limit, "offset": offset, "status": status, "search": search, "outcome": outcome, "total_count": total_count}
 
 
-@router.get("/{campaign_id}/leads/export", response_class=PlainTextResponse)
+@router.get("/{campaign_id}/leads/export")
 async def export_leads(
     campaign_id: UUID,
     status: str | None = None,
@@ -104,9 +111,11 @@ async def export_leads(
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
 ):
-    """Export campaign leads as CSV."""
+    """Export campaign leads as Excel (.xlsx)."""
+
     cid = client_id_uuid(client)
     camp = await _get_campaign_or_404(pool, campaign_id, cid)
+
     rows = await pg_db.list_campaign_leads_for_export(
         pool,
         campaign_id,
@@ -115,25 +124,57 @@ async def export_leads(
         search=search,
         outcome=outcome,
     )
-    header = ["Name", "Phone", "Status", "Outcome", "Attempts", "Last Call Duration", "Updated"]
-    lines = [",".join(header)]
+
+    # Create workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Leads"
+
+    # Header row
+    headers = [
+        "Name",
+        "Phone",
+        "Status",
+        "Outcome",
+        "Attempts",
+        "Last Call Duration",
+        "Updated",
+    ]
+
+    ws.append(headers)
+
+    # Make header bold
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    # Data rows
     for row in rows:
-        values = [
+        ws.append([
             row.get("name") or "",
-            row.get("phone") or "",
+            str(row.get("phone") or ""),
             row.get("status") or "",
             row.get("outcome") or "",
-            str(row.get("attempts") or 0),
-            str(row.get("last_call_duration_seconds") or ""),
+            row.get("attempts") or 0,
+            row.get("last_call_duration_seconds") or "",
             str(row.get("updated_at") or ""),
-        ]
-        lines.append(",".join(f'"{str(v).replace(chr(34), chr(34) + chr(34))}"' for v in values))
-    csv_body = "\n".join(lines)
+        ])
+
+    # Format phone column as text
+    for cell in ws["B"]:
+        cell.number_format = "@"
+
     slug = (camp.get("name") or "campaign").replace(" ", "_")[:40]
-    return PlainTextResponse(
-        content=csv_body,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{slug}_leads.csv"'},
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{slug}_leads.xlsx"'
+        },
     )
 
 
