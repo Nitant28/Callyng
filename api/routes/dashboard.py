@@ -7,12 +7,12 @@ frontend can render without recomputing metrics.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from api.auth import get_client_from_token, get_pool, client_id_uuid
+from api.auth import client_id_uuid, get_client_from_token, get_pool
 from db import postgres as pg_db
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -62,7 +62,7 @@ async def get_dashboard_analytics(
     running_campaigns = sum(1 for c in (campaigns or []) if (c.get("status") or "").lower() == "running")
     interested_leads = sum(int(interested_map.get(str(c.get("id")), 0)) for c in (campaigns or []))
     # answered_leads prefer campaign field
-    answered_leads = sum(int(c.get("answered_leads" or 0) or 0) for c in (campaigns or []))
+    answered_leads = sum(int(c.get("answered_leads") or 0) for c in (campaigns or []))
 
     # credits: prefer campaign budget_used_credits aggregate, fallback to sum of call charges
     credits_used = 0
@@ -79,7 +79,7 @@ async def get_dashboard_analytics(
     live_calls = sum(1 for cl in (recent_calls or []) if cl.get("in_progress") is True)
 
     # Charts: hourly aggregates for the requested window
-    window_start = datetime.utcnow() - timedelta(days=period_days)
+    window_start = datetime.now(UTC) - timedelta(days=period_days)
     hourly_calls_rows = await pool.fetch(
         """
         SELECT date_trunc('hour', started_at) AS bucket, COUNT(*)::int AS calls
@@ -165,7 +165,7 @@ async def get_dashboard_analytics(
         },
         "recent_activity": activity,
         "campaigns": campaigns,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
     return payload
