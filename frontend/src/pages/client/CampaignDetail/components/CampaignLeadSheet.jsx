@@ -279,14 +279,37 @@ const CampaignLeadSheet = ({
             </button>
           ))}
         </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '12px', alignItems: 'center' }}>
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            gap: '12px',
+            alignItems: 'center',
+          }}
+        >
           <input
             type="search"
             placeholder="Search leads..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ height: '36px', padding: '8px 12px', borderRadius: '8px', border: '1px solid #E6E9EE', minWidth: '220px' }}
+            style={{
+              height: '36px',
+              padding: '8px 12px',
+              borderRadius: '8px',
+              border: '1px solid #E6E9EE',
+              minWidth: '220px',
+            }}
           />
+
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="download"
+            loading={exporting}
+            onClick={handleExport}
+          >
+            Export
+          </Button>
         </div>
       </div>
 
@@ -295,15 +318,15 @@ const CampaignLeadSheet = ({
           <table className="ent-table">
             <thead>
               <tr>
-                  <th>Lead Name</th>
-                  <th>Phone</th>
-                  <th>Status</th>
-                  <th>Attempts</th>
-                  <th>Duration</th>
-                  <th>Outcome</th>
-                  <th>Last Updated</th>
-                  <th>Actions</th>
-                </tr>
+                <th>Lead Name</th>
+                <th>Phone</th>
+                <th>Status</th>
+                <th>Attempts</th>
+                <th>Duration</th>
+                <th>Outcome</th>
+                <th>Last Updated</th>
+                <th>Actions</th>
+              </tr>
             </thead>
             <tbody>
               {loading && (
@@ -321,7 +344,7 @@ const CampaignLeadSheet = ({
               {!loading && displayLeads.map((lead) => (
                 <tr
                   key={lead.id}
-                  className={`ent-table__row--clickable ${['calling','ringing','connecting','connected'].includes(lead.status) ? 'cdet-lead-sheet__row--live' : ''}`}
+                  className={`ent-table__row--clickable ${['calling', 'ringing', 'connecting', 'connected'].includes(lead.status) ? 'cdet-lead-sheet__row--live' : ''}`}
                 >
                   <td>
                     <div className="cdet-lead-sheet__identity">

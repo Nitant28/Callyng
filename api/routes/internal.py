@@ -544,6 +544,14 @@ async def list_campaign_leads_admin(
     )
     return {"leads": leads, "total_count": total}
 
+@router.get("/clients/{client_id}/lead-outcomes")
+async def list_lead_outcomes(
+    client_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    outcomes = await pg_db.list_campaign_outcomes(pool, client_id)
+    return {"outcomes": outcomes}
 
 @router.post("/webhook-configs")
 async def create_webhook_config(

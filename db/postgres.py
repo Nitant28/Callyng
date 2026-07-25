@@ -2208,7 +2208,7 @@ async def terminalize_campaign_leads(
         """
         UPDATE leads SET
             status = 'failed',
-            outcome = 'Campaign cancelled'
+            outcome = 'Campaign_Cancelled'
         WHERE campaign_id = $1 AND client_id = $2
           AND status IN ('pending', 'callback_scheduled')
         """,
@@ -2219,7 +2219,7 @@ async def terminalize_campaign_leads(
         """
         UPDATE leads SET
             status = 'failed',
-            outcome = 'Campaign cancelled'
+            outcome = 'Campaign_Cancelled'
         WHERE campaign_id = $1 AND client_id = $2 AND status = 'calling'
           AND NOT EXISTS (
             SELECT 1 FROM call_logs c
@@ -2388,6 +2388,64 @@ async def list_campaign_leads_for_export(
     )
     return rows
 
+async def list_campaign_outcomes(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    campaign_id: UUID | str | None = None,
+) -> list[str]:
+    """Return the outcomes THIS campaign's script can actually produce.
+
+    Resolution order:
+      1. campaign -> bot_config (for route/script_id/script_config_id)
+      2. bot_config has script_config_id -> read that script_configs row's
+         outcome_terminal/outcome_retry/outcome_callback (its customized
+         vocabulary for Interested/Not_Interested/Busy/etc.)
+      3. bot_config has no script_config_id (raw LEAD_SCHEMA-style script
+         module) -> fall back to script_runtime's DEFAULT_OUTCOME_* sets,
+         since those scripts don't declare their own outcome sets.
+      4. If campaign/bot_config/script_config can't be resolved at all
+         (including callers that pass no campaign_id — this keeps the
+         client-wide admin lead-outcomes endpoint working as before),
+         fall back to call_outcomes.ALL_OUTCOMES (global vocabulary) so the
+         dropdown is never empty.
+
+    call_outcomes.SYSTEM_OUTCOMES (No_Answer, Rejected, Carrier_Failed,
+    Max_Attempts_Reached, Campaign_Cancelled) is always unioned in, since
+    those come from dialer/telephony logic and can happen on any campaign
+    regardless of its script's configured outcomes.
+
+    Interested/Not_Interested are always sorted to the front of the
+    returned list (see call_outcomes.order_outcomes) since those are the
+    two outcomes users care about filtering on most.
+    """
+    from call_outcomes import ALL_OUTCOMES, SYSTEM_OUTCOMES, order_outcomes
+    import script_runtime
+
+    if campaign_id is None:
+        return order_outcomes(ALL_OUTCOMES)
+
+    campaign = await get_campaign(pool, campaign_id, client_id)
+    if campaign is None or not campaign.get("bot_config_id"):
+        return order_outcomes(ALL_OUTCOMES)
+
+    bot = await get_bot_config(pool, UUID(str(campaign["bot_config_id"])), client_id)
+    if bot is None:
+        return order_outcomes(ALL_OUTCOMES)
+
+    if bot.get("script_config_id"):
+        cfg = await get_script_config(pool, bot["script_config_id"], client_id)
+        if cfg is None:
+            return order_outcomes(ALL_OUTCOMES)
+        terminal = cfg.get("outcome_terminal") or script_runtime.DEFAULT_OUTCOME_TERMINAL
+        retry = cfg.get("outcome_retry") or script_runtime.DEFAULT_OUTCOME_RETRY
+        callback = cfg.get("outcome_callback") or script_runtime.DEFAULT_OUTCOME_CALLBACK
+    else:
+        terminal = script_runtime.DEFAULT_OUTCOME_TERMINAL
+        retry = script_runtime.DEFAULT_OUTCOME_RETRY
+        callback = script_runtime.DEFAULT_OUTCOME_CALLBACK
+
+    outcomes = set(terminal) | set(retry) | set(callback) | SYSTEM_OUTCOMES
+    return order_outcomes(outcomes)
 
 _LEAD_SORT_COLUMNS = {
     "created_at": "l.created_at",
@@ -2396,6 +2454,7 @@ _LEAD_SORT_COLUMNS = {
     "attempts": "l.attempts",
     "updated_at": "l.updated_at",
 }
+
 
 
 async def list_client_leads(

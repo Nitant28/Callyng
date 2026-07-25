@@ -67,7 +67,6 @@ async def list_campaigns(
         campaigns = [c for c in campaigns if q in (c.get("name") or "").lower()]
     return {"campaigns": campaigns}
 
-
 from pydantic import BaseModel, Field
 
 class ClientCreateCampaignBody(BaseModel):
@@ -88,6 +87,24 @@ class ClientPatchCampaignBody(BaseModel):
     retry_delay_minutes: int | None = None
     max_call_minutes: int | None = None
 
+@router.get("/{campaign_id}/outcomes")
+async def list_campaign_outcomes(
+    campaign_id: UUID,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    cid = client_id_uuid(client)
+
+    outcomes = await pg_db.list_campaign_outcomes(
+        pool,
+        cid,
+        campaign_id,
+    )
+
+    return {
+        "outcomes": outcomes
+    }
+    
 @router.get("/{campaign_id}/stats")
 async def campaign_stats(
     campaign_id: UUID,
