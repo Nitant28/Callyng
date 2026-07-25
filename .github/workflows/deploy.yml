@@ -40,7 +40,7 @@ jobs:
         run: uv sync --locked
 
       - name: Lint
-        run: uvx ruff check .
+        run: uvx ruff@0.16.0 check .
 
       - name: Run tests
         env:
@@ -127,8 +127,20 @@ jobs:
             docker exec aakashvani-backend uv run alembic upgrade head
 
             echo "Health check..."
-            sleep 10
-            curl -fsS http://localhost:7860/health
+            success=0
+            for i in $(seq 1 30); do
+              if curl -fsS http://localhost:7860/health >/dev/null 2>&1; then
+                echo "Health check passed!"
+                success=1
+                break
+              fi
+              echo "Waiting for health check ($i/30)..."
+              sleep 2
+            done
+            if [ "$success" -ne 1 ]; then
+              echo "ERROR: Health check timed out after 60s"
+              exit 1
+            fi
 
             echo ""
             echo "✅ Deploy successful (SHA ${DEPLOYED_SHA})"

@@ -13,7 +13,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool

@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -33,7 +33,7 @@ def resolve_lead_retry_or_failed(
     ``attempts`` must already include the attempt that just finished (dialer
     increments on claim).
     """
-    ts = now or datetime.now(timezone.utc)
+    ts = now or datetime.now(UTC)
     if attempts >= max_attempts:
         return "failed", None, "Max_Attempts_Reached"
     return "callback_scheduled", ts + timedelta(minutes=retry_delay_minutes), base_outcome
@@ -248,26 +248,25 @@ async def settle_budget_for_stale_call_logs(pool: asyncpg.Pool) -> int:
         if reserved <= 0:
             continue
         try:
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-                    result = await conn.execute(
-                        """
+            async with pool.acquire() as conn, conn.transaction():
+                result = await conn.execute(
+                    """
                         UPDATE call_logs
                         SET credits_charged = 0, billed_minutes = 0
                         WHERE session_call_id = $1 AND credits_charged IS NULL
                         """,
-                        row["session_call_id"],
-                    )
-                    if result.split()[-1] == "0":
-                        continue
-                    
-                    await settle_call_budget(
-                        conn,
-                        row["campaign_id"],
-                        row["client_id"],
-                        Decimal("0"),
-                        reserved,
-                    )
+                    row["session_call_id"],
+                )
+                if result.split()[-1] == "0":
+                    continue
+                
+                await settle_call_budget(
+                    conn,
+                    row["campaign_id"],
+                    row["client_id"],
+                    Decimal(0),
+                    reserved,
+                )
             settled += 1
         except Exception as exc:
             logger.warning(
@@ -377,8 +376,7 @@ def record_to_dict(record: asyncpg.Record | None) -> dict[str, Any] | None:
     if record is None:
         return None
     out: dict[str, Any] = {}
-    for key in record.keys():
-        val = record[key]
+    for key, val in record.items():
         if isinstance(val, UUID):
             val = str(val)
         elif isinstance(val, Decimal):
@@ -462,31 +460,30 @@ async def add_credits(
     amount: float,
     note: str,
 ) -> float:
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """
                 UPDATE clients
                 SET balance_credits = balance_credits + $1
                 WHERE id = $2 AND active = TRUE
                 RETURNING balance_credits
                 """,
-                Decimal(str(amount)),
-                client_id,
-            )
-            if row is None:
-                raise ValueError(f"Client not found: {client_id}")
-            
-            await conn.execute(
-                """
+            Decimal(str(amount)),
+            client_id,
+        )
+        if row is None:
+            raise ValueError(f"Client not found: {client_id}")
+        
+        await conn.execute(
+            """
                 INSERT INTO credit_transactions (client_id, amount, note)
                 VALUES ($1, $2, $3)
                 """,
-                client_id,
-                Decimal(str(amount)),
-                note,
-            )
-            return float(row["balance_credits"])
+            client_id,
+            Decimal(str(amount)),
+            note,
+        )
+        return float(row["balance_credits"])
 
 
 async def get_client(pool: asyncpg.Pool, client_id: UUID) -> dict | None:
@@ -678,11 +675,10 @@ async def create_script_config(
     from api.script_config_validation import build_config_snapshot
 
     version = 1
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            try:
-                row = await conn.fetchrow(
-                    """
+    async with pool.acquire() as conn, conn.transaction():
+        try:
+            row = await conn.fetchrow(
+                """
                     INSERT INTO script_configs (
                         client_id, script_id, route,
                         gemini_model, gemini_voice, gemini_language, gemini_temperature,
@@ -711,59 +707,59 @@ async def create_script_config(
                     )
                     RETURNING *
                     """,
-                    client_id,
-                    data["script_id"],
-                    data["route"],
-                    data.get("gemini_model", "models/gemini-3.1-flash-live-preview"),
-                    data.get("gemini_voice", "Aoede"),
-                    data.get("gemini_language", "hi-IN"),
-                    float(data.get("gemini_temperature", 0.5)),
-                    data.get("vad_start_sensitivity", "HIGH"),
-                    data.get("vad_end_sensitivity", "LOW"),
-                    int(data.get("vad_silence_duration_ms", 800)),
-                    int(data.get("vad_prefix_padding_ms", 300)),
-                    data["system_instruction_template"],
-                    _script_config_json(data.get("bootstrap_messages_json") or []),
-                    _script_config_json(data.get("goodbye_markers") or []),
-                    data.get("cascade_stt_provider", "sarvam"),
-                    data.get("cascade_stt_model", "saarika:v2.5"),
-                    data.get("cascade_llm_provider", "groq"),
-                    data.get("cascade_llm_model", "llama-3.3-70b-versatile"),
-                    data.get("cascade_tts_provider", "cartesia"),
-                    data.get("cascade_tts_voice", "sonic-3"),
-                    _script_config_json(data.get("cascade_live_tools") or []),
-                    _script_config_json(data["extraction_schema"]),
-                    _script_config_json(data.get("lead_schema") or {"fields": []}),
-                    _script_config_json(data.get("normalization_rules") or []),
-                    _script_config_json(data.get("outcome_event_map") or {}),
-                    _script_config_json(
-                        data.get("outcome_terminal")
-                        or ["Interested", "Not_Interested"]
-                    ),
-                    _script_config_json(
-                        data.get("outcome_retry")
-                        or ["Busy", "Unknown", "Wrong_Requirement"]
-                    ),
-                    _script_config_json(
-                        data.get("outcome_callback") or ["Callback_Requested"]
-                    ),
-                    bool(data.get("active", True)),
-                    version,
-                )
-            except asyncpg.UniqueViolationError as exc:
-                raise ValueError(
-                    f"script_id {data['script_id']!r} already exists for this client"
-                ) from exc
-
-            result = record_to_dict(row)
-            assert result is not None
-            await _insert_script_config_revision(
-                conn,
-                UUID(str(result["id"])),
+                client_id,
+                data["script_id"],
+                data["route"],
+                data.get("gemini_model", "models/gemini-3.1-flash-live-preview"),
+                data.get("gemini_voice", "Aoede"),
+                data.get("gemini_language", "hi-IN"),
+                float(data.get("gemini_temperature", 0.5)),
+                data.get("vad_start_sensitivity", "HIGH"),
+                data.get("vad_end_sensitivity", "LOW"),
+                int(data.get("vad_silence_duration_ms", 800)),
+                int(data.get("vad_prefix_padding_ms", 300)),
+                data["system_instruction_template"],
+                _script_config_json(data.get("bootstrap_messages_json") or []),
+                _script_config_json(data.get("goodbye_markers") or []),
+                data.get("cascade_stt_provider", "sarvam"),
+                data.get("cascade_stt_model", "saarika:v2.5"),
+                data.get("cascade_llm_provider", "groq"),
+                data.get("cascade_llm_model", "llama-3.3-70b-versatile"),
+                data.get("cascade_tts_provider", "cartesia"),
+                data.get("cascade_tts_voice", "sonic-3"),
+                _script_config_json(data.get("cascade_live_tools") or []),
+                _script_config_json(data["extraction_schema"]),
+                _script_config_json(data.get("lead_schema") or {"fields": []}),
+                _script_config_json(data.get("normalization_rules") or []),
+                _script_config_json(data.get("outcome_event_map") or {}),
+                _script_config_json(
+                    data.get("outcome_terminal")
+                    or ["Interested", "Not_Interested"]
+                ),
+                _script_config_json(
+                    data.get("outcome_retry")
+                    or ["Busy", "Unknown", "Wrong_Requirement"]
+                ),
+                _script_config_json(
+                    data.get("outcome_callback") or ["Callback_Requested"]
+                ),
+                bool(data.get("active", True)),
                 version,
-                build_config_snapshot(result),
             )
-            return result
+        except asyncpg.UniqueViolationError as exc:
+            raise ValueError(
+                f"script_id {data['script_id']!r} already exists for this client"
+            ) from exc
+
+        result = record_to_dict(row)
+        assert result is not None
+        await _insert_script_config_revision(
+            conn,
+            UUID(str(result["id"])),
+            version,
+            build_config_snapshot(result),
+        )
+        return result
 
 
 _SCRIPT_CONFIG_PATCHABLE = frozenset(
@@ -826,78 +822,77 @@ async def update_script_config(
     if not patch:
         raise ValueError("empty patch")
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """
                 SELECT * FROM script_configs
                 WHERE id = $1 AND client_id = $2
                 FOR UPDATE
                 """,
-                script_config_id,
-                client_id,
-            )
-            if row is None:
-                raise ValueError("script_config not found")
+            script_config_id,
+            client_id,
+        )
+        if row is None:
+            raise ValueError("script_config not found")
 
-            current = record_to_dict(row)
-            assert current is not None
-            merged = dict(current)
-            for key, val in patch.items():
-                if key in _SCRIPT_CONFIG_PATCHABLE:
-                    merged[key] = val
+        current = record_to_dict(row)
+        assert current is not None
+        merged = dict(current)
+        for key, val in patch.items():
+            if key in _SCRIPT_CONFIG_PATCHABLE:
+                merged[key] = val
 
-            new_version = int(current.get("version") or 1) + 1
-            sets: list[str] = ["version = $1", "updated_at = NOW()"]
-            args: list[Any] = [new_version]
-            idx = 2
+        new_version = int(current.get("version") or 1) + 1
+        sets: list[str] = ["version = $1", "updated_at = NOW()"]
+        args: list[Any] = [new_version]
+        idx = 2
 
-            for key in sorted(_SCRIPT_CONFIG_PATCHABLE):
-                if key not in patch:
-                    continue
-                val = merged[key]
-                if key in _SCRIPT_CONFIG_JSONB:
-                    sets.append(f"{key} = ${idx}::jsonb")
-                    args.append(_script_config_json(val))
-                elif key == "gemini_temperature":
-                    sets.append(f"{key} = ${idx}")
-                    args.append(float(val))
-                elif key in (
-                    "vad_silence_duration_ms",
-                    "vad_prefix_padding_ms",
-                ):
-                    sets.append(f"{key} = ${idx}")
-                    args.append(int(val))
-                else:
-                    sets.append(f"{key} = ${idx}")
-                    args.append(val)
-                idx += 1
+        for key in sorted(_SCRIPT_CONFIG_PATCHABLE):
+            if key not in patch:
+                continue
+            val = merged[key]
+            if key in _SCRIPT_CONFIG_JSONB:
+                sets.append(f"{key} = ${idx}::jsonb")
+                args.append(_script_config_json(val))
+            elif key == "gemini_temperature":
+                sets.append(f"{key} = ${idx}")
+                args.append(float(val))
+            elif key in (
+                "vad_silence_duration_ms",
+                "vad_prefix_padding_ms",
+            ):
+                sets.append(f"{key} = ${idx}")
+                args.append(int(val))
+            else:
+                sets.append(f"{key} = ${idx}")
+                args.append(val)
+            idx += 1
 
-            args.extend([script_config_id, client_id])
-            try:
-                updated = await conn.fetchrow(
-                    f"""
+        args.extend([script_config_id, client_id])
+        try:
+            updated = await conn.fetchrow(
+                f"""
                     UPDATE script_configs
                     SET {", ".join(sets)}
                     WHERE id = ${idx} AND client_id = ${idx + 1}
                     RETURNING *
                     """,
-                    *args,
-                )
-            except asyncpg.UniqueViolationError as exc:
-                raise ValueError(
-                    f"script_id {patch.get('script_id')!r} already exists for this client"
-                ) from exc
-
-            result = record_to_dict(updated)
-            assert result is not None
-            await _insert_script_config_revision(
-                conn,
-                script_config_id,
-                new_version,
-                build_config_snapshot(result),
+                *args,
             )
-            return result
+        except asyncpg.UniqueViolationError as exc:
+            raise ValueError(
+                f"script_id {patch.get('script_id')!r} already exists for this client"
+            ) from exc
+
+        result = record_to_dict(updated)
+        assert result is not None
+        await _insert_script_config_revision(
+            conn,
+            script_config_id,
+            new_version,
+            build_config_snapshot(result),
+        )
+        return result
 
 
 async def list_script_config_revisions(
@@ -959,68 +954,67 @@ async def rollback_script_config(
     if not isinstance(snapshot, dict):
         raise ValueError("revision config_snapshot is invalid")
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """
                 SELECT * FROM script_configs
                 WHERE id = $1 AND client_id = $2
                 FOR UPDATE
                 """,
-                script_config_id,
-                client_id,
-            )
-            if row is None:
-                raise ValueError("script_config not found")
+            script_config_id,
+            client_id,
+        )
+        if row is None:
+            raise ValueError("script_config not found")
 
-            current = record_to_dict(row)
-            assert current is not None
-            new_version = int(current.get("version") or 1) + 1
+        current = record_to_dict(row)
+        assert current is not None
+        new_version = int(current.get("version") or 1) + 1
 
-            sets: list[str] = ["version = $1", "updated_at = NOW()"]
-            args: list[Any] = [new_version]
-            idx = 2
+        sets: list[str] = ["version = $1", "updated_at = NOW()"]
+        args: list[Any] = [new_version]
+        idx = 2
 
-            for key in sorted(_SCRIPT_CONFIG_PATCHABLE):
-                if key not in snapshot:
-                    continue
-                val = snapshot[key]
-                if key in _SCRIPT_CONFIG_JSONB:
-                    sets.append(f"{key} = ${idx}::jsonb")
-                    args.append(_script_config_json(val))
-                elif key == "gemini_temperature":
-                    sets.append(f"{key} = ${idx}")
-                    args.append(float(val))
-                elif key in (
-                    "vad_silence_duration_ms",
-                    "vad_prefix_padding_ms",
-                ):
-                    sets.append(f"{key} = ${idx}")
-                    args.append(int(val))
-                else:
-                    sets.append(f"{key} = ${idx}")
-                    args.append(val)
-                idx += 1
+        for key in sorted(_SCRIPT_CONFIG_PATCHABLE):
+            if key not in snapshot:
+                continue
+            val = snapshot[key]
+            if key in _SCRIPT_CONFIG_JSONB:
+                sets.append(f"{key} = ${idx}::jsonb")
+                args.append(_script_config_json(val))
+            elif key == "gemini_temperature":
+                sets.append(f"{key} = ${idx}")
+                args.append(float(val))
+            elif key in (
+                "vad_silence_duration_ms",
+                "vad_prefix_padding_ms",
+            ):
+                sets.append(f"{key} = ${idx}")
+                args.append(int(val))
+            else:
+                sets.append(f"{key} = ${idx}")
+                args.append(val)
+            idx += 1
 
-            args.extend([script_config_id, client_id])
-            updated = await conn.fetchrow(
-                f"""
+        args.extend([script_config_id, client_id])
+        updated = await conn.fetchrow(
+            f"""
                 UPDATE script_configs
                 SET {", ".join(sets)}
                 WHERE id = ${idx} AND client_id = ${idx + 1}
                 RETURNING *
                 """,
-                *args,
-            )
-            result = record_to_dict(updated)
-            assert result is not None
-            await _insert_script_config_revision(
-                conn,
-                script_config_id,
-                new_version,
-                build_config_snapshot(result),
-            )
-            return result
+            *args,
+        )
+        result = record_to_dict(updated)
+        assert result is not None
+        await _insert_script_config_revision(
+            conn,
+            script_config_id,
+            new_version,
+            build_config_snapshot(result),
+        )
+        return result
 
 
 async def list_bot_configs(
@@ -1212,44 +1206,43 @@ async def allocate_campaign_budget(
 ) -> None:
     amount = Decimal(str(budget_credits))
     pool = get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """
                 SELECT balance_credits FROM clients
                 WHERE id = $1 AND active = TRUE
                 FOR UPDATE
                 """,
-                client_id,
+            client_id,
+        )
+        if row is None:
+            raise ValueError(f"Client not found: {client_id}")
+        balance = Decimal(str(row["balance_credits"]))
+        if balance < amount:
+            raise ValueError(
+                f"Insufficient balance: have {balance}, need {amount}"
             )
-            if row is None:
-                raise ValueError(f"Client not found: {client_id}")
-            balance = Decimal(str(row["balance_credits"]))
-            if balance < amount:
-                raise ValueError(
-                    f"Insufficient balance: have {balance}, need {amount}"
-                )
-            await conn.execute(
-                """
+        await conn.execute(
+            """
                 UPDATE clients
                 SET balance_credits = balance_credits - $1
                 WHERE id = $2
                 """,
-                amount,
-                client_id,
-            )
-            updated = await conn.execute(
-                """
+            amount,
+            client_id,
+        )
+        updated = await conn.execute(
+            """
                 UPDATE campaigns
                 SET budget_credits = budget_credits + $1
                 WHERE id = $2 AND client_id = $3
                 """,
-                amount,
-                campaign_id,
-                client_id,
-            )
-            if updated.split()[-1] == "0":
-                raise ValueError(f"Campaign not found: {campaign_id}")
+            amount,
+            campaign_id,
+            client_id,
+        )
+        if updated.split()[-1] == "0":
+            raise ValueError(f"Campaign not found: {campaign_id}")
 
 
 async def adjust_budget_used(
@@ -1314,14 +1307,14 @@ async def release_campaign_budget_reservation(
 
 def budget_reserved_from_call_data(call_data: Any) -> Decimal:
     if call_data is None:
-        return Decimal("0")
+        return Decimal(0)
     if isinstance(call_data, str):
         try:
             call_data = json.loads(call_data)
         except json.JSONDecodeError:
-            return Decimal("0")
+            return Decimal(0)
     if not isinstance(call_data, dict):
-        return Decimal("0")
+        return Decimal(0)
     return Decimal(str(call_data.get("budget_reserved_credits") or 0))
 
 
@@ -1366,7 +1359,7 @@ async def try_settle_campaign_budget(
         raise ValueError(f"Campaign not found: {campaign_id}")
 
     if row["budget_returned_at"] is not None:
-        return Decimal("0"), False
+        return Decimal(0), False
 
     if final_status == "cancelled":
         has_calling_leads = await conn.fetchval(
@@ -1389,7 +1382,7 @@ async def try_settle_campaign_budget(
                 campaign_id,
                 client_id,
             )
-            return Decimal("0"), False
+            return Decimal(0), False
 
     if final_status == "completed":
         has_active_leads = await conn.fetchval(
@@ -1403,13 +1396,13 @@ async def try_settle_campaign_budget(
             client_id,
         )
         if has_active_leads:
-            return Decimal("0"), False
+            return Decimal(0), False
         if row["status"] != "running":
-            return Decimal("0"), False
+            return Decimal(0), False
 
     budget = Decimal(str(row["budget_credits"]))
     used = Decimal(str(row["budget_used_credits"]))
-    unused = max(budget - used, Decimal("0"))
+    unused = max(budget - used, Decimal(0))
 
     if unused > 0:
         await conn.execute(
@@ -1488,12 +1481,12 @@ async def maybe_auto_settle_campaign(
         client_id,
     )
     if row is None or row["budget_returned_at"] is not None:
-        return Decimal("0"), False
+        return Decimal(0), False
     pending = int(row["pending_leads"] or 0)
     callback = int(row["callback_leads"] or 0)
     calling = int(row["calling_leads"] or 0)
     if pending > 0 or callback > 0 or calling > 0:
-        return Decimal("0"), False
+        return Decimal(0), False
     status = row["status"]
     if status == "running":
         return await try_settle_campaign_budget(
@@ -1503,7 +1496,7 @@ async def maybe_auto_settle_campaign(
         return await try_settle_campaign_budget(
             campaign_id, client_id, final_status="cancelled", conn=conn
         )
-    return Decimal("0"), False
+    return Decimal(0), False
 
 
 async def return_unused_budget(
@@ -1529,9 +1522,8 @@ async def return_unused_budget(
         return await _run(conn)
 
     pool = get_pool()
-    async with pool.acquire() as acquired:
-        async with acquired.transaction():
-            return await _run(acquired)
+    async with pool.acquire() as acquired, acquired.transaction():
+        return await _run(acquired)
 
 
 async def campaign_budget_remaining(
@@ -2252,32 +2244,31 @@ async def cancel_campaign(
     await finalize_stale_in_progress_call_logs(pool, campaign_id, client_id)
     await release_stuck_calling_leads(pool, campaign_id, client_id)
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            camp = await conn.fetchrow(
-                """
+    async with pool.acquire() as conn, conn.transaction():
+        camp = await conn.fetchrow(
+            """
                 SELECT status FROM campaigns
                 WHERE id = $1 AND client_id = $2
                 FOR UPDATE
                 """,
-                campaign_id,
-                client_id,
-            )
-            if camp is None:
-                raise ValueError(f"Campaign not found: {campaign_id}")
-            if camp["status"] in ("completed", "cancelled"):
-                raise ValueError(f"Campaign already terminal: {camp['status']}")
+            campaign_id,
+            client_id,
+        )
+        if camp is None:
+            raise ValueError(f"Campaign not found: {campaign_id}")
+        if camp["status"] in ("completed", "cancelled"):
+            raise ValueError(f"Campaign already terminal: {camp['status']}")
 
-            leads_terminalized = await terminalize_campaign_leads(
-                conn, campaign_id, client_id
-            )
+        leads_terminalized = await terminalize_campaign_leads(
+            conn, campaign_id, client_id
+        )
 
-            credits_returned, _ = await try_settle_campaign_budget(
-                campaign_id,
-                client_id,
-                final_status="cancelled",
-                conn=conn,
-            )
+        credits_returned, _ = await try_settle_campaign_budget(
+            campaign_id,
+            client_id,
+            final_status="cancelled",
+            conn=conn,
+        )
 
     await reconcile_campaign_counters(pool, campaign_id, client_id)
 
@@ -2418,8 +2409,8 @@ async def list_campaign_outcomes(
     returned list (see call_outcomes.order_outcomes) since those are the
     two outcomes users care about filtering on most.
     """
-    from call_outcomes import ALL_OUTCOMES, SYSTEM_OUTCOMES, order_outcomes
     import script_runtime
+    from call_outcomes import ALL_OUTCOMES, SYSTEM_OUTCOMES, order_outcomes
 
     if campaign_id is None:
         return order_outcomes(ALL_OUTCOMES)
@@ -2823,43 +2814,42 @@ async def insert_call_log_start(
     if lead_id:
         lock_id = int.from_bytes(lead_id.bytes[:8], 'big') - 2**63
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            if lock_id is not None:
-                await conn.execute("SELECT pg_advisory_xact_lock($1)", lock_id)
+    async with pool.acquire() as conn, conn.transaction():
+        if lock_id is not None:
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", lock_id)
 
-            if lead_id is not None:
-                live = await conn.fetchval(
-                    """
+        if lead_id is not None:
+            live = await conn.fetchval(
+                """
                     SELECT 1 FROM call_logs
                     WHERE lead_id = $1 AND in_progress = TRUE
                       AND started_at > NOW() - ($2 * INTERVAL '1 minute')
                     LIMIT 1
                     """,
-                    lead_id, grace
-                )
-                recent_end = await conn.fetchval(
-                    """
+                lead_id, grace
+            )
+            recent_end = await conn.fetchval(
+                """
                     SELECT 1 FROM call_logs
                     WHERE lead_id = $1
                       AND ended_at IS NOT NULL
                       AND ended_at > NOW() - ($2 * INTERVAL '1 minute')
                     LIMIT 1
                     """,
-                    lead_id, wrap
-                )
-                if live or recent_end:
-                    raise Exception("Duplicate call prevented by atomic check")
+                lead_id, wrap
+            )
+            if live or recent_end:
+                raise Exception("Duplicate call prevented by atomic check")
 
-            data = dict(call_data) if call_data else {}
-            if is_test_call:
-                data["is_test_call"] = True
-            reserved = Decimal(str(budget_reserved_credits or 0))
-            if reserved > 0:
-                data["budget_reserved_credits"] = float(reserved)
+        data = dict(call_data) if call_data else {}
+        if is_test_call:
+            data["is_test_call"] = True
+        reserved = Decimal(str(budget_reserved_credits or 0))
+        if reserved > 0:
+            data["budget_reserved_credits"] = float(reserved)
 
-            row = await conn.fetchrow(
-                """
+        row = await conn.fetchrow(
+            """
                 INSERT INTO call_logs (
                     session_call_id, client_id, campaign_id, lead_id,
                     bot_config_id, route, started_at, in_progress, transcript,
@@ -2868,16 +2858,16 @@ async def insert_call_log_start(
                 VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, '[]'::jsonb, $8::jsonb)
                 RETURNING id
                 """,
-                session_call_id,
-                client_id,
-                campaign_id,
-                lead_id,
-                bot_config_id,
-                route,
-                started_at,
-                data,
-            )
-            return row["id"]
+            session_call_id,
+            client_id,
+            campaign_id,
+            lead_id,
+            bot_config_id,
+            route,
+            started_at,
+            data,
+        )
+        return row["id"]
 
 
 async def patch_call_log_post_call_snapshot(
@@ -3060,7 +3050,7 @@ async def apply_callee_hangup_callback(
             """,
             session_call_id,
             {
-                "hangup_processed_at": datetime.now(timezone.utc).isoformat(),
+                "hangup_processed_at": datetime.now(UTC).isoformat(),
                 "callback_applied": False,
                 "callee_hangup_recorded": True,
             },
@@ -3074,43 +3064,42 @@ async def terminalize_exhausted_leads(
     client_id: UUID | str,
 ) -> int:
     """Mark pending/callback leads as failed when attempts >= max_attempts."""
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            rows = await conn.fetch(
-                """
+    async with pool.acquire() as conn, conn.transaction():
+        rows = await conn.fetch(
+            """
                 SELECT id, status FROM leads
                 WHERE campaign_id = $1 AND client_id = $2
                   AND status IN ('pending', 'callback_scheduled')
                   AND attempts >= max_attempts
                 FOR UPDATE
                 """,
-                campaign_id,
-                client_id,
-            )
-            if not rows:
-                return 0
-            new_status, _, outcome = resolve_lead_retry_or_failed(1, 1, 0)
-            ids = [r["id"] for r in rows]
-            await conn.execute(
-                """
+            campaign_id,
+            client_id,
+        )
+        if not rows:
+            return 0
+        new_status, _, outcome = resolve_lead_retry_or_failed(1, 1, 0)
+        ids = [r["id"] for r in rows]
+        await conn.execute(
+            """
                 UPDATE leads
                 SET status = $3,
                     outcome = COALESCE(NULLIF(TRIM(outcome), ''), $4)
                 WHERE id = ANY($1::uuid[]) AND client_id = $2
                 """,
-                ids,
-                client_id,
-                new_status,
-                outcome,
+            ids,
+            client_id,
+            new_status,
+            outcome,
+        )
+        for r in rows:
+            await increment_campaign_counters(
+                conn,
+                UUID(str(campaign_id)),
+                from_status=r["status"],
+                to_status=new_status,
             )
-            for r in rows:
-                await increment_campaign_counters(
-                    conn,
-                    UUID(str(campaign_id)),
-                    from_status=r["status"],
-                    to_status=new_status,
-                )
-            return len(rows)
+        return len(rows)
 
 
 async def settle_unanswered_call(
@@ -3134,32 +3123,31 @@ async def settle_unanswered_call(
 
     reserved = budget_reserved_from_call_data(call_log.get("call_data"))
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            lead_row = await conn.fetchrow(
-                """
+    async with pool.acquire() as conn, conn.transaction():
+        lead_row = await conn.fetchrow(
+            """
                 SELECT status, attempts, max_attempts FROM leads
                 WHERE id = $1 AND client_id = $2
                 FOR UPDATE
                 """,
-                UUID(str(lead_id)),
-                UUID(str(client_id)),
-            )
-            if not lead_row or lead_row["status"] != "calling":
-                return False
+            UUID(str(lead_id)),
+            UUID(str(client_id)),
+        )
+        if not lead_row or lead_row["status"] != "calling":
+            return False
 
-            attempts = int(lead_row["attempts"] or 0)
-            max_att = int(lead_row["max_attempts"] or 3)
-            new_status, next_at, outcome = resolve_lead_retry_or_failed(
-                attempts,
-                max_att,
-                retry_delay_minutes,
-                base_outcome=base_outcome,
-            )
+        attempts = int(lead_row["attempts"] or 0)
+        max_att = int(lead_row["max_attempts"] or 3)
+        new_status, next_at, outcome = resolve_lead_retry_or_failed(
+            attempts,
+            max_att,
+            retry_delay_minutes,
+            base_outcome=base_outcome,
+        )
 
-            # Mark call_log as done with 0 charge
-            result = await conn.execute(
-                """
+        # Mark call_log as done with 0 charge
+        result = await conn.execute(
+            """
                 UPDATE call_logs
                 SET in_progress = FALSE,
                     ended_at = COALESCE(ended_at, NOW()),
@@ -3168,27 +3156,27 @@ async def settle_unanswered_call(
                     outcome = COALESCE(NULLIF(TRIM(outcome), ''), $2)
                 WHERE session_call_id = $1 AND in_progress = TRUE
                 """,
-                session_call_id,
-                outcome,
+            session_call_id,
+            outcome,
+        )
+        if result.split()[-1] == "0":
+            # Already finalized by another path
+            return False
+
+        # Settle budget: release the reservation with 0 charge
+        if reserved > 0:
+            await settle_call_budget(
+                conn,
+                UUID(str(campaign_id)),
+                UUID(str(client_id)),
+                Decimal(0),
+                reserved,
             )
-            if result.split()[-1] == "0":
-                # Already finalized by another path
-                return False
 
-            # Settle budget: release the reservation with 0 charge
-            if reserved > 0:
-                await settle_call_budget(
-                    conn,
-                    UUID(str(campaign_id)),
-                    UUID(str(client_id)),
-                    Decimal("0"),
-                    reserved,
-                )
+        sched_cb = next_at if new_status == "callback_scheduled" else None
 
-            sched_cb = next_at if new_status == "callback_scheduled" else None
-
-            await conn.execute(
-                """
+        await conn.execute(
+            """
                 UPDATE leads
                 SET status = $3,
                     outcome = $5,
@@ -3196,19 +3184,19 @@ async def settle_unanswered_call(
                     scheduled_callback_at = $6
                 WHERE id = $1 AND client_id = $2 AND status = 'calling'
                 """,
-                UUID(str(lead_id)),
-                UUID(str(client_id)),
-                new_status,
-                next_at,
-                outcome,
-                sched_cb,
-            )
-            await increment_campaign_counters(
-                conn,
-                UUID(str(campaign_id)),
-                from_status="calling",
-                to_status=new_status,
-            )
+            UUID(str(lead_id)),
+            UUID(str(client_id)),
+            new_status,
+            next_at,
+            outcome,
+            sched_cb,
+        )
+        await increment_campaign_counters(
+            conn,
+            UUID(str(campaign_id)),
+            from_status="calling",
+            to_status=new_status,
+        )
 
     logger.info(
         "Settled unanswered call session={} lead={} campaign={} reserved={}",

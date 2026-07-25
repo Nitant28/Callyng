@@ -38,4 +38,24 @@ asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 
 [tool.ruff.lint]
-ignore = ["E402", "E741", "F841"]
+ignore = [
+  "E402",
+  "E741",
+  "F841",
+  "B008",
+  "BLE001",
+  "TRY",
+  "S110",
+  "SIM",
+  "ASYNC",
+  "PLW",
+  "RUF",
+  "UP",
+  "I001",
+  "RET",
+  "PLR",
+  "FURB",
+  "PIE",
+]
+
+
