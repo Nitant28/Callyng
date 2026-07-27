@@ -119,6 +119,17 @@ jobs:
             echo "Building backend image (native host arch)..."
             docker build -f Dockerfile.prod -t aakashvani-backend:latest .
 
+            echo "Building frontend static assets..."
+            if command -v npm >/dev/null 2>&1; then
+              (cd frontend && npm ci && VITE_API_BASE_URL='' npm run build)
+            else
+              docker run --rm -v "$(pwd)/frontend:/app" -w /app node:20-alpine sh -c "npm ci && VITE_API_BASE_URL='' npm run build"
+            fi
+
+            echo "Updating frontend distribution directory..."
+            mkdir -p /opt/aakashvani/frontend-dist
+            rsync -avz --delete frontend/dist/ /opt/aakashvani/frontend-dist/
+
             echo "Restarting backend..."
             cd /opt/aakashvani
             docker compose --env-file .env up -d --force-recreate backend
