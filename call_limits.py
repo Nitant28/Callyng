@@ -46,17 +46,17 @@ def parse_max_call_minutes(override: float | None = None) -> float:
 def parse_silence_timeout_seconds(override: float | None = None) -> float:
     """Return seconds for the silence watchdog; ``0`` means disabled.
 
-    Default ``30.0``. Set ``SILENCE_TIMEOUT_SECONDS=0`` to disable.
+    Default ``45.0``. Set ``SILENCE_TIMEOUT_SECONDS=0`` to disable.
     """
     if override is not None:
         return max(0.0, float(override))
-    raw = (os.getenv("SILENCE_TIMEOUT_SECONDS") or "30").strip()
+    raw = (os.getenv("SILENCE_TIMEOUT_SECONDS") or "45").strip()
     try:
         v = float(raw)
         return max(0.0, v)
     except ValueError:
-        logger.warning("Invalid SILENCE_TIMEOUT_SECONDS={!r}; using 30.0", raw)
-        return 30.0
+        logger.warning("Invalid SILENCE_TIMEOUT_SECONDS={!r}; using 45.0", raw)
+        return 45.0
 
 
 def end_call_function_schema() -> FunctionSchema:
@@ -93,7 +93,7 @@ class CallEndCoordinator:
         task: PipelineTask,
         *,
         hangup_delay_s: float = 2.0,
-        silence_timeout_s: float = 30.0,
+        silence_timeout_s: float = 45.0,
     ) -> None:
         self._task = task
         self._lock = asyncio.Lock()

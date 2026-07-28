@@ -186,13 +186,13 @@ async def test_silence_activity_tap_ignores_downstream_transcription():
     mock_task.cancel.assert_called_once()
 
 
-def test_parse_silence_timeout_defaults_to_30():
+def test_parse_silence_timeout_defaults_to_45():
     from call_limits import parse_silence_timeout_seconds
     import os
     from unittest.mock import patch
 
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("SILENCE_TIMEOUT_SECONDS", None)
-        assert parse_silence_timeout_seconds() == 30.0
+        assert parse_silence_timeout_seconds() == 45.0
         assert parse_silence_timeout_seconds(0) == 0.0
-        assert parse_silence_timeout_seconds(45) == 45.0
+        assert parse_silence_timeout_seconds(15) == 15.0
