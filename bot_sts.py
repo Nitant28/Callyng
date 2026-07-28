@@ -39,6 +39,7 @@ from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 
 from call_limits import (
     BotSpeechEndGate,
+    SilenceActivityTap,
     end_call_function_schema,
     make_end_call_handler,
     parse_goodbye_hangup_delay_s,
@@ -149,11 +150,13 @@ async def run_bot(
         ),
     )
 
+    silence_tap = SilenceActivityTap()
     end_gate = BotSpeechEndGate()
 
     pipeline = Pipeline([
         transport.input(),
         user_aggregator,
+        silence_tap,
         llm,
         transport.output(),
         end_gate,
@@ -183,6 +186,7 @@ async def run_bot(
     )
     coordinator = call_limits.coordinator
     end_gate.bind(coordinator)
+    silence_tap.bind(coordinator)
     llm.register_function("end_call", make_end_call_handler(coordinator))
 
     started_at_iso = datetime.now(timezone.utc).isoformat()

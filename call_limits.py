@@ -16,7 +16,9 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,
+    TranscriptionFrame,
     UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -41,6 +43,22 @@ def parse_max_call_minutes(override: float | None = None) -> float:
         return 0.0
 
 
+def parse_silence_timeout_seconds(override: float | None = None) -> float:
+    """Return seconds for the silence watchdog; ``0`` means disabled.
+
+    Default ``30.0``. Set ``SILENCE_TIMEOUT_SECONDS=0`` to disable.
+    """
+    if override is not None:
+        return max(0.0, float(override))
+    raw = (os.getenv("SILENCE_TIMEOUT_SECONDS") or "30").strip()
+    try:
+        v = float(raw)
+        return max(0.0, v)
+    except ValueError:
+        logger.warning("Invalid SILENCE_TIMEOUT_SECONDS={!r}; using 30.0", raw)
+        return 30.0
+
+
 def end_call_function_schema() -> FunctionSchema:
     """Single no-arg tool: hang up after the model finishes its closing turn."""
     return FunctionSchema(
@@ -56,7 +74,7 @@ def end_call_function_schema() -> FunctionSchema:
 
 
 class CallEndCoordinator:
-    """Coordinates a single, prompt hangup (end_call tool + timer + goodbye marker).
+    """Coordinates a single, prompt hangup (end_call tool + timer + goodbye marker + silence watchdog).
 
     The hangup is a hard ``task.cancel()`` (``CancelFrame``), not a queued
     ``EndFrame``. The Gemini Live service defers ``EndFrame`` until it sees a
@@ -70,20 +88,34 @@ class CallEndCoordinator:
     goodbye plays out and the hangup feels natural rather than abrupt.
     """
 
-    def __init__(self, task: PipelineTask, *, hangup_delay_s: float = 2.0) -> None:
+    def __init__(
+        self,
+        task: PipelineTask,
+        *,
+        hangup_delay_s: float = 2.0,
+        silence_timeout_s: float = 30.0,
+    ) -> None:
         self._task = task
         self._lock = asyncio.Lock()
         self._ended = False
         self._hangup_delay_s = max(0.0, hangup_delay_s)
+        self._silence_timeout_s = max(0.0, silence_timeout_s)
         self._watchdog_task: asyncio.Task[None] | None = None
+        self._silence_task: asyncio.Task[None] | None = None
+        self._silence_armed = False
         self._armed = False
         self._bot_speaking = False
+        self._user_speaking = False
         self._scheduled: asyncio.Task[None] | None = None
         self._arm_reason = "end_call"
 
     @property
     def hangup_delay_s(self) -> float:
         return self._hangup_delay_s
+
+    @property
+    def silence_timeout_s(self) -> float:
+        return self._silence_timeout_s
 
     def attach_watchdog_task(self, t: asyncio.Task[None] | None) -> None:
         """Background max-duration task; cancelled on successful ``try_end`` or by caller."""
@@ -93,12 +125,37 @@ class CallEndCoordinator:
         wt = self._watchdog_task
         if wt is None or wt.done():
             return
-        # Do not cancel the watchdog while we are running inside it (timer path).
         if wt is asyncio.current_task():
             return
         wt.cancel()
 
-    # ── prompt-but-natural hangup after the bot's closing line ──────────────
+    def reset_silence_timer(self) -> None:
+        """Reset/start the background silence timeout task if silence watchdog is active."""
+        if self._silence_timeout_s <= 0 or self._ended or not self._silence_armed:
+            return
+        self._cancel_silence_timer()
+        if not self._bot_speaking and not self._user_speaking:
+            self._silence_task = spawn_background_task(
+                self._silence_watchdog(), "silence_timeout_watchdog"
+            )
+
+    def _cancel_silence_timer(self) -> None:
+        st = self._silence_task
+        if st is not None and not st.done():
+            st.cancel()
+        self._silence_task = None
+
+    async def _silence_watchdog(self) -> None:
+        try:
+            await asyncio.sleep(self._silence_timeout_s)
+            logger.warning(
+                "silence timeout ({:.1f}s dead air) — hanging up call",
+                self._silence_timeout_s,
+            )
+            await self.try_end("silence_timeout")
+        except asyncio.CancelledError:
+            pass
+
     def arm_hangup(self, reason: str) -> None:
         """Request a hangup once the bot finishes its current/closing line."""
         self._armed = True
@@ -110,15 +167,28 @@ class CallEndCoordinator:
         """Feed bot speech boundaries (from the transport) to time the hangup."""
         self._bot_speaking = speaking
         if speaking:
-            # Bot is talking (again) — wait for it to go quiet before hanging up.
+            self._silence_armed = True
             self._cancel_scheduled()
-        elif self._armed:
-            self._schedule_hangup()
+            self._cancel_silence_timer()
+        else:
+            self.reset_silence_timer()
+            if self._armed:
+                self._schedule_hangup()
 
-    def note_user_speaking(self) -> None:
-        """Caller re-engaged — abort any pending hangup; require a fresh end_call."""
+    def note_user_speaking(self, speaking: bool = True) -> None:
+        """Caller speech boundary — abort any pending hangup and reset silence timer."""
+        self._user_speaking = speaking
         self._armed = False
         self._cancel_scheduled()
+        if speaking:
+            self._cancel_silence_timer()
+        else:
+            self.reset_silence_timer()
+
+    def note_activity(self) -> None:
+        """Activity detected (e.g. user transcript). Resets silence timer without disarming goodbye/end_call."""
+        if self._silence_armed and not self._bot_speaking:
+            self.reset_silence_timer()
 
     def _schedule_hangup(self) -> None:
         if self._ended:
@@ -151,6 +221,7 @@ class CallEndCoordinator:
             self._ended = True
         logger.info("call end: {}", reason)
         self._cancel_watchdog_if_pending()
+        self._cancel_silence_timer()
         try:
             await self._task.cancel()
         except Exception as exc:
@@ -170,10 +241,22 @@ class ScheduledCallLimits:
 
 
 def schedule_max_call_duration(
-    task: PipelineTask, minutes: float, label: str, *, hangup_delay_s: float = 2.0
+    task: PipelineTask,
+    minutes: float,
+    label: str,
+    *,
+    hangup_delay_s: float = 2.0,
+    silence_timeout_s: float | None = None,
 ) -> ScheduledCallLimits:
     """Start optional background sleep then ``try_end(label)``; return coordinator + task."""
-    coordinator = CallEndCoordinator(task, hangup_delay_s=hangup_delay_s)
+    st_s = parse_silence_timeout_seconds(silence_timeout_s)
+    coordinator = CallEndCoordinator(
+        task, hangup_delay_s=hangup_delay_s, silence_timeout_s=st_s
+    )
+    if st_s > 0:
+        logger.info("silence timeout watchdog: {:.1f}s", st_s)
+    else:
+        logger.debug("silence timeout watchdog disabled")
     if minutes <= 0:
         logger.debug("max call duration watchdog disabled (minutes={})", minutes)
         return ScheduledCallLimits(coordinator=coordinator, watchdog_task=None)
@@ -303,6 +386,10 @@ class BotSpeechEndGate(FrameProcessor):
     (audio-accurate) instead of the LLM aggregator's turn-stopped event, which
     Gemini Live does not emit promptly after the ``end_call`` tool. Place this
     immediately after ``transport.output()`` in the pipeline.
+
+    Gemini Live does not emit ``UserStartedSpeakingFrame`` /
+    ``UserStoppedSpeakingFrame``; STS user activity is handled by
+    ``SilenceActivityTap`` on upstream transcriptions instead.
     """
 
     def __init__(self) -> None:
@@ -322,6 +409,44 @@ class BotSpeechEndGate(FrameProcessor):
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 c.note_bot_speaking(False)
             elif isinstance(frame, UserStartedSpeakingFrame):
-                c.note_user_speaking()
+                c.note_user_speaking(True)
+            elif isinstance(frame, UserStoppedSpeakingFrame):
+                c.note_user_speaking(False)
 
         await self.push_frame(frame, direction)
+
+
+class SilenceActivityTap(FrameProcessor):
+    """Reset silence watchdog on upstream user ``TranscriptionFrame``s.
+
+    Gemini Live pushes user transcripts **upstream** from the LLM
+    (``llm → user_aggregator → input``). Place this between
+    ``user_aggregator`` and ``llm`` so those frames are visible.
+
+    Only ``TranscriptionFrame`` + ``UPSTREAM`` is handled here. VAD speaking
+    frames are owned by ``BotSpeechEndGate`` (after ``transport.output()``);
+    treating ``UserStartedSpeakingFrame`` as activity here would restart the
+    30s timer while the user is still talking on cascade.
+    """
+
+    def __init__(self, coordinator: CallEndCoordinator | None = None) -> None:
+        super().__init__()
+        self._coordinator = coordinator
+
+    def bind(self, coordinator: CallEndCoordinator) -> None:
+        self._coordinator = coordinator
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        c = self._coordinator
+        if (
+            c is not None
+            and isinstance(frame, TranscriptionFrame)
+            and direction == FrameDirection.UPSTREAM
+            and (getattr(frame, "text", None) or "").strip()
+        ):
+            c.note_activity()
+
+        await self.push_frame(frame, direction)
+

@@ -42,6 +42,7 @@ from pipecat.transports.websocket.fastapi import (
 
 from call_limits import (
     BotSpeechEndGate,
+    SilenceActivityTap,
     end_call_function_schema,
     make_end_call_handler,
     parse_goodbye_hangup_delay_s,
@@ -144,11 +145,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     usage_tap = UsageMetricsTap(usage_accumulator)
     transcript_buffer.register(user_aggregator, assistant_aggregator)
 
+    silence_tap = SilenceActivityTap()
     end_gate = BotSpeechEndGate()
     pipeline = Pipeline([
         transport.input(),
         stt,
         user_aggregator,
+        silence_tap,
         llm,
         tts,
         transport.output(),
@@ -177,6 +180,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments, plivo_
     )
     coordinator = call_limits.coordinator
     end_gate.bind(coordinator)
+    silence_tap.bind(coordinator)
 
     async def handle_push_lead_data(params: FunctionCallParams):
         data = params.arguments
