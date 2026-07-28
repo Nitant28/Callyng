@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { SIDEBAR_NAV } from '../../../constants/sidebar';
 import { useDashboardData } from '../../../contexts/DashboardDataContext';
+import BhuvisXLogo from '../../brand/BhuvisXLogo';
 
 const formatCredits = (value) => {
   if (value == null) return '0';
@@ -17,10 +18,10 @@ const Sidebar = ({ onSignOut, isOpen = false }) => {
 
   return (
     <aside className={`cl-sidebar ${isOpen ? 'cl-sidebar--open' : ''}`}>
-      {/* Brand */}
       <div className="cl-sidebar__logo">
-        <div className="cl-sidebar__brand">Dev Client</div>
-        <div className="cl-sidebar__subtitle">AI Voice Platform</div>
+        <Link to="/app" className="cl-sidebar__logo-link" aria-label="BhuvisX home">
+          <BhuvisXLogo variant="light" size="md" />
+        </Link>
       </div>
 
       {/* Navigation */}

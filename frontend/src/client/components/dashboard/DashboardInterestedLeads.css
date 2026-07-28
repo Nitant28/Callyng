@@ -1,0 +1,37 @@
+.cl-interested-panel {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #E2E8F0);
+  border-radius: 12px;
+  box-shadow: var(--shadow, 0 1px 3px rgba(0,0,0,0.04));
+  overflow: hidden;
+}
+
+.cl-interested-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #E2E8F0);
+}
+
+.cl-interested-panel__count {
+  font-size: 12px;
+  color: #64748B;
+  font-weight: 500;
+}
+
+.cl-interested-panel__table-wrap {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.cl-interested-panel__table th,
+.cl-interested-panel__table td {
+  height: 44px;
+}
+
+.cl-interested-panel__empty {
+  text-align: center;
+  color: #94A3B8;
+  padding: 24px 12px !important;
+}

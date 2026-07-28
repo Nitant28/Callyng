@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CanvasBackground from '../../components/shared/CanvasBackground';
+import BhuvisXLogo from '../../components/brand/BhuvisXLogo';
 import { useTheme } from '../../hooks/useTheme';
 import clientApi from '../../api/client';
 import './Login.css';
@@ -70,8 +71,7 @@ const Login = () => {
 
       <header className="cl-login__header">
         <div className="cl-login__brand">
-          <span className="cl-login__brand-dot" aria-hidden />
-          <span className="cl-login__brand-name">AakashVani</span>
+          <BhuvisXLogo variant="dark" size="lg" />
         </div>
         <button type="button" className="cl-login__theme-btn" onClick={toggleTheme} aria-label="Toggle theme">
           <span className="material-symbols-outlined">

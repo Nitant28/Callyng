@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useTheme } from '../hooks/useTheme';
 
 import { useToast } from '../../contexts/ToastContext';
+import { useDashboardData } from '../../contexts/DashboardDataContext';
 import clientApi from '../../api/client';
 import LoaderOverlay from '../components/LoaderOverlay';
 import CallTranscriptDrawer from '../components/CallTranscriptDrawer';
@@ -10,6 +11,7 @@ import { Modal, Button } from '../../components/enterprise';
 import CustomMetadataFields from '../../components/client/CustomMetadataFields';
 import { buildMetadataFromCustomFields } from '../../utils/leadFormHelpers';
 import { sortLeadsCallStack } from '../../pages/client/LeadSheet/leadUtils';
+import { buildTurnsByLead, getLeadTurns } from '../utils/computeTurns';
 
 /** Friendly labels for canonical backend outcomes (call_outcomes.py / ┬º1.2). */
 const OUTCOME_LABELS = {
@@ -83,6 +85,7 @@ const CampaignDetail = () => {
   const { id } = useParams();
   const { theme, toggleTheme } = useTheme();
   const { showToast } = useToast();
+  const { calls: dashboardCalls } = useDashboardData();
 
   // Campaign Details & UI State
   const [campaign, setCampaign] = useState(null);
@@ -95,7 +98,7 @@ const CampaignDetail = () => {
   const [leadsOutcomeFilter, setLeadsOutcomeFilter] = useState('');
   const [outcomes, setOutcomes] = useState([]);
   const [leadsAttemptsFilter, setLeadsAttemptsFilter] = useState('');
-  const [leadsDateFilter, setLeadsDateFilter] = useState('');
+  const [leadsTurnsFilter, setLeadsTurnsFilter] = useState('');
 
   const [loading, setLoading] = useState(true);
   const [leadsLoading, setLeadsLoading] = useState(false);
@@ -284,7 +287,12 @@ const CampaignDetail = () => {
 
   useEffect(() => {
     setLeadsOffset(0);
-  }, [leadsOutcomeFilter, leadsStatusFilter, leadsAttemptsFilter, leadsDateFilter, leadsSearch, leadsLimit]);
+  }, [leadsOutcomeFilter, leadsStatusFilter, leadsAttemptsFilter, leadsTurnsFilter, leadsSearch, leadsLimit]);
+
+  const turnsIndex = useMemo(
+    () => buildTurnsByLead((dashboardCalls || []).filter((c) => String(c.campaign_id) === String(id))),
+    [dashboardCalls, id],
+  );
 
   // Adjust active tab slider indicator layout
   useEffect(() => {
@@ -337,13 +345,12 @@ const CampaignDetail = () => {
     setIsTranscriptOpen(true);
   };
 
-  // Frontend filtering for attempts and date (outcome is filtered server-side via leads.outcome)
+  // Frontend filtering for attempts / turns (status + outcome filtered server-side)
   const getFilteredLeads = () => {
     let filtered = [...leads];
 
-    // Filter by attempts
     if (leadsAttemptsFilter) {
-      filtered = filtered.filter(l => {
+      filtered = filtered.filter((l) => {
         const attempts = l.attempts || 0;
         if (leadsAttemptsFilter === '1') return attempts === 1;
         if (leadsAttemptsFilter === '2') return attempts === 2;
@@ -353,28 +360,13 @@ const CampaignDetail = () => {
       });
     }
 
-    // Filter by date
-    if (leadsDateFilter) {
-      const now = new Date();
-      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      filtered = filtered.filter(l => {
-        const leadDate = new Date(l.created_at || l.started_at);
-        if (leadsDateFilter === 'today') {
-          return leadDate >= startOfToday && leadDate < new Date(startOfToday.getTime() + 86400000);
-        }
-        if (leadsDateFilter === 'yesterday') {
-          const yesterday = new Date(startOfToday.getTime() - 86400000);
-          return leadDate >= yesterday && leadDate < startOfToday;
-        }
-        if (leadsDateFilter === '2d') {
-          return leadDate >= new Date(now.getTime() - 2 * 86400000);
-        }
-        if (leadsDateFilter === '7d') {
-          return leadDate >= new Date(now.getTime() - 7 * 86400000);
-        }
-        if (leadsDateFilter === '30d') {
-          return leadDate >= new Date(now.getTime() - 30 * 86400000);
-        }
+    if (leadsTurnsFilter) {
+      filtered = filtered.filter((l) => {
+        const turns = getLeadTurns(l, turnsIndex);
+        if (leadsTurnsFilter === '0') return turns === 0;
+        if (leadsTurnsFilter === '1-3') return turns >= 1 && turns <= 3;
+        if (leadsTurnsFilter === '4-8') return turns >= 4 && turns <= 8;
+        if (leadsTurnsFilter === '9+') return turns >= 9;
         return true;
       });
     }
@@ -612,7 +604,6 @@ const CampaignDetail = () => {
             status: leadsStatusFilter || undefined,
             outcome: leadsOutcomeFilter || undefined,
             attempts: leadsAttemptsFilter || undefined,
-            date: leadsDateFilter || undefined,
           },
           responseType: "blob",
         }
@@ -688,7 +679,7 @@ const CampaignDetail = () => {
   const completedPercent = total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0;
   const failedPercent = total > 0 ? ((campaign.failed_leads || 0) / total) * 100 : 0;
 
-  const renderKpiCard = (title, value, secondaryText, progressPercent, colorClass, iconName, onClick) => {
+  const renderKpiCard = (title, value, secondaryText, progressPercent, colorClass, iconName) => {
     const isBlue = colorClass.includes('blue');
     const isGreen = colorClass.includes('green');
     const isRed = colorClass.includes('red');
@@ -705,11 +696,7 @@ const CampaignDetail = () => {
     else if (isYellow) barColor = '#CA8A04';
 
     return (
-      <div
-        className="cl-kpi-card animate-fade-in cursor-pointer hover:shadow-lg transition-shadow"
-        onClick={onClick}
-        style={{ opacity: onClick ? 1 : 1 }}
-      >
+      <div className="cl-kpi-card cl-kpi-card--compact animate-fade-in">
         <div className="cl-kpi-card__header">
           <span className="cl-kpi-card__label">{title}</span>
           <div className={`cl-kpi-card__icon ${colorClass}`}>
@@ -759,13 +746,13 @@ const CampaignDetail = () => {
 
   const totalPages = Math.max(1, Math.ceil(totalLeadsCount / leadsLimit));
   const currentPage = Math.floor(leadsOffset / leadsLimit) + 1;
-  const hasClientFilters = Boolean(leadsAttemptsFilter || leadsDateFilter);
+  const hasClientFilters = Boolean(leadsAttemptsFilter || leadsTurnsFilter);
   const rangeStart = totalLeadsCount === 0 ? 0 : leadsOffset + 1;
   const rangeEnd = Math.min(leadsOffset + sortedLeads.length, totalLeadsCount);
 
   return (
     <>
-      <div className="cl-page-container">
+      <div className="cl-page-container cl-campaign-detail">
         {isPausing && (
           <div className="cl-campaign-alert animate-fade-in">
             <div className="cl-campaign-alert__icon">
@@ -810,7 +797,7 @@ const CampaignDetail = () => {
             {campaign.status !== 'cancelled' && campaign.status !== 'completed' && (
               <button
                 onClick={handleToggleState}
-                className={`cl-btn ${campaign.status === 'running' ? 'cl-btn--secondary' : 'cl-btn--primary'}`}
+                className={`cl-btn cl-btn--sm ${campaign.status === 'running' ? 'cl-btn--secondary' : 'cl-btn--primary'}`}
               >
                 {campaign.status === 'running' ? (
                   <span className="material-symbols-outlined">pause</span>
@@ -822,7 +809,7 @@ const CampaignDetail = () => {
               <button
                 onClick={() => setIsReleaseStuckOpen(true)}
                 disabled={isReleasingStuck}
-                className="cl-btn cl-btn--secondary"
+                className="cl-btn cl-btn--secondary cl-btn--sm"
               >
                 <span className="material-symbols-outlined">lock_open</span>
                 Release stuck leads
@@ -831,7 +818,7 @@ const CampaignDetail = () => {
             {campaign.status === 'paused' && (
               <button
                 onClick={handleCancelCampaign}
-                className="cl-btn cl-btn--danger-outline"
+                className="cl-btn cl-btn--danger-outline cl-btn--sm"
               >
                 <span className="material-symbols-outlined">cancel</span>
                 Cancel &amp; Refund
@@ -840,42 +827,19 @@ const CampaignDetail = () => {
           </div>
         </div>
 
-        <div className={`cl-compliance-banner animate-fade-in ${istStatus.isInside ? 'cl-compliance-banner--active' : 'cl-compliance-banner--inactive'}`}>
-          <div className="cl-compliance-banner__content">
-            <span className="material-symbols-outlined">{istStatus.isInside ? 'check_circle' : 'schedule'}</span>
-            <div>
-              <div className="cl-compliance-banner__title">{istStatus.isInside ? 'Calling Window Active' : 'Calling Window Paused (TRAI Compliance)'}</div>
-              <div className="cl-compliance-banner__detail">— {istStatus.formattedIst}</div>
+        <section className="campaign-kpi-section campaign-kpi-section--compact">
+          <div className="campaign-kpi-section__head">
+            <div className="campaign-kpi-grid">
+              {renderKpiCard('Total Leads', total.toLocaleString(), `${(campaign.completed_leads || 0).toLocaleString()} completed`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-blue', 'groups')}
+              {renderKpiCard('Interested', (campaign.interested_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.interested_leads || 0) / total * 100).toFixed(1) : 0}% conversion`, total > 0 ? ((campaign.interested_leads || 0) / total) * 100 : 0, 'icon-green', 'thumb_up')}
+              {renderKpiCard('On Call', liveCallingCount.toLocaleString(), liveCallingCount > 0 ? 'Active right now' : 'Idle', total > 0 ? (liveCallingCount / total) * 100 : 0, 'icon-purple', 'ring_volume')}
+              {renderKpiCard('Answered', (campaign.answered_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.answered_leads || 0) / total * 100).toFixed(1) : 0}% answer rate`, total > 0 ? ((campaign.answered_leads || 0) / total) * 100 : 0, 'icon-teal', 'call')}
+              {renderKpiCard('Pending', (campaign.pending_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.pending_leads || 0) / total * 100).toFixed(1) : 0}% remaining`, total > 0 ? ((campaign.pending_leads || 0) / total) * 100 : 0, 'icon-orange', 'pending')}
             </div>
-          </div>
-          <span className="cl-badge cl-badge--queued cl-compliance-banner__badge">9 AM - 9 PM IST enforced</span>
-        </div>
-
-        <section className="campaign-kpi-section">
-          <div className="campaign-kpi-grid">
-            {renderKpiCard('Total Leads', total.toLocaleString(), `${(campaign.completed_leads || 0).toLocaleString()} completed`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-blue', 'groups', () => { setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
-            {renderKpiCard('Interested', (campaign.interested_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.interested_leads || 0) / total * 100).toFixed(1) : 0}% conversion`, total > 0 ? ((campaign.interested_leads || 0) / total) * 100 : 0, 'icon-green', 'thumb_up', () => { setLeadsOutcomeFilter('Interested'); setActiveTab('leads'); })}
-            {renderKpiCard('On Call', liveCallingCount.toLocaleString(), liveCallingCount > 0 ? 'Active right now' : 'Idle', total > 0 ? (liveCallingCount / total) * 100 : 0, 'icon-purple', 'ring_volume', () => { setLeadsStatusFilter('calling'); setActiveTab('leads'); })}
-            {renderKpiCard('Answered', (campaign.answered_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.answered_leads || 0) / total * 100).toFixed(1) : 0}% answer rate`, total > 0 ? ((campaign.answered_leads || 0) / total) * 100 : 0, 'icon-teal', 'call', () => { setLeadsStatusFilter('completed'); setActiveTab('leads'); })}
-            {renderKpiCard('Pending', (campaign.pending_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.pending_leads || 0) / total * 100).toFixed(1) : 0}% remaining`, total > 0 ? ((campaign.pending_leads || 0) / total) * 100 : 0, 'icon-orange', 'pending', () => { setLeadsStatusFilter('pending'); setActiveTab('leads'); })}
-          </div>
-
-          {/* See more / secondary stats */}
-          {showMoreStats && (
-            <div className="campaign-kpi-grid campaign-kpi-grid--secondary animate-fade-in">
-              {renderKpiCard('Not Answered', (campaign.no_answer_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.no_answer_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.no_answer_leads || 0) / total) * 100 : 0, 'icon-orange', 'call_missed', () => { setLeadsStatusFilter('completed'); setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
-              {renderKpiCard('Failed', (campaign.failed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.failed_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.failed_leads || 0) / total) * 100 : 0, 'icon-red', 'cancel', () => { setLeadsStatusFilter('failed'); setLeadsOutcomeFilter(''); setActiveTab('leads'); })}
-              {renderKpiCard('Callback', (campaign.callback_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.callback_leads || 0) / total * 100).toFixed(1) : 0}% scheduled`, total > 0 ? ((campaign.callback_leads || 0) / total) * 100 : 0, 'icon-blue', 'event_available', () => { setLeadsOutcomeFilter(''); setLeadsStatusFilter('callback_scheduled'); setActiveTab('leads'); })}
-              {renderKpiCard('Completed', (campaign.completed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.completed_leads || 0) / total * 100).toFixed(1) : 0}% done`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-green', 'task_alt', () => { setLeadsStatusFilter('completed'); setActiveTab('leads'); })}
-              {renderKpiCard('Budget Used', `₹${(campaign.budget_used_credits || 0).toLocaleString()}`, `of ₹${(campaign.budget_credits || 0).toLocaleString()} allocated`, campaign.budget_credits > 0 ? ((campaign.budget_used_credits || 0) / campaign.budget_credits) * 100 : 0, 'icon-purple', 'monetization_on', null)}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
             <button
+              type="button"
               onClick={() => setShowMoreStats(s => !s)}
-              className="cl-btn cl-btn--secondary cl-btn--sm"
-              style={{ fontSize: '12px', gap: '4px' }}
+              className="cl-btn cl-btn--secondary cl-btn--sm campaign-kpi-section__more"
             >
               <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
                 {showMoreStats ? 'expand_less' : 'expand_more'}
@@ -883,24 +847,34 @@ const CampaignDetail = () => {
               {showMoreStats ? 'Hide stats' : 'See more stats'}
             </button>
           </div>
+
+          {showMoreStats && (
+            <div className="campaign-kpi-grid campaign-kpi-grid--secondary animate-fade-in">
+              {renderKpiCard('Not Answered', (campaign.no_answer_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.no_answer_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.no_answer_leads || 0) / total) * 100 : 0, 'icon-orange', 'call_missed')}
+              {renderKpiCard('Failed', (campaign.failed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.failed_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.failed_leads || 0) / total) * 100 : 0, 'icon-red', 'cancel')}
+              {renderKpiCard('Callback', (campaign.callback_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.callback_leads || 0) / total * 100).toFixed(1) : 0}% scheduled`, total > 0 ? ((campaign.callback_leads || 0) / total) * 100 : 0, 'icon-blue', 'event_available')}
+              {renderKpiCard('Completed', (campaign.completed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.completed_leads || 0) / total * 100).toFixed(1) : 0}% done`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-green', 'task_alt')}
+              {renderKpiCard('Budget Used', `₹${(campaign.budget_used_credits || 0).toLocaleString()}`, `of ₹${(campaign.budget_credits || 0).toLocaleString()} allocated`, campaign.budget_credits > 0 ? ((campaign.budget_used_credits || 0) / campaign.budget_credits) * 100 : 0, 'icon-purple', 'monetization_on')}
+            </div>
+          )}
         </section>
 
-        <div className="cl-tabs">
-          <button
-            onClick={() => setActiveTab('leads')}
-            className={`cl-tab ${activeTab === 'leads' ? 'active' : ''}`}
-          >
-            Leads
-          </button>
-          <button
-            onClick={() => setActiveTab('overview')}
-            className={`cl-tab ${activeTab === 'overview' ? 'active' : ''}`}
-          >
-            Overview
-          </button>
-        </div>
+        <section className="cl-leads-module">
+          <div className="cl-tabs">
+            <button
+              onClick={() => setActiveTab('leads')}
+              className={`cl-tab ${activeTab === 'leads' ? 'active' : ''}`}
+            >
+              Leads
+            </button>
+            <button
+              onClick={() => setActiveTab('overview')}
+              className={`cl-tab ${activeTab === 'overview' ? 'active' : ''}`}
+            >
+              Overview
+            </button>
+          </div>
 
-        <div>
           {activeTab === 'overview' && (
             <div className="cl-overview-grid animate-fade-in">
               <div className="cl-card flex flex-col gap-4 p-6">
@@ -950,10 +924,8 @@ const CampaignDetail = () => {
           )}
 
           {activeTab === 'leads' && (
-            <div className="animate-fade-in">
-              <div className="cl-card flex flex-col">
-                {/* Compact toolbar: search + filter + import/add controls in one row */}
-                <div className="p-4 border-b overflow-x-auto" style={{ borderColor: 'var(--border)' }}>
+            <div className="cl-leads-panel">
+                <div className="cl-leads-toolbar">
                   <div className="flex flex-nowrap gap-3 items-center min-w-max">
                     <div className="cl-search-wrap flex-shrink-0" style={{ flex: '0 0 220px', maxWidth: '320px' }}>
                       <span className="material-symbols-outlined cl-search-icon">search</span>
@@ -965,75 +937,14 @@ const CampaignDetail = () => {
                         onChange={(e) => setLeadsSearch(e.target.value)}
                       />
                     </div>
-                    {/* Filter dropdowns on the right */}
-                    <div className="flex flex-nowrap gap-2 items-center flex-shrink-0">
-                      {/* Outcome Filter */}
-                      <select
-                        value={leadsOutcomeFilter}
-                        onChange={(e) => setLeadsOutcomeFilter(e.target.value)}
-                        className="cl-select"
-                        title="Filter by outcome"
-                      >
-                        <option value="">All Outcomes</option>
-                        {outcomes.map((outcome) => (
-                          <option key={outcome} value={outcome}>
-                            {friendlyOutcome(outcome)}
-                          </option>
-                        ))}
-                      </select>
-
-                      {/* Status Filter */}
-                      <select
-                        value={leadsStatusFilter}
-                        onChange={(e) => setLeadsStatusFilter(e.target.value)}
-                        className="cl-select"
-                        title="Filter by status"
-                      >
-                        <option value="">All Status</option>
-                        <option value="pending">Pending</option>
-                        <option value="calling">Calling</option>
-                        <option value="callback_scheduled">Callback Due</option>
-                        <option value="completed">Completed</option>
-                        <option value="failed">Failed</option>
-                      </select>
-
-                      {/* Attempts Filter */}
-                      <select
-                        value={leadsAttemptsFilter}
-                        onChange={(e) => setLeadsAttemptsFilter(e.target.value)}
-                        className="cl-select"
-                        title="Filter by attempts"
-                      >
-                        <option value="">All Attempts</option>
-                        <option value="1">Attempt 1</option>
-                        <option value="2">Attempt 2</option>
-                        <option value="3">Attempt 3</option>
-                        <option value="4+">Attempt 4+</option>
-                      </select>
-
-                      {/* Date Filter */}
-                      <select
-                        value={leadsDateFilter}
-                        onChange={(e) => setLeadsDateFilter(e.target.value)}
-                        className="cl-select"
-                        title="Filter by date"
-                      >
-                        <option value="">All Dates</option>
-                        <option value="today">Today</option>
-                        <option value="yesterday">Yesterday</option>
-                        <option value="2d">Last 2 Days</option>
-                        <option value="7d">Last 7 Days</option>
-                        <option value="30d">Last 30 Days</option>
-                      </select>
-
-                      {/* Reset button */}
-                      {(leadsOutcomeFilter || leadsStatusFilter || leadsAttemptsFilter || leadsDateFilter) && (
+                    <div className="flex flex-nowrap gap-2 items-center flex-shrink-0 ml-auto">
+                      {(leadsOutcomeFilter || leadsStatusFilter || leadsAttemptsFilter || leadsTurnsFilter) && (
                         <button
                           onClick={() => {
                             setLeadsOutcomeFilter('');
                             setLeadsStatusFilter('');
                             setLeadsAttemptsFilter('');
-                            setLeadsDateFilter('');
+                            setLeadsTurnsFilter('');
                           }}
                           className="cl-btn cl-btn--secondary cl-btn--sm"
                           title="Reset filters"
@@ -1108,26 +1019,97 @@ const CampaignDetail = () => {
                   </div>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="cl-lead-table">
+                <div className="cl-leads-table-wrap">
+                  <table className="cl-lead-table cl-lead-table--dense">
                     <thead>
                       <tr>
                         <th>Name</th>
                         <th>Phone</th>
-                        <th>Status</th>
-                        <th>Outcome</th>
-                        <th>Attempts</th>
+                        <th>
+                          <div className="cl-th-filter">
+                            <span>Status</span>
+                            <select
+                              value={leadsStatusFilter}
+                              onChange={(e) => setLeadsStatusFilter(e.target.value)}
+                              className="cl-th-filter__select"
+                              aria-label="Filter by status"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <option value="">All</option>
+                              <option value="pending">Pending</option>
+                              <option value="calling">Calling</option>
+                              <option value="callback_scheduled">Callback Due</option>
+                              <option value="completed">Completed</option>
+                              <option value="failed">Failed</option>
+                            </select>
+                          </div>
+                        </th>
+                        <th>
+                          <div className="cl-th-filter">
+                            <span>Outcome</span>
+                            <select
+                              value={leadsOutcomeFilter}
+                              onChange={(e) => setLeadsOutcomeFilter(e.target.value)}
+                              className="cl-th-filter__select"
+                              aria-label="Filter by outcome"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <option value="">All</option>
+                              {outcomes.map((outcome) => (
+                                <option key={outcome} value={outcome}>
+                                  {friendlyOutcome(outcome)}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </th>
+                        <th>
+                          <div className="cl-th-filter">
+                            <span>Turns</span>
+                            <select
+                              value={leadsTurnsFilter}
+                              onChange={(e) => setLeadsTurnsFilter(e.target.value)}
+                              className="cl-th-filter__select"
+                              aria-label="Filter by turns"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <option value="">All</option>
+                              <option value="0">0</option>
+                              <option value="1-3">1–3</option>
+                              <option value="4-8">4–8</option>
+                              <option value="9+">9+</option>
+                            </select>
+                          </div>
+                        </th>
+                        <th>
+                          <div className="cl-th-filter">
+                            <span>Attempts</span>
+                            <select
+                              value={leadsAttemptsFilter}
+                              onChange={(e) => setLeadsAttemptsFilter(e.target.value)}
+                              className="cl-th-filter__select"
+                              aria-label="Filter by attempts"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <option value="">All</option>
+                              <option value="1">1</option>
+                              <option value="2">2</option>
+                              <option value="3">3</option>
+                              <option value="4+">4+</option>
+                            </select>
+                          </div>
+                        </th>
                         <th className="text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {leadsLoading ? (
                         <tr>
-                          <td colSpan="6" className="text-center text-muted">Loading leads...</td>
+                          <td colSpan="7" className="text-center text-muted">Loading leads...</td>
                         </tr>
                       ) : sortedLeads.length === 0 ? (
                         <tr>
-                          <td colSpan="6" className="text-center py-8">No leads found.</td>
+                          <td colSpan="7" className="text-center py-8">No leads found.</td>
                         </tr>
                       ) : (
                         sortedLeads.map((lead) => (
@@ -1155,6 +1137,7 @@ const CampaignDetail = () => {
                                 <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>—</span>
                               )}
                             </td>
+                            <td>{getLeadTurns(lead, turnsIndex)}</td>
                             <td>{lead.attempts || 0}</td>
                             <td className="text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex justify-end gap-2.5 flex-wrap">
@@ -1190,7 +1173,7 @@ const CampaignDetail = () => {
                   </table>
                 </div>
 
-                <div className="p-4 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3">
+                <div className="cl-leads-footer">
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="text-xs text-muted">
                       {hasClientFilters ? (
@@ -1212,10 +1195,11 @@ const CampaignDetail = () => {
                         className="cl-select cl-btn--sm"
                         style={{ minWidth: '72px', padding: '4px 8px' }}
                       >
+                        <option value={5}>5</option>
+                        <option value={10}>10</option>
                         <option value={25}>25</option>
                         <option value={50}>50</option>
                         <option value={100}>100</option>
-                        <option value={200}>200</option>
                       </select>
                     </label>
                   </div>
@@ -1239,7 +1223,6 @@ const CampaignDetail = () => {
                     </button>
                   </div>
                 </div>
-              </div>
             </div>
           )}
 
@@ -1307,7 +1290,7 @@ const CampaignDetail = () => {
               </button>
             </form>
           )}
-        </div>
+        </section>
       </div>
 
       <Modal

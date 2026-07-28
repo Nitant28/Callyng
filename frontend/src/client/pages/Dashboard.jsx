@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../../contexts/ToastContext';
 import clientApi from '../../api/client';
 import LoaderOverlay from '../components/LoaderOverlay';
+import CallTranscriptDrawer from '../components/CallTranscriptDrawer';
 import { useDashboardData } from '../../contexts/DashboardDataContext';
 import { calculateDashboard } from '../utils/analytics';
 
@@ -11,6 +12,10 @@ import DashboardKPIs from '../components/dashboard/DashboardKPIs';
 import DashboardAnalytics from '../components/dashboard/DashboardAnalytics';
 import DashboardActivity from '../components/dashboard/DashboardActivity';
 import DashboardCampaignTable from '../components/dashboard/DashboardCampaignTable';
+import DashboardScopeTabs from '../components/dashboard/DashboardScopeTabs';
+import CreditsWarningBanner from '../components/dashboard/CreditsWarningBanner';
+import DashboardInterestedLeads from '../components/dashboard/DashboardInterestedLeads';
+import MetricCard from '../components/shared/MetricCard';
 
 const getIstStatus = () => {
   const now = new Date();
@@ -37,11 +42,50 @@ const Dashboard = () => {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [confirmStart, setConfirmStart] = useState(null);
+  const [scopeTab, setScopeTab] = useState('overall');
+  const [drawerCall, setDrawerCall] = useState(null);
+
+  const runningCampaigns = useMemo(
+    () => (campaigns || []).filter((c) => c.status === 'running'),
+    [campaigns],
+  );
+
+  const scopeTabs = useMemo(
+    () => [
+      { id: 'overall', label: 'Overall' },
+      ...runningCampaigns.map((c) => ({
+        id: String(c.id),
+        label: c.name || 'Campaign',
+        live: true,
+      })),
+    ],
+    [runningCampaigns],
+  );
+
+  useEffect(() => {
+    if (scopeTab === 'overall') return;
+    if (!runningCampaigns.some((c) => String(c.id) === String(scopeTab))) {
+      setScopeTab('overall');
+    }
+  }, [runningCampaigns, scopeTab]);
+
+  const scopedCampaigns = useMemo(() => {
+    if (scopeTab === 'overall') return campaigns || [];
+    return (campaigns || []).filter((c) => String(c.id) === String(scopeTab));
+  }, [campaigns, scopeTab]);
+
+  const scopedCalls = useMemo(() => {
+    if (scopeTab === 'overall') return calls || [];
+    return (calls || []).filter((c) => String(c.campaign_id) === String(scopeTab));
+  }, [calls, scopeTab]);
+
+  const activeCampaign = scopedCampaigns[0] || null;
+  const isCampaignScope = scopeTab !== 'overall';
 
   const { graphData, activityEvents, metrics, campaignSummary } = calculateDashboard({
     balance,
-    campaigns,
-    calls,
+    campaigns: scopedCampaigns,
+    calls: scopedCalls,
     options: { period, customStart, customEnd },
   });
 
@@ -70,10 +114,26 @@ const Dashboard = () => {
     (c) => c.status === 'pausing' || (c.status === 'paused' && (c.calling_leads || 0) > 0),
   );
 
+  const totalLeads = Number(activeCampaign?.total_leads || 0);
+  const completedLeads = Number(activeCampaign?.completed_leads || 0);
+  const campaignProgress = totalLeads > 0 ? Math.round((completedLeads / totalLeads) * 1000) / 10 : 0;
+  const conversion = Number(
+    activeCampaign?.conversion_rate != null
+      ? activeCampaign.conversion_rate
+      : campaignSummary[0]?.conversion || 0,
+  );
+
   return (
     <div className="cl-page-container">
       <LoaderOverlay isVisible={isPausing} message="Finishing ongoing leads..." />
       <LoaderOverlay isVisible={loading} message="Loading metrics..." />
+
+      <CreditsWarningBanner
+        remainingCredits={metrics.remainingCredits}
+        onRecharge={() => showToast('Contact your account manager to recharge credits.', 'info')}
+      />
+
+      <DashboardScopeTabs tabs={scopeTabs} activeId={scopeTab} onChange={setScopeTab} />
 
       <DashboardHeader
         clientName={clientName}
@@ -89,28 +149,80 @@ const Dashboard = () => {
 
       {!loading && (
         <>
-          <DashboardKPIs
-            interestedLeads={metrics.interestedLeads}
-            answeredLeads={metrics.answeredLeads}
-            runningCampaigns={metrics.runningCampaigns}
-            liveCalls={metrics.liveCalls}
-            creditsUsed={metrics.creditsUsed}
-            remainingCredits={metrics.remainingCredits}
-          />
+          {isCampaignScope ? (
+            <div className="cl-dashboard-kpis cl-mb-section">
+              <MetricCard
+                label="Total Calls"
+                value={Number(scopedCalls.length).toLocaleString()}
+                icon="call"
+                iconClass="icon-blue"
+              />
+              <MetricCard
+                label="Interested Leads"
+                value={Number(metrics.interestedLeads || 0).toLocaleString()}
+                icon="thumb_up"
+                iconClass="icon-green"
+              />
+              <MetricCard
+                label="Answered Calls"
+                value={Number(metrics.answeredLeads || 0).toLocaleString()}
+                icon="call_received"
+                iconClass="icon-teal"
+              />
+              <MetricCard
+                label="Credits Used"
+                value={Number(metrics.creditsUsed || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                icon="monetization_on"
+                iconClass="icon-orange"
+              />
+              <MetricCard
+                label="Conversion %"
+                value={`${conversion}%`}
+                icon="trending_up"
+                iconClass="icon-purple"
+                footer={`Progress ${campaignProgress}%`}
+                progress={campaignProgress}
+              />
+            </div>
+          ) : (
+            <DashboardKPIs
+              interestedLeads={metrics.interestedLeads}
+              answeredLeads={metrics.answeredLeads}
+              runningCampaigns={metrics.runningCampaigns}
+              liveCalls={metrics.liveCalls}
+              creditsUsed={metrics.creditsUsed}
+              remainingCredits={metrics.remainingCredits}
+            />
+          )}
 
           <div className="cl-dashboard-grid cl-mb-section">
             <DashboardAnalytics
               chartData={graphData}
-              callsCount={calls.length || totalCalls}
+              callsCount={scopedCalls.length || (isCampaignScope ? 0 : totalCalls)}
               period={period}
               onPeriodChange={setPeriod}
             />
             <DashboardActivity activityEvents={activityEvents} liveCalls={metrics.liveCalls} />
           </div>
 
-          <DashboardCampaignTable campaigns={campaignSummary} onCampaignClick={handleCampaignClick} />
+          {isCampaignScope ? (
+            <DashboardInterestedLeads
+              calls={scopedCalls}
+              onOpenLead={(call) => setDrawerCall(call)}
+            />
+          ) : (
+            <DashboardCampaignTable campaigns={campaignSummary} onCampaignClick={handleCampaignClick} />
+          )}
         </>
       )}
+
+      <CallTranscriptDrawer
+        isOpen={Boolean(drawerCall)}
+        sessionCallId={drawerCall?.session_call_id || null}
+        leadName={drawerCall?.name || drawerCall?.lead_name || ''}
+        leadData={drawerCall}
+        onClose={() => setDrawerCall(null)}
+      />
 
       {confirmStart && (
         <div className="cl-modal-backdrop animate-fade-in" onClick={() => setConfirmStart(null)}>
@@ -132,7 +244,7 @@ const Dashboard = () => {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <p className="cl-body" style={{ color: '#374151', margin: 0 }}>
-                You are about to launch the outbound dialer queue. Please verify parameters:
+                You are about to launch the outbound dialer now. Please verify parameters:
               </p>
 
               <div style={{

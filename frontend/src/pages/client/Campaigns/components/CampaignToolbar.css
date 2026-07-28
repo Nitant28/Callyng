@@ -1,38 +1,38 @@
 .cmp-toolbar {
-  margin-bottom: var(--space-4);
+  margin-bottom: 0;
 }
 
 .cmp-toolbar__row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
+  gap: 8px;
+  margin-bottom: 8px;
   flex-wrap: wrap;
 }
 
 .cmp-toolbar__search {
   flex: 1;
-  min-width: 240px;
+  min-width: 200px;
   position: relative;
 }
 
 .cmp-toolbar__search .material-symbols-outlined {
   position: absolute;
-  left: var(--space-2);
+  left: 10px;
   top: 50%;
   transform: translateY(-50%);
-  font-size: var(--icon-size);
+  font-size: 18px;
   color: var(--text-muted);
   pointer-events: none;
 }
 
 .cmp-toolbar__search input {
   width: 100%;
-  height: var(--input-height);
-  padding: 0 var(--space-2) 0 calc(var(--space-2) + var(--icon-size) + var(--space-1));
+  height: 34px;
+  padding: 0 10px 0 34px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: var(--font-small);
+  border-radius: 8px;
+  font-size: 13px;
   font-weight: var(--weight-normal);
   background: var(--surface);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
@@ -45,15 +45,15 @@
 }
 
 .cmp-toolbar__select {
-  height: var(--input-height);
-  padding: 0 var(--space-2);
+  height: 34px;
+  padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: var(--font-small);
+  border-radius: 8px;
+  font-size: 13px;
   font-weight: var(--weight-medium);
   color: var(--text);
   background: var(--surface);
-  min-width: 160px;
+  min-width: 120px;
   cursor: pointer;
 }
 
@@ -61,8 +61,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  margin-top: var(--space-2);
-  padding: var(--space-2);
+  margin-top: 6px;
+  padding: 8px;
   border-radius: var(--radius-md);
   background: var(--primary-light);
   border: 1px solid #bfdbfe;
@@ -70,8 +70,8 @@
 }
 
 .cmp-toolbar__bulk button {
-  height: var(--button-height);
-  padding: 0 var(--space-2);
+  height: 32px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   background: var(--surface);
   border-radius: var(--radius-sm);

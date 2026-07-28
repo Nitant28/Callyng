@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { DashboardDataProvider, useDashboardData } from '../../contexts/DashboardDataContext';
@@ -56,25 +56,12 @@ const MainLayoutInner = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { balance } = useDashboardData();
   const clientName = balance?.client_name || localStorage.getItem('client_name') || 'Client';
-  const searchRef = useRef(null);
 
   const handleSignOut = () => {
     localStorage.removeItem('client_api_key');
     localStorage.removeItem('client_name');
     window.location.href = '/login';
   };
-
-  /* Ctrl+K / Cmd+K search focus shortcut */
-  useEffect(() => {
-    const handler = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        searchRef.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, []);
 
   const initials = clientName
     .split(' ')
@@ -104,9 +91,8 @@ const MainLayoutInner = ({ children }) => {
         />
       )}
 
-      {/* Top Navbar */}
+      {/* Top Navbar — search removed; dashboard tabs live on Dashboard page */}
       <header className="cl-topbar">
-        {/* Mobile menu toggle */}
         <button
           type="button"
           onClick={() => setSidebarOpen((v) => !v)}
@@ -124,18 +110,7 @@ const MainLayoutInner = ({ children }) => {
           <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>menu</span>
         </button>
 
-        {/* Global Search Bar (56px tall with Ctrl K aligned) */}
-        <div className="cl-topbar__search">
-          <span className="material-symbols-outlined cl-topbar__search-icon">search</span>
-          <input
-            ref={searchRef}
-            type="search"
-            className="cl-topbar__search-input"
-            placeholder="Search anything..."
-            aria-label="Search"
-          />
-          <span className="cl-topbar__kbd">⌘K</span>
-        </div>
+        <div className="cl-topbar__brand-slot" aria-hidden="true" />
 
         <div className="cl-topbar__spacer" />
 

@@ -1,8 +1,8 @@
 .cmp-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-  gap: var(--space-3);
-  align-items: stretch;
+  gap: 10px;
+  align-items: start;
 }
 
 @media (max-width: 480px) {

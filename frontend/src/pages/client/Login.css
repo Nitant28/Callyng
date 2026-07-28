@@ -16,29 +16,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 32px;
+  padding: 22px 32px;
 }
 
 .cl-login__brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-
-.cl-login__brand-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #2563eb;
-  box-shadow: 0 0 12px rgba(37, 99, 235, 0.45);
-}
-
-.cl-login__brand-name {
-  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: #0f172a;
+  gap: 0;
+  line-height: 0;
 }
 
 .cl-login__theme-btn {

@@ -69,8 +69,7 @@ const CampaignsPage = () => {
 
       {error && <p className="cmp-page__error">{error}</p>}
 
-      <div className="page-toolbar">
-        <CampaignToolbar
+      <CampaignToolbar
         search={search}
         onSearchChange={(v) => { setSearch(v); setPage(0); }}
         sortBy={sortBy}
@@ -78,18 +77,15 @@ const CampaignsPage = () => {
         tabs={tabs}
         activeTab={activeTab}
         onTabChange={(t) => { setActiveTab(t); setPage(0); }}
-        />
-      </div>
+      />
 
-      <div className="page-content">
-        <CampaignGrid
+      <CampaignGrid
         campaigns={paged}
         loading={loading}
         botNameById={botNameById}
         onOpen={(c) => navigate(`/app/campaigns/${c.id}`)}
         activeTab={activeTab}
-        />
-      </div>
+      />
 
       {!loading && filtered.length > PAGE_SIZE && (
         <footer className="cmp-page__pagination">
@@ -102,8 +98,6 @@ const CampaignsPage = () => {
           </div>
         </footer>
       )}
-
-      {/* Campaign creation modal removed from client UI */}
     </div>
   );
 };

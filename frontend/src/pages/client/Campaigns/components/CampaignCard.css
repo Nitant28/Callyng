@@ -1,37 +1,37 @@
 .cmp-card {
   display: flex;
   flex-direction: column;
-  padding: var(--space-card);
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-card);
+  border-radius: 10px;
   background: var(--surface);
-  box-shadow: var(--shadow-card);
-  height: 100%;
+  box-shadow: none;
+  height: auto;
   transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
 }
 
 .cmp-card:hover {
   border-color: var(--primary);
-  box-shadow: var(--shadow-card-hover);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 
 .cmp-card__head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
 .cmp-card__head h3 {
-  margin: 0 0 var(--space-1);
-  font-size: var(--font-h3);
+  margin: 0 0 2px;
+  font-size: 15px;
   font-weight: var(--weight-semibold);
   color: var(--text);
 }
 
 .cmp-card__date {
-  font-size: var(--font-caption);
+  font-size: 11px;
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -39,31 +39,31 @@
 .cmp-card__agent {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
-  margin: 0 0 var(--space-3);
-  font-size: var(--font-small);
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 
 .cmp-card__agent .material-symbols-outlined {
-  font-size: var(--icon-size);
+  font-size: 16px;
 }
 
 .cmp-card__metrics {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-2);
-  margin: 0 0 var(--space-3);
+  gap: 6px 8px;
+  margin: 0 0 8px;
 }
 
 .cmp-card__metrics div {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .cmp-card__metrics dt {
-  font-size: var(--font-caption);
+  font-size: 10px;
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -72,28 +72,28 @@
 
 .cmp-card__metrics dd {
   margin: 0;
-  font-size: var(--font-body);
+  font-size: 13px;
   font-weight: var(--weight-semibold);
   color: var(--text);
 }
 
 .cmp-card__footer {
-  margin-top: auto;
+  margin-top: 0;
 }
 
 .cmp-card__open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-1);
+  gap: 6px;
   width: 100%;
-  height: var(--button-height);
-  font-size: var(--font-small);
+  height: 32px;
+  font-size: 13px;
   font-weight: var(--weight-medium);
   color: var(--primary);
   background: var(--primary-light);
   border: none;
-  border-radius: var(--radius-button);
+  border-radius: 8px;
   cursor: pointer;
   transition: background var(--transition-fast);
 }
@@ -103,7 +103,7 @@
 }
 
 .cmp-card__open .material-symbols-outlined {
-  font-size: var(--icon-size);
+  font-size: 16px;
 }
 
 @media (max-width: 480px) {
