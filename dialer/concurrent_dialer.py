@@ -404,6 +404,9 @@ async def run_campaign_dialer(
         counts["callback_leads"],
     )
     try:
+        client_max_cached: int | None = None
+        client_max_cached_at = 0.0
+        last_terminalize_at = 0.0
         while True:
             if not await refresh_dialer_lock(campaign_id, lock_token):
                 logger.warning(
@@ -423,26 +426,23 @@ async def run_campaign_dialer(
                 )
                 break
 
-            actual_calling = await pool.fetchval(
-                """
-                SELECT COUNT(*)::int FROM leads
-                WHERE campaign_id = $1 AND client_id = $2 AND status = 'calling'
-                """,
-                campaign_id,
-                client_id,
-            )
-            effective_calling = max(
-                int(campaign["calling_leads"]),
-                int(actual_calling or 0),
-            )
-            client_max_row = await pool.fetchrow(
-                "SELECT max_concurrent_calls FROM clients WHERE id = $1",
-                client_id,
-            )
-            client_max = int(
-                (client_max_row["max_concurrent_calls"] if client_max_row else None)
-                or 5
-            )
+            now_mono = _time.monotonic()
+            # Prefer denorm calling_leads; stuck-lead release still runs on cooldown.
+            effective_calling = int(campaign["calling_leads"] or 0)
+            if (
+                client_max_cached is None
+                or (now_mono - client_max_cached_at) >= _RELEASE_STUCK_COOLDOWN_S
+            ):
+                client_max_row = await pool.fetchrow(
+                    "SELECT max_concurrent_calls FROM clients WHERE id = $1",
+                    client_id,
+                )
+                client_max_cached = int(
+                    (client_max_row["max_concurrent_calls"] if client_max_row else None)
+                    or 5
+                )
+                client_max_cached_at = now_mono
+            client_max = client_max_cached
             campaign_max = min(
                 int(campaign["max_concurrent_calls"]),
                 client_max,
@@ -450,7 +450,6 @@ async def run_campaign_dialer(
             slots = campaign_max - effective_calling
             if slots <= 0:
                 ck = _campaign_key(campaign_id, client_id)
-                now_mono = _time.monotonic()
                 last = _last_release_stuck_at.get(ck, 0.0)
                 if now_mono - last >= _RELEASE_STUCK_COOLDOWN_S:
                     _last_release_stuck_at[ck] = now_mono
@@ -464,7 +463,7 @@ async def run_campaign_dialer(
                             released,
                         )
                         continue
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
                 continue
 
             if not await check_plivo_balance(session):
@@ -486,15 +485,17 @@ async def run_campaign_dialer(
                 )
                 break
 
-            exhausted = await pg_db.terminalize_exhausted_leads(
-                pool, campaign_id, client_id
-            )
-            if exhausted:
-                logger.info(
-                    "Campaign {} terminalized {} exhausted lead(s)",
-                    campaign_id,
-                    exhausted,
+            if now_mono - last_terminalize_at >= _RELEASE_STUCK_COOLDOWN_S:
+                last_terminalize_at = now_mono
+                exhausted = await pg_db.terminalize_exhausted_leads(
+                    pool, campaign_id, client_id
                 )
+                if exhausted:
+                    logger.info(
+                        "Campaign {} terminalized {} exhausted lead(s)",
+                        campaign_id,
+                        exhausted,
+                    )
 
             leads = await pg_db.claim_leads_for_dialer(
                 pool, campaign_id, client_id, slots
@@ -503,12 +504,11 @@ async def run_campaign_dialer(
                 pending = int(campaign["pending_leads"])
                 callback = int(campaign["callback_leads"])
                 calling = int(campaign["calling_leads"])
-                actual_calling_loop = int(actual_calling or 0)
+                actual_calling_loop = calling
 
                 # Ghost ``calling`` rows (no live call_log) block the dialer. Skip live calls.
                 if calling > 0 or actual_calling_loop > 0:
                     ck = _campaign_key(campaign_id, client_id)
-                    now_mono = _time.monotonic()
                     last = _last_release_stuck_at.get(ck, 0.0)
                     if now_mono - last >= _RELEASE_STUCK_COOLDOWN_S:
                         _last_release_stuck_at[ck] = now_mono
@@ -582,7 +582,7 @@ async def run_campaign_dialer(
                         calling,
                         claimable,
                     )
-                await asyncio.sleep(5)
+                await asyncio.sleep(10)
                 continue
 
             bot_config = await pg_db.get_bot_config(

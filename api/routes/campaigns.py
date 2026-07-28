@@ -52,9 +52,11 @@ async def list_campaigns(
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
     search: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
     cid = client_id_uuid(client)
-    campaigns = await pg_db.list_campaigns(pool, cid)
+    campaigns = await pg_db.list_campaigns(pool, cid, limit=limit, offset=offset)
     interested_map = await pg_db.get_campaigns_interested_counts(pool, cid)
     for camp in campaigns:
         camp_id = str(camp.get("id"))

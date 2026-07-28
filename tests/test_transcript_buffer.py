@@ -1,4 +1,4 @@
-"""Unit tests for TranscriptBuffer real-time PG append path."""
+"""Unit tests for TranscriptBuffer debounced PG replace path."""
 
 from __future__ import annotations
 
@@ -37,18 +37,20 @@ async def test_transcript_buffer_skips_pg_without_session_id():
     buffer.register(user, assistant)
 
     with patch("call_transcript._pg_pool", return_value=object()), patch(
-        "call_transcript._pg_write", new_callable=AsyncMock
+        "call_transcript._pg_write_live", new_callable=AsyncMock
     ) as mock_write:
         msg = SimpleNamespace(content="hello", timestamp="2026-01-01T00:00:00+00:00")
         await user.fire("on_user_turn_stopped", None, msg)
+        await asyncio.sleep(0)
 
     assert len(buffer.turns) == 1
     assert buffer.turns[0]["role"] == "user"
+    assert buffer._pg_flush_task is None
     mock_write.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_transcript_buffer_appends_pg_with_session_id():
+async def test_transcript_buffer_debounced_replace_with_session_id():
     buffer = TranscriptBuffer(session_call_id="sess-1")
     user = _FakeAggregator()
     assistant = _FakeAggregator()
@@ -58,26 +60,33 @@ async def test_transcript_buffer_appends_pg_with_session_id():
             await coro
         return None
 
-    with patch("call_transcript._pg_pool", return_value="pool"), patch(
-        "call_transcript._pg_write", side_effect=_consume
+    with patch("call_transcript._TRANSCRIPT_DEBOUNCE_S", 0.05), patch(
+        "call_transcript._pg_pool", return_value="pool"
+    ), patch(
+        "call_transcript._pg_write_live", side_effect=_consume
     ) as mock_write, patch(
-        "db.postgres.append_transcript_turn", new_callable=AsyncMock
-    ) as append_mock:
+        "db.postgres.replace_transcript", new_callable=AsyncMock
+    ) as replace_mock:
         buffer.register(user, assistant)
         msg = SimpleNamespace(content="hello", timestamp="2026-01-01T00:00:00+00:00")
         await user.fire("on_user_turn_stopped", None, msg)
+        msg2 = SimpleNamespace(content="again", timestamp="2026-01-01T00:00:01+00:00")
+        await user.fire("on_user_turn_stopped", None, msg2)
 
-        assert len(buffer.turns) == 1
-        assert buffer.turns[0]["content"] == "hello"
+        assert len(buffer.turns) == 2
+        assert buffer._pg_flush_task is not None
+        await asyncio.sleep(0.15)
+        if buffer._pg_flush_task and not buffer._pg_flush_task.done():
+            await buffer._pg_flush_task
+
         assert mock_write.await_count == 1
-        append_mock.assert_called_once()
-        assert append_mock.call_args[0][1] == "sess-1"
-        assert append_mock.call_args[0][2] == "user"
-        assert append_mock.call_args[0][3] == "hello"
+        replace_mock.assert_called_once()
+        assert replace_mock.call_args[0][1] == "sess-1"
+        assert len(replace_mock.call_args[0][2]) == 2
 
 
 @pytest.mark.asyncio
-async def test_transcript_buffer_assistant_turn_with_session_id():
+async def test_transcript_buffer_assistant_turn_schedules_flush():
     buffer = TranscriptBuffer(session_call_id="sess-2")
     user = _FakeAggregator()
     assistant = _FakeAggregator()
@@ -87,10 +96,12 @@ async def test_transcript_buffer_assistant_turn_with_session_id():
             await coro
         return None
 
-    with patch("call_transcript._pg_pool", return_value="pool"), patch(
-        "call_transcript._pg_write", side_effect=_consume
+    with patch("call_transcript._TRANSCRIPT_DEBOUNCE_S", 0.05), patch(
+        "call_transcript._pg_pool", return_value="pool"
+    ), patch(
+        "call_transcript._pg_write_live", side_effect=_consume
     ) as mock_write, patch(
-        "db.postgres.append_transcript_turn", new_callable=AsyncMock
+        "db.postgres.replace_transcript", new_callable=AsyncMock
     ):
         buffer.register(user, assistant)
         msg = SimpleNamespace(
@@ -102,4 +113,7 @@ async def test_transcript_buffer_assistant_turn_with_session_id():
 
         assert len(buffer.turns) == 1
         assert buffer.turns[0]["role"] == "assistant"
+        await asyncio.sleep(0.15)
+        if buffer._pg_flush_task and not buffer._pg_flush_task.done():
+            await buffer._pg_flush_task
         assert mock_write.await_count == 1

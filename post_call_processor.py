@@ -20,6 +20,56 @@ _SHORT_CALL_SECONDS = 90
 _SHORT_CALL_RETRY_CAP_MIN = 1
 EARLY_DISCONNECT_MAX_SECONDS = 30
 
+# Minimum number of transcript turns required to accept an "Interested" outcome.
+_MIN_TURNS_FOR_INTERESTED = 5
+
+
+def count_transcript_turns(transcript: list[dict] | None) -> tuple[int, int]:
+    """Count assistant and user turns in a raw transcript.
+
+    Returns (assistant_turns, user_turns).
+    """
+    assistant_turns = 0
+    user_turns = 0
+    for turn in transcript or []:
+        role = (turn or {}).get("role")
+        if role == "assistant":
+            assistant_turns += 1
+        elif role == "user":
+            user_turns += 1
+    return assistant_turns, user_turns
+
+
+def validate_interested_outcome(outcome: str, transcript: list[dict] | None) -> str:
+    """Guard against premature "Interested" outcomes on very short calls.
+
+    Applies only when ``outcome`` is "Interested". Every other outcome
+    (Not_Interested, Busy, Callback_Requested, Unknown, etc.) passes through
+    unchanged, preserving existing behavior.
+
+    Rule: total_turns = assistant_turns + user_turns.
+    - total_turns > 5  -> keep "Interested".
+    - total_turns <= 5 -> downgrade final lead status to "Unknown".
+    """
+    if (outcome or "").strip().casefold() != "interested":
+        return outcome
+
+    assistant_turns, user_turns = count_transcript_turns(transcript)
+    total_turns = assistant_turns + user_turns
+
+    if total_turns > _MIN_TURNS_FOR_INTERESTED:
+        return outcome
+
+    logger.info(
+        "post_call_processor: downgrading Interested->Unknown, "
+        "total_turns={} (assistant={}, user={}) <= {}",
+        total_turns,
+        assistant_turns,
+        user_turns,
+        _MIN_TURNS_FOR_INTERESTED,
+    )
+    return "Unknown"
+
 
 def apply_early_disconnect_policy(
     *,
@@ -376,6 +426,11 @@ async def process_post_call(
         outcome = policy_outcome
         extraction_json = dict(extraction_json or {})
         extraction_json["intent_status"] = policy_outcome
+
+    # Guard rail: only very short calls with an "Interested" outcome are
+    # affected. The extraction JSON is left untouched; only the final lead
+    # status/outcome used downstream is overridden to "Unknown".
+    outcome = validate_interested_outcome(outcome, transcript)
 
     fire_webhook = False
     applied = False

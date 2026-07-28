@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -18,6 +19,30 @@ from pipecat.transcriptions.language import Language
 
 from lead_context import LeadContext
 from background_tasks import spawn_background_task
+
+
+def _log_prompt_summary(system_instruction: str, bootstrap_messages: list) -> None:
+    """Info-level size/hash only; full bodies at debug to avoid event-loop stalls."""
+    try:
+        text = system_instruction or ""
+        digest = hashlib.md5(text.encode("utf-8", errors="replace")).hexdigest()[:8]
+        logger.info(
+            "[prompt] system_instruction len={} hash={}",
+            len(text),
+            digest,
+        )
+        logger.debug("[prompt] system_instruction for call ->\n{}", text)
+        for idx, msg in enumerate(bootstrap_messages or []):
+            content = msg.get("content") if isinstance(msg, dict) else str(msg)
+            content_s = content if isinstance(content, str) else str(content)
+            logger.info(
+                "[prompt] bootstrap[{}] len={}",
+                idx,
+                len(content_s),
+            )
+            logger.debug("[prompt] bootstrap[{}] -> {}", idx, content_s)
+    except Exception:
+        logger.debug("[prompt] Failed to log bootstrap messages", exc_info=True)
 
 _STS_SCRIPT_ATTRS = (
     "build_system_instruction",
@@ -485,14 +510,7 @@ def resolve_sts_runtime(body: dict[str, Any]) -> StsRuntime:
                 runtime.script_id,
                 version,
             )
-            # Log assembled prompts for observability before the call is started.
-            try:
-                logger.info("[prompt] system_instruction for call ->\n{}", runtime.system_instruction)
-                for idx, msg in enumerate(runtime.bootstrap_messages):
-                    content = msg.get("content") if isinstance(msg, dict) else str(msg)
-                    logger.info("[prompt] bootstrap[{}] -> {}", idx, content)
-            except Exception:
-                logger.debug("[prompt] Failed to log bootstrap messages", exc_info=True)
+            _log_prompt_summary(runtime.system_instruction, runtime.bootstrap_messages)
             return runtime
         if prefetch.get("source") == "script_config":
             logger.warning(
@@ -505,14 +523,7 @@ def resolve_sts_runtime(body: dict[str, Any]) -> StsRuntime:
     ctx = LeadContext.from_body(body)
     runtime = _sts_from_module(mod, ctx)
     logger.info("STS script active: {} ({})", runtime.script_id, runtime.module_name)
-    # Log assembled prompts for observability before the call is started.
-    try:
-        logger.info("[prompt] system_instruction for call ->\n{}", runtime.system_instruction)
-        for idx, msg in enumerate(runtime.bootstrap_messages):
-            content = msg.get("content") if isinstance(msg, dict) else str(msg)
-            logger.info("[prompt] bootstrap[{}] -> {}", idx, content)
-    except Exception:
-        logger.debug("[prompt] Failed to log bootstrap messages", exc_info=True)
+    _log_prompt_summary(runtime.system_instruction, runtime.bootstrap_messages)
     return runtime
 
 

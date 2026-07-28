@@ -31,18 +31,25 @@ async def clear_warmup(call_id: str) -> None:
 
 
 async def wait_for_warmup(call_id: str, *, timeout_s: float = 3.0) -> bool:
-    """Poll Redis until warmup is ready or timeout. Returns True if ready."""
+    """Poll Redis until warmup is ready or timeout. Returns True if ready.
+
+    Only deletes the key on success so a late ``set_warmup_ready`` (xx=True)
+    can still land when we timed out while the key was still ``pending``.
+    Abandoned keys expire via ``WARMUP_TTL_SECONDS``.
+    """
     redis = get_redis()
     key = _warmup_key(call_id)
     deadline = time.monotonic() + timeout_s
-    try:
-        while time.monotonic() < deadline:
-            value = await redis.get(key)
-            if value == "ready":
-                return True
-            if value is None:
-                return False
-            await asyncio.sleep(0.1)
-        return (await redis.get(key)) == "ready"
-    finally:
+    while time.monotonic() < deadline:
+        value = await redis.get(key)
+        if value == "ready":
+            await redis.delete(key)
+            return True
+        if value is None:
+            return False
+        await asyncio.sleep(0.1)
+    value = await redis.get(key)
+    if value == "ready":
         await redis.delete(key)
+        return True
+    return False
