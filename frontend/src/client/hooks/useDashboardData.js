@@ -20,52 +20,10 @@ const dedupeCalls = (rows) => {
   return sortCalls([...map.values()]);
 };
 
-const enrichCampaignsWithStats = async (campaigns) => {
-  if (!campaigns.length) return [];
-
-  return Promise.all(
-    campaigns.map(async (camp) => {
-      try {
-        const res = await clientApi.get(`/api/campaigns/${camp.id}/stats`);
-        const stats = res.data?.stats || {};
-        return {
-          ...camp,
-          interested_leads: stats.interested_leads ?? camp.interested_leads ?? 0,
-          answered_leads: stats.answered_leads ?? camp.answered_leads ?? 0,
-          calling_leads: stats.calling_leads ?? camp.calling_leads ?? 0,
-          completed_leads: stats.completed_leads ?? camp.completed_leads ?? 0,
-          conversion_rate: stats.conversion_rate ?? camp.conversion_rate ?? null,
-          budget_used_credits: stats.budget_used_credits ?? camp.budget_used_credits ?? 0,
-        };
-      } catch {
-        return camp;
-      }
-    }),
-  );
-};
-
-/** Global call log + per-campaign calls merged (deduped). */
-const fetchAllCalls = async (campaignList = []) => {
-  const requests = [
-    clientApi.get('/api/calls', { params: { limit: 2000 } }),
-  ];
-
-  campaignList.forEach((camp) => {
-    requests.push(
-      clientApi.get(`/api/campaigns/${camp.id}/calls`, { params: { limit: 200 } }),
-    );
-  });
-
-  const results = await Promise.allSettled(requests);
-  const merged = [];
-
-  results.forEach((result) => {
-    if (result.status === 'fulfilled') {
-      merged.push(...(result.value.data?.calls || []));
-    }
-  });
-
-  return dedupeCalls(merged);
+/** Recent calls from the global list endpoint (no per-campaign fan-out). */
+const fetchAllCalls = async () => {
+  const res = await clientApi.get('/api/calls', { params: { limit: 100 } });
+  return dedupeCalls(res.data?.calls || []);
 };
 
 const useDashboardData = () => {
@@ -93,13 +51,12 @@ const useDashboardData = () => {
 
   const loadCampaigns = useCallback(async () => {
     try {
+      // list_campaigns already attaches interested_leads + conversion_rate
+      // and denorm status counters — no N+1 /stats enrichment on the home dash.
       const res = await clientApi.get('/api/campaigns');
       const list = res.data?.campaigns || [];
       campaignsRef.current = list;
       setCampaigns(list);
-      const enriched = await enrichCampaignsWithStats(list);
-      campaignsRef.current = enriched;
-      setCampaigns(enriched);
       return list;
     } catch {
       setCampaigns([]);
@@ -108,10 +65,9 @@ const useDashboardData = () => {
     }
   }, []);
 
-  const loadCalls = useCallback(async (campaignList) => {
+  const loadCalls = useCallback(async () => {
     try {
-      const list = campaignList ?? campaignsRef.current;
-      const merged = await fetchAllCalls(list);
+      const merged = await fetchAllCalls();
       setCalls(merged);
       setTotalCalls(merged.length);
     } catch (err) {
@@ -126,8 +82,8 @@ const useDashboardData = () => {
     else setRefreshing(true);
 
     await loadBalance();
-    const list = await loadCampaigns();
-    await loadCalls(list);
+    await loadCampaigns();
+    await loadCalls();
 
     setLoading(false);
     setRefreshing(false);
@@ -156,10 +112,10 @@ const useDashboardData = () => {
           (c.status === 'paused' && (c.calling_leads || 0) > 0),
       );
 
-      const list = await loadCampaigns();
-      await loadCalls(list);
+      await loadCampaigns();
+      await loadCalls();
       if (!cancelled) {
-        timer = setTimeout(poll, isLive ? 2000 : 5000);
+        timer = setTimeout(poll, isLive ? 5000 : 15000);
       }
     };
 

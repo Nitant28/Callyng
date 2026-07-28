@@ -25,4 +25,4 @@ RUN mkdir -p /app/data
 
 EXPOSE 7860
 
-CMD ["uv", "run", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]
+CMD ["uv", "run", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1", "--no-access-log"]

@@ -34,14 +34,13 @@ async def _resolve_call_log(pool, session_call_id: str, client_id: UUID) -> dict
 async def list_calls(
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
-    limit: int = Query(2000, ge=1, le=2000),
+    limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     search: Optional[str] = Query(None),
 ):
     """
-    List calls in stack order: running calls pinned to top, then by recency.
-    Stack structure: running → recently ended → older calls
-    Default limit is 2000 (full stack) to support stack-based ordering.
+    List calls by recency (stack ordering for running calls is handled on the frontend).
+    Default limit is 100; heavy JSONB fields are omitted from list rows.
     """
     cid = client_id_uuid(client)
     calls, total_count = await pg_db.list_call_logs(pool, cid, limit=limit, offset=offset, search=search)

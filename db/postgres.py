@@ -13,8 +13,14 @@ from uuid import UUID
 
 import asyncpg
 from loguru import logger
+import time
 
 _pool: asyncpg.Pool | None = None
+
+# Short TTL caches for dashboard poll traffic (10s staleness is fine).
+_STATS_CACHE_TTL_S = 10.0
+_outcome_stats_cache: dict[str, tuple[float, dict]] = {}
+_interested_counts_cache: dict[str, tuple[float, dict[str, int]]] = {}
 
 # Worst-case credits reserved per lead at dialer claim time (see dialer/cost_guard.py).
 RESERVE_CREDITS_PER_LEAD = Decimal("2.0")
@@ -317,6 +323,8 @@ def database_url() -> str | None:
 
 async def _init_connection(conn: asyncpg.Connection) -> None:
     """Register JSON codec so JSONB columns are auto-parsed to Python objects."""
+    await conn.execute("SET statement_timeout = '15s'")
+    await conn.execute("SET idle_in_transaction_session_timeout = '15s'")
     await conn.set_type_codec(
         "jsonb",
         encoder=json.dumps,
@@ -341,7 +349,7 @@ async def create_db_pool(dsn: str) -> asyncpg.Pool:
         dsn=dsn,
         min_size=min_size,
         max_size=max_size,
-        command_timeout=30,
+        command_timeout=15,
         init=_init_connection,
     )
     return pool
@@ -1121,14 +1129,23 @@ async def get_campaign_admin(
     return record_to_dict(row)
 
 
-async def list_campaigns(pool: asyncpg.Pool, client_id: UUID) -> list[dict]:
+async def list_campaigns(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
     rows = await pool.fetch(
         """
         SELECT * FROM campaigns
         WHERE client_id = $1
         ORDER BY created_at DESC
+        LIMIT $2 OFFSET $3
         """,
         client_id,
+        limit,
+        offset,
     )
     return records_to_dicts(rows)
 
@@ -2565,16 +2582,29 @@ async def get_campaign_outcome_stats(
     client_id: UUID,
     campaign_id: UUID,
 ) -> dict:
-    """Outcome and status counters for campaign detail stats (single source of truth)."""
+    """Outcome and status counters for campaign detail stats.
+
+    Status buckets prefer denormalized ``campaigns`` columns; outcome buckets
+    still scan ``leads``. Results are cached for ``_STATS_CACHE_TTL_S``.
+    """
+    cache_key = f"{client_id}:{campaign_id}"
+    cached = _outcome_stats_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < _STATS_CACHE_TTL_S:
+        return dict(cached[1])
+
+    camp = await pool.fetchrow(
+        """
+        SELECT total_leads, pending_leads, calling_leads, callback_leads,
+               completed_leads, failed_leads
+        FROM campaigns
+        WHERE id = $1 AND client_id = $2
+        """,
+        campaign_id,
+        client_id,
+    )
     row = await pool.fetchrow(
         """
         SELECT
-            COUNT(*)::int AS total_leads,
-            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_leads,
-            COUNT(*) FILTER (WHERE status = 'calling')::int AS calling_leads,
-            COUNT(*) FILTER (WHERE status = 'callback_scheduled')::int AS callback_leads,
-            COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_leads,
-            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_leads,
             COUNT(*) FILTER (WHERE outcome = 'Interested')::int AS interested_leads,
             COUNT(*) FILTER (WHERE outcome = 'Not_Interested')::int AS not_interested_leads,
             COUNT(*) FILTER (
@@ -2590,25 +2620,48 @@ async def get_campaign_outcome_stats(
         client_id,
         campaign_id,
     )
-    if not row:
-        return {
-            "total_leads": 0,
-            "pending_leads": 0,
-            "calling_leads": 0,
-            "callback_leads": 0,
-            "completed_leads": 0,
-            "failed_leads": 0,
-            "interested_leads": 0,
-            "not_interested_leads": 0,
-            "answered_leads": 0,
-            "not_answered_leads": 0,
-            "busy_leads": 0,
-            "conversion_rate": None,
-        }
-    stats = dict(row)
+    empty = {
+        "total_leads": 0,
+        "pending_leads": 0,
+        "calling_leads": 0,
+        "callback_leads": 0,
+        "completed_leads": 0,
+        "failed_leads": 0,
+        "interested_leads": 0,
+        "not_interested_leads": 0,
+        "answered_leads": 0,
+        "not_answered_leads": 0,
+        "busy_leads": 0,
+        "conversion_rate": None,
+    }
+    if not camp and not row:
+        return empty
+
+    stats = dict(empty)
+    if camp:
+        for key in (
+            "total_leads",
+            "pending_leads",
+            "calling_leads",
+            "callback_leads",
+            "completed_leads",
+            "failed_leads",
+        ):
+            stats[key] = int(camp.get(key) or 0)
+    if row:
+        for key in (
+            "interested_leads",
+            "not_interested_leads",
+            "answered_leads",
+            "not_answered_leads",
+            "busy_leads",
+        ):
+            stats[key] = int(row.get(key) or 0)
+
     total = int(stats.get("total_leads") or 0)
     interested = int(stats.get("interested_leads") or 0)
     stats["conversion_rate"] = round((interested / total) * 100, 2) if total > 0 else None
+    _outcome_stats_cache[cache_key] = (time.monotonic(), dict(stats))
     return stats
 
 
@@ -2617,6 +2670,11 @@ async def get_campaigns_interested_counts(
     client_id: UUID,
 ) -> dict[str, int]:
     """Map campaign_id → interested lead count for list views."""
+    cache_key = str(client_id)
+    cached = _interested_counts_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < _STATS_CACHE_TTL_S:
+        return dict(cached[1])
+
     rows = await pool.fetch(
         """
         SELECT campaign_id, COUNT(*)::int AS interested_leads
@@ -2626,7 +2684,9 @@ async def get_campaigns_interested_counts(
         """,
         client_id,
     )
-    return {str(r["campaign_id"]): int(r["interested_leads"] or 0) for r in rows}
+    result = {str(r["campaign_id"]): int(r["interested_leads"] or 0) for r in rows}
+    _interested_counts_cache[cache_key] = (time.monotonic(), dict(result))
+    return result
 
 
 async def update_lead_fields(
@@ -2940,6 +3000,21 @@ async def get_call_log_by_session(
     return record_to_dict(row)
 
 
+async def call_log_in_progress(
+    pool: asyncpg.Pool,
+    session_call_id: str,
+) -> bool:
+    """Lightweight check used by /ws teardown (avoids SELECT * + transcript)."""
+    row = await pool.fetchval(
+        """
+        SELECT in_progress FROM call_logs
+        WHERE session_call_id = $1
+        """,
+        session_call_id,
+    )
+    return bool(row)
+
+
 async def get_call_log_by_call_sid(
     pool: asyncpg.Pool,
     call_sid: str,
@@ -3215,6 +3290,7 @@ async def append_transcript_turn(
     content: str,
     ts: datetime,
 ) -> None:
+    """Deprecated: prefer ``replace_transcript`` with a full in-memory snapshot."""
     turn = [{"role": role, "content": content, "ts": ts.isoformat()}]
     await pool.execute(
         """
@@ -3223,6 +3299,23 @@ async def append_transcript_turn(
         WHERE session_call_id = $2 AND in_progress = TRUE
         """,
         turn,
+        session_call_id,
+    )
+
+
+async def replace_transcript(
+    pool: asyncpg.Pool,
+    session_call_id: str,
+    transcript: list[dict],
+) -> None:
+    """Replace the live transcript JSONB with a full in-memory snapshot."""
+    await pool.execute(
+        """
+        UPDATE call_logs
+        SET transcript = $1::jsonb
+        WHERE session_call_id = $2 AND in_progress = TRUE
+        """,
+        transcript,
         session_call_id,
     )
 
@@ -3334,7 +3427,10 @@ async def list_call_logs(
     campaign_id: UUID | None = None,
 ) -> tuple[list[dict], int]:
     """
-    Return all calls by recency. Stack ordering (running calls first) is handled on frontend.
+    Return call list rows by recency without heavy JSONB blobs.
+
+    Excludes transcript, call_data, extraction_json, plivo_hangup_json —
+    fetch those via get_call_log / detail endpoints.
     """
     base_query = "FROM call_logs cl LEFT JOIN leads l ON cl.lead_id = l.id"
     conditions = []
@@ -3364,7 +3460,22 @@ async def list_call_logs(
     
     args.extend([limit, offset])
     rows = await pool.fetch(
-        f"SELECT cl.*, l.name, l.phone {base_query} {where_clause} ORDER BY cl.created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+        f"""
+        SELECT
+            cl.id, cl.session_call_id, cl.client_id, cl.campaign_id,
+            cl.lead_id, cl.bot_config_id, cl.route, cl.call_sid,
+            cl.started_at, cl.ended_at, cl.created_at,
+            cl.in_progress, cl.duration_seconds, cl.billed_minutes,
+            cl.credits_charged, cl.outcome, cl.qualified,
+            cl.usage_prompt_tokens, cl.usage_completion_tokens,
+            cl.usage_total_tokens, cl.usage_tts_characters,
+            cl.recording_url, cl.extraction_model, cl.extraction_error,
+            cl.cost_usd, cl.quality_score, cl.flagged_for_review,
+            l.name, l.phone
+        {base_query} {where_clause}
+        ORDER BY cl.created_at DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+        """,
         *args
     )
     

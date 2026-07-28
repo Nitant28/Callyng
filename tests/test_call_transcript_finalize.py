@@ -9,6 +9,7 @@ import pytest
 
 from call_log_db import (
     get_row_id_by_session,
+    init_db,
     insert_call_log,
     update_call_log_extraction,
 )
@@ -63,6 +64,7 @@ def test_resolve_sqlite_row_id_passthrough():
 def test_resolve_sqlite_row_id_recovery(tmp_path, monkeypatch):
     db = tmp_path / "call_logs.db"
     monkeypatch.setenv("CALL_LOG_DB_PATH", str(db))
+    init_db(str(db))
 
     row_id = insert_call_log(
         session_call_id="sess-recover",
@@ -93,6 +95,7 @@ def test_update_call_log_extraction_skips_invalid_row_id(tmp_path, monkeypatch):
 def test_get_row_id_by_session(tmp_path, monkeypatch):
     db = tmp_path / "call_logs.db"
     monkeypatch.setenv("CALL_LOG_DB_PATH", str(db))
+    init_db(str(db))
     assert get_row_id_by_session("missing") is None
     rid = insert_call_log(
         session_call_id="sess-a",
