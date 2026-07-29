@@ -103,3 +103,96 @@ async def test_prewarm_disabled_by_default_sets_ready(monkeypatch):
 
     set_ready.assert_awaited_once_with("call-xyz")
     client_cls.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_silence_timeout_does_not_fire_before_greeting():
+    from call_limits import CallEndCoordinator
+    import asyncio
+
+    mock_task = AsyncMock()
+    coordinator = CallEndCoordinator(mock_task, hangup_delay_s=0.1, silence_timeout_s=0.1)
+
+    # Pre-greeting silence should NOT trigger hangup because bot hasn't spoken yet (_silence_armed = False)
+    await asyncio.sleep(0.2)
+    mock_task.cancel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_silence_timeout_triggers_after_bot_speaks():
+    from call_limits import CallEndCoordinator
+    import asyncio
+
+    mock_task = AsyncMock()
+    coordinator = CallEndCoordinator(mock_task, hangup_delay_s=0.1, silence_timeout_s=0.1)
+
+    # Bot speaks then stops → arms and starts 0.1s watchdog
+    coordinator.note_bot_speaking(True)
+    coordinator.note_bot_speaking(False)
+
+    await asyncio.sleep(0.2)
+    mock_task.cancel.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_silence_activity_tap_resets_timer():
+    from call_limits import CallEndCoordinator, SilenceActivityTap
+    from pipecat.frames.frames import TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    import asyncio
+
+    mock_task = AsyncMock()
+    coordinator = CallEndCoordinator(mock_task, hangup_delay_s=0.1, silence_timeout_s=0.15)
+    tap = SilenceActivityTap(coordinator)
+
+    coordinator.note_bot_speaking(True)
+    coordinator.note_bot_speaking(False)
+
+    # Mid-silence upstream transcript activity resets timer
+    await asyncio.sleep(0.08)
+    await tap.process_frame(
+        TranscriptionFrame("hello", "user", "2026-01-01T00:00:00Z"),
+        FrameDirection.UPSTREAM,
+    )
+
+    await asyncio.sleep(0.05)
+    mock_task.cancel.assert_not_called()
+
+    await asyncio.sleep(0.15)
+    mock_task.cancel.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_silence_activity_tap_ignores_downstream_transcription():
+    from call_limits import CallEndCoordinator, SilenceActivityTap
+    from pipecat.frames.frames import TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    import asyncio
+
+    mock_task = AsyncMock()
+    coordinator = CallEndCoordinator(mock_task, hangup_delay_s=0.1, silence_timeout_s=0.1)
+    tap = SilenceActivityTap(coordinator)
+
+    coordinator.note_bot_speaking(True)
+    coordinator.note_bot_speaking(False)
+
+    await asyncio.sleep(0.05)
+    # Downstream (e.g. assistant) transcript must not reset the timer
+    await tap.process_frame(
+        TranscriptionFrame("bot line", "assistant", "2026-01-01T00:00:00Z"),
+        FrameDirection.DOWNSTREAM,
+    )
+    await asyncio.sleep(0.1)
+    mock_task.cancel.assert_called_once()
+
+
+def test_parse_silence_timeout_defaults_to_45():
+    from call_limits import parse_silence_timeout_seconds
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("SILENCE_TIMEOUT_SECONDS", None)
+        assert parse_silence_timeout_seconds() == 45.0
+        assert parse_silence_timeout_seconds(0) == 0.0
+        assert parse_silence_timeout_seconds(15) == 15.0

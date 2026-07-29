@@ -930,3 +930,22 @@ Query confirmed `895f47c4-...` → 0 rows.
 
 404 on dial-test after reset almost always means **stale script_config UUID in the UI**, not a broken route or failed seed. Always re-list configs after `db-reset`.
 
+---
+
+## Addendum: Silence / Inactivity Watchdog (`45s` default) (2026-07-28)
+
+Implemented an automated 45-second silence / dead-air watchdog across both STS (Gemini Live) and Cascade (Silero VAD) calling routes.
+
+### Architectural Summary & Routing:
+- **`CallEndCoordinator` ([`call_limits.py`](file:///home/satyam/aakashvani/call_limits.py)):**
+  - Managed by `SILENCE_TIMEOUT_SECONDS` environment variable (default: `45.0` seconds; set to `0` to disable).
+  - Watchdog arms (`_silence_armed = True`) only after the bot speaks its initial opening line (`note_bot_speaking(True)`), preventing pre-greeting silence (WebSocket / prewarm setup delays) from prematurely canceling calls.
+- **`SilenceActivityTap` ([`call_limits.py`](file:///home/satyam/aakashvani/call_limits.py)):**
+  - Placed between `user_aggregator` and `llm` in `bot_sts.py` and `bot_cascade.py`.
+  - Intercepts upstream `TranscriptionFrame`s emitted by Gemini Live (`llm → user_aggregator → input`) and invokes `coordinator.note_activity()` to reset the 45s silence timer without disarming pending goodbye/end_call hangups.
+  - Exclusively handles upstream `TranscriptionFrame`s; VAD speech start/stop boundaries remain strictly owned downstream by `BotSpeechEndGate` (placed after `transport.output()`).
+- **Configuration & Documentation:**
+  - `SILENCE_TIMEOUT_SECONDS=45` added to `env.example`.
+  - Unit tests added in `tests/test_voice_cut_fixes.py` (pre-greeting grace period, dead-air hangup, upstream transcript activity reset, downstream transcript isolation, default `45s`).
+
+
