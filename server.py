@@ -8,35 +8,40 @@ import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 
-import aiohttp
-import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
-from loguru import logger
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
 
-from background_tasks import bind_background_tasks, drain_background_tasks, spawn_background_task
-from call_log_db import init_db
-from db import postgres as pg_db
-from db import redis_client as redis_db
-from db.warmup_state import (
+load_dotenv(override=True)
+
+from logging_setup import configure_logging  # noqa: E402
+
+configure_logging()
+
+import aiohttp  # noqa: E402
+import uvicorn  # noqa: E402
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
+from loguru import logger  # noqa: E402
+from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: E402
+from slowapi.util import get_remote_address  # noqa: E402
+from slowapi.errors import RateLimitExceeded  # noqa: E402
+from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
+
+from background_tasks import bind_background_tasks, drain_background_tasks, spawn_background_task  # noqa: E402
+from call_log_db import init_db  # noqa: E402
+from db import postgres as pg_db  # noqa: E402
+from db import redis_client as redis_db  # noqa: E402
+from db.warmup_state import (  # noqa: E402
     clear_warmup,
     set_warmup_pending,
     set_warmup_ready,
     wait_for_warmup,
 )
-from plivo_hangup import handle_plivo_hangup
-from recording import handle_plivo_recording, start_plivo_recording
-from telephony import build_hangup_url, make_plivo_call, public_telephony_base_url
+from plivo_hangup import handle_plivo_hangup  # noqa: E402
+from recording import handle_plivo_recording, start_plivo_recording  # noqa: E402
+from telephony import build_hangup_url, make_plivo_call, public_telephony_base_url  # noqa: E402
 
-from api.script_config_validation import normalize_route
-
-load_dotenv(override=True)
+from api.script_config_validation import normalize_route  # noqa: E402
 
 # ── Select which bot to run ────────────────────────────────────────────────────
 BOT_ROUTE = normalize_route(os.getenv("BOT_ROUTE", "sts"))
@@ -107,16 +112,27 @@ def _prewarm_live_connect_config():
     return model, config, Content, Part
 
 
+def _gemini_prewarm_enabled() -> bool:
+    """Opt-in Live session pre-warm. Default off — halves Gemini RPM/sessions per call."""
+    raw = (os.getenv("GEMINI_PREWARM") or "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 async def _prewarm_gemini(call_id: str) -> None:
     """
-    Open a real Gemini Live session, fire one dummy inference to eat the
-    cold-start penalty, then signal the event so /answer can proceed.
+    Optionally open a real Gemini Live session to absorb cold-start, then
+    signal /answer via Redis warmup state.
 
-    This runs as a background task started from /start, so the ~2-3 s
-    Gemini cold-start happens while Plivo is being asked to place the call
-    (which also takes ~1-2 s). By the time the callee picks up, Gemini is
-    already warm.
+    Disabled by default (``GEMINI_PREWARM=0``). A missed/disabled pre-warm
+    only costs the bot's own Gemini WS cold-start (~1–2 s), which overlaps
+    with pipeline setup in ``on_client_connected``. Enabling doubles Live
+    sessions and request rate against the Gemini quota.
     """
+    if not _gemini_prewarm_enabled():
+        logger.debug(f"[prewarm:{call_id}] skipped (GEMINI_PREWARM disabled)")
+        await set_warmup_ready(call_id)
+        return
+
     if BOT_ROUTE != "sts":
         logger.debug(f"[prewarm:{call_id}] skipped (BOT_ROUTE={BOT_ROUTE!r})")
         await set_warmup_ready(call_id)
@@ -156,18 +172,17 @@ async def _prewarm_gemini(call_id: str) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ── Pre-import heavy pipecat extras so the first /ws has zero import lag
-    # The active bot module + WebSocketRunnerArguments are already imported at
-    # module load (see top of file). Here we additionally warm up the optional
-    # pipecat audio analyzers that ship native libs and ONNX models — the
-    # first import of these can cost ~5–10 s when paid on the call hot path.
-    logger.info("[startup] Pre-importing heavy pipecat audio modules …")
-    try:
-        from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnV3Analyzer  # noqa: F401
-        from pipecat.audio.vad.silero import SileroVADAnalyzer  # noqa: F401
-        logger.info("[startup] Pre-import done — first call will have no import lag")
-    except Exception as exc:
-        logger.warning(f"[startup] Pre-import warning ({exc}); continuing anyway")
+    # Pre-import Silero VAD only for cascaded route (STS uses Gemini server-side VAD).
+    # LocalSmartTurnV3Analyzer is unused anywhere in this repo — skip it.
+    if BOT_ROUTE != "sts":
+        logger.info("[startup] Pre-importing heavy pipecat audio modules …")
+        try:
+            from pipecat.audio.vad.silero import SileroVADAnalyzer  # noqa: F401
+            logger.info("[startup] Pre-import done — first call will have no import lag")
+        except Exception as exc:
+            logger.warning(f"[startup] Pre-import warning ({exc}); continuing anyway")
+    else:
+        logger.info("[startup] Skipping Silero/SmartTurn pre-import (BOT_ROUTE=sts)")
 
     db_path = os.getenv("CALL_LOG_DB_PATH", "./data/call_logs.db")
     try:
@@ -281,6 +296,7 @@ app.add_middleware(
 
 
 @app.post("/start")
+@limiter.exempt
 async def start_call(request: Request) -> JSONResponse:
     """
     Trigger an outbound call with Gemini pre-warming.
@@ -344,16 +360,19 @@ async def start_call(request: Request) -> JSONResponse:
 
 
 @app.api_route("/plivo-hangup", methods=["GET", "POST"])
+@limiter.exempt
 async def plivo_hangup(request: Request):
     return await handle_plivo_hangup(request)
 
 
 @app.api_route("/plivo-recording", methods=["GET", "POST"])
+@limiter.exempt
 async def plivo_recording(request: Request):
     return await handle_plivo_recording(request)
 
 
 @app.api_route("/answer", methods=["GET", "POST"])
+@limiter.exempt
 async def answer_xml(
     request: Request,
     call_id: str = Query(None),
@@ -486,8 +505,8 @@ async def ws_endpoint(
     finally:
         if call_id and app.state.pool is not None:
             try:
-                call_log = await pg_db.get_call_log_by_session(app.state.pool, call_id)
-                if call_log and call_log.get("in_progress"):
+                in_progress = await pg_db.call_log_in_progress(app.state.pool, call_id)
+                if in_progress:
                     logger.warning(f"Cleaning up stuck in_progress call {call_id} after WS closed")
                     await pg_db.mark_call_log_not_in_progress(app.state.pool, call_id)
                     from post_call_processor import recover_abandoned_session
@@ -498,6 +517,7 @@ async def ws_endpoint(
 
 
 @app.get("/health")
+@limiter.exempt
 async def health():
     return {"status": "ok", "route": BOT_ROUTE}
 
@@ -518,4 +538,4 @@ _register_api_routes()
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    uvicorn.run(app, host="0.0.0.0", port=7860, access_log=False)

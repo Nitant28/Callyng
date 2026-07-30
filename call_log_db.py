@@ -50,6 +50,8 @@ def init_db(path: str | None = None) -> None:
     path = _db_path(path)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS call_logs (
@@ -91,9 +93,11 @@ def insert_call_log(
     usage_metrics_json: str | None = None,
     cost_inr: float | None = None,
 ) -> int:
-    """Insert one row; returns ``lastrowid`` for follow-up extraction updates."""
+    """Insert one row; returns ``lastrowid`` for follow-up extraction updates.
+
+    Caller must ensure ``init_db`` ran at process startup.
+    """
     path = _db_path()
-    init_db(path)
     payload = json.dumps(transcript, ensure_ascii=False)
     with sqlite3.connect(path) as conn:
         cur = conn.execute(
@@ -156,7 +160,6 @@ def get_row_id_by_session(session_call_id: str, path: str | None = None) -> int 
     if not session_call_id:
         return None
     path = _db_path(path)
-    init_db(path)
     with sqlite3.connect(path) as conn:
         cur = conn.execute(
             """

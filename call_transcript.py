@@ -31,6 +31,8 @@ from db import postgres as pg_db
 
 _PGCTX_KEY_PREFIX = "pgctx:"
 _PG_WRITE_TIMEOUT_S = 5.0
+_PG_WRITE_LIVE_TIMEOUT_S = 2.0
+_TRANSCRIPT_DEBOUNCE_S = 2.0
 _CAMPAIGN_PG_FIELDS = ("client_id", "campaign_id", "lead_id", "bot_config_id")
 
 
@@ -216,12 +218,20 @@ def _pg_pool():
         return None
 
 
-async def _pg_write(coro):
+async def _pg_write(coro, *, timeout_s: float = _PG_WRITE_TIMEOUT_S):
     try:
-        return await asyncio.wait_for(coro, timeout=_PG_WRITE_TIMEOUT_S)
+        return await asyncio.wait_for(coro, timeout=timeout_s)
     except Exception as exc:
         logger.warning("postgres call_log write skipped: {}", exc)
         return None
+
+
+async def _pg_write_live(coro):
+    return await _pg_write(coro, timeout_s=_PG_WRITE_LIVE_TIMEOUT_S)
+
+
+async def _pg_write_finalize(coro):
+    return await _pg_write(coro, timeout_s=_PG_WRITE_TIMEOUT_S)
 
 
 def _schedule_call_completed_webhook(payload: dict[str, Any]) -> None:
@@ -269,27 +279,41 @@ class TranscriptBuffer:
     def __init__(self, *, session_call_id: str | None = None) -> None:
         self.turns: list[dict[str, Any]] = []
         self._session_call_id = session_call_id
+        self._pg_flush_task: asyncio.Task[Any] | None = None
+        self._pg_flush_pending = False
+
+    def _schedule_pg_flush(self) -> None:
+        """Debounce a full-transcript replace write for live UI polling."""
+        if not self._session_call_id:
+            return
+        self._pg_flush_pending = True
+        if self._pg_flush_task is not None and not self._pg_flush_task.done():
+            return
+
+        async def _debounced() -> None:
+            try:
+                while self._pg_flush_pending:
+                    self._pg_flush_pending = False
+                    await asyncio.sleep(_TRANSCRIPT_DEBOUNCE_S)
+                    if self._pg_flush_pending:
+                        continue
+                    pool = _pg_pool()
+                    if pool is None or not self._session_call_id:
+                        return
+                    snapshot = list(self.turns)
+                    await _pg_write_live(
+                        pg_db.replace_transcript(pool, self._session_call_id, snapshot)
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("transcript pg flush failed: {}", exc)
+
+        self._pg_flush_task = spawn_background_task(
+            _debounced(), "transcript_pg_flush"
+        )
 
     def register(self, user_aggregator: Any, assistant_aggregator: Any) -> None:
-        sid = self._session_call_id
-
-        async def _maybe_pg_append(role: str, content: str, ts: str) -> None:
-            if not sid:
-                return
-            pool = _pg_pool()
-            if pool is None:
-                return
-
-            when = datetime.now(timezone.utc)
-            if ts:
-                try:
-                    when = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except ValueError:
-                    pass
-            await _pg_write(
-                pg_db.append_transcript_turn(pool, sid, role, content or "", when)
-            )
-
         @user_aggregator.event_handler("on_user_turn_stopped")
         async def on_user_turn_stopped(aggregator, strategy, message):
             self.turns.append(
@@ -299,7 +323,7 @@ class TranscriptBuffer:
                     "timestamp": message.timestamp,
                 }
             )
-            await _maybe_pg_append("user", message.content, message.timestamp)
+            self._schedule_pg_flush()
 
         @assistant_aggregator.event_handler("on_assistant_turn_stopped")
         async def on_assistant_turn_stopped(aggregator, message):
@@ -311,9 +335,7 @@ class TranscriptBuffer:
                     "interrupted": message.interrupted,
                 }
             )
-            await _maybe_pg_append(
-                "assistant", message.content, message.timestamp
-            )
+            self._schedule_pg_flush()
 
 
 def _strip_sts_bootstrap(turns: list[dict[str, Any]]) -> None:
@@ -489,15 +511,20 @@ def attach_pipeline_finalize(
             "call_transcript_summary {}",
             json.dumps(summary, ensure_ascii=False),
         )
-        # Avoid flooding logs on long calls; full JSON remains in SQLite.
-        preview = json.dumps(transcript, ensure_ascii=False)
-        if len(preview) > 4000:
-            logger.info(
-                "call_transcript_payload {}",
-                preview[:4000] + f"... [{len(preview)} chars total]",
-            )
+        # Avoid flooding logs / full dumps on long calls; full JSON remains in SQLite.
+        turn_count = len(transcript)
+        if turn_count == 0:
+            logger.info("call_transcript_payload turns=0")
         else:
-            logger.info("call_transcript_payload {}", preview)
+            preview_turns = transcript[:3]
+            preview = json.dumps(preview_turns, ensure_ascii=False)
+            if len(preview) > 1500:
+                preview = preview[:1500] + "..."
+            logger.info(
+                "call_transcript_payload turns={} preview={}",
+                turn_count,
+                preview,
+            )
 
         usage_metrics_blob: str | None = None
         up, uc, ut, tts_c = 0, 0, 0, 0
@@ -541,7 +568,7 @@ def attach_pipeline_finalize(
         resolved_ctx = await resolve_pg_context(pool, session_call_id, pg_ctx)
         if session_call_id and pool is not None:
             try:
-                cleared = await _pg_write(
+                cleared = await _pg_write_finalize(
                     pg_db.mark_call_log_not_in_progress(pool, session_call_id)
                 )
                 if cleared:

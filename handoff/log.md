@@ -623,6 +623,67 @@ return "callback_scheduled", ts + timedelta(minutes=retry_delay_minutes), base_o
 
 ---
 
+## 2026-07-28 — Production STS Voice Cut Remediation & Performance Tuning
+
+> Date: 2026-07-28  
+> Scope: Audio pipeline hot path, database connection pool, API load isolation, slowapi rate limiting, loguru logging sink, dialer loop performance  
+> Author: Antigravity CLI  
+> Branch: `feature/export-and-outcome-dropdown`  
+
+### Summary
+
+A comprehensive code audit and production server log analysis identified event-loop stalls, database connection pool exhaustion, duplicate writes, rate limit drops, and un-isolated dashboard API polling as the root causes of production voice cuts. All 16 fixes across 4 phases were implemented and verified with zero regression.
+
+### Root Causes & Fixes Delivered
+
+#### Phase 0 — Telephony & Server Foundation (Emergency Fixes)
+1. **Telephony Webhook Rate Limit Exemptions (`server.py`)**: Added `@limiter.exempt` to `/start`, `/answer`, `/plivo-hangup`, `/plivo-recording`, and `/health`. Prevents default 100/min SlowAPI rate limiter from returning 429 to Plivo webhooks (which dropped call streams).
+2. **Non-blocking Loguru Logging (`logging_setup.py`, `server.py`)**: Removed loguru default sink; added non-blocking background thread sink with `enqueue=True`, `backtrace=False`, `diagnose=False`. Stops 30KB prompt dumps from stalling the event loop when logging to Docker pipes. Added `--no-access-log` to Uvicorn startup.
+3. **Gemini Pre-warm Session Reduction (`server.py`)**: Gated Gemini pre-warming behind `GEMINI_PREWARM` flag (defaults to `0`/disabled). Halves concurrent Gemini Live sessions and requests-per-minute quota usage while keeping Redis warmup signaling intact.
+
+#### Phase 1 — Audio Pipeline & Transcript Optimization
+4. **Removed `STSTranscriptionCatcher` (`bot_sts.py`)**: Deleted `STSTranscriptionCatcher` from the pipeline. Stopped duplicate user turn DB writes and lazy python import overhead between `user_aggregator` and `llm`.
+5. **Non-blocking Turn Events (`call_transcript.py`)**: `TranscriptBuffer.register()` appends turns to in-memory `self.turns` synchronously on turn events.
+6. **Debounced Snapshot Replace (`call_transcript.py`, `db/postgres.py`)**: Replaced per-turn `transcript || $1::jsonb` concatenation with `replace_transcript(pool, session_call_id, transcript)` debounced to 2.0s background flushes (`_PG_WRITE_LIVE_TIMEOUT_S = 2.0`). Eliminates write amplification and row-lock contention.
+
+#### Phase 2 — Dashboard API Load Relief & Pagination
+7. **Slim `list_call_logs` Projection (`db/postgres.py`, `api/routes/calls.py`)**: Modified `list_call_logs` to select explicit scalar columns, excluding multi-megabyte `transcript`, `call_data`, `extraction_json`, and `plivo_hangup_json` blobs. Reduced default GET `/api/calls` limit from 2000 to 100.
+8. **Denormalized Counters & TTL Cache (`db/postgres.py`)**: `get_campaign_outcome_stats` reads denormalized status counters from `campaigns` table and caches outcome aggregations for 10 seconds (`_STATS_CACHE_TTL_S = 10.0`).
+9. **Frontend Polling Optimization (`useDashboardData.js`)**: Updated frontend polling interval from 2s/5s to 5s (running) / 15s (idle); capped list requests to `limit: 100`; removed per-campaign call list fan-out.
+
+#### Phase 2.5 — Dialer Loop & Database Pool Timeouts
+10. **Dialer Loop Query Optimization (`dialer/concurrent_dialer.py`)**: Uses denormalized `calling_leads` counter instead of per-iteration `COUNT(*)`; throttles `terminalize_exhausted_leads` to every 30s; increases idle sleep intervals (5s / 10s).
+11. **PostgreSQL Statement Timeouts (`db/postgres.py`)**: Added `SET statement_timeout = '15s'` and `SET idle_in_transaction_session_timeout = '15s'` to asyncpg `_init_connection`. Prevents pathological dashboard queries from holding pool connections indefinitely.
+
+#### Phase 3 — Logging, Warmup & SQLite Optimization
+12. **Truncated Prompt Logging (`script_runtime.py`)**: Replaced 30KB prompt text dumps at `INFO` level with length + MD5 hash, keeping full instruction at `DEBUG`.
+13. **Warmup State Race Condition Fix (`db/warmup_state.py`)**: `wait_for_warmup()` only deletes Redis key when status is `"ready"`, allowing late pre-warms to complete safely.
+14. **Gemini Error Handlers & CWC Target (`bot_sts.py`)**: Registered `on_error` and `on_completion_timeout` handlers; raised default `GEMINI_CWC_TRIGGER_TOKENS` from 20,000 to 32,000.
+15. **Memory Optimization (`server.py`)**: Skipped pre-loading `LocalSmartTurnV3Analyzer` and `SileroVADAnalyzer` when `BOT_ROUTE == "sts"`. Saves resident memory on VPS.
+16. **SQLite Optimization (`call_log_db.py`)**: Removed `init_db()` from `insert_call_log` hot path; configured `PRAGMA journal_mode=WAL` and `PRAGMA synchronous=NORMAL`.
+
+### Files Modified
+
+- `server.py`
+- `logging_setup.py` (new)
+- `bot_sts.py`
+- `call_transcript.py`
+- `db/postgres.py`
+- `db/warmup_state.py`
+- `call_log_db.py`
+- `script_runtime.py`
+- `dialer/concurrent_dialer.py`
+- `api/routes/calls.py`
+- `frontend/src/client/hooks/useDashboardData.js`
+- `tests/test_call_transcript_finalize.py`
+
+### Test Suite Verification
+
+- **Full Pytest Suite**: **191 passed, 6 skipped** in 23.40s.
+
+
+---
+
 ## Addendum: Multi-Protocol Post-Call Extraction (2026-07-19)
 
 > Date: 2026-07-19
@@ -868,4 +929,23 @@ Query confirmed `895f47c4-...` → 0 rows.
 ### Takeaway
 
 404 on dial-test after reset almost always means **stale script_config UUID in the UI**, not a broken route or failed seed. Always re-list configs after `db-reset`.
+
+---
+
+## Addendum: Silence / Inactivity Watchdog (`45s` default) (2026-07-28)
+
+Implemented an automated 45-second silence / dead-air watchdog across both STS (Gemini Live) and Cascade (Silero VAD) calling routes.
+
+### Architectural Summary & Routing:
+- **`CallEndCoordinator` ([`call_limits.py`](file:///home/satyam/aakashvani/call_limits.py)):**
+  - Managed by `SILENCE_TIMEOUT_SECONDS` environment variable (default: `45.0` seconds; set to `0` to disable).
+  - Watchdog arms (`_silence_armed = True`) only after the bot speaks its initial opening line (`note_bot_speaking(True)`), preventing pre-greeting silence (WebSocket / prewarm setup delays) from prematurely canceling calls.
+- **`SilenceActivityTap` ([`call_limits.py`](file:///home/satyam/aakashvani/call_limits.py)):**
+  - Placed between `user_aggregator` and `llm` in `bot_sts.py` and `bot_cascade.py`.
+  - Intercepts upstream `TranscriptionFrame`s emitted by Gemini Live (`llm → user_aggregator → input`) and invokes `coordinator.note_activity()` to reset the 45s silence timer without disarming pending goodbye/end_call hangups.
+  - Exclusively handles upstream `TranscriptionFrame`s; VAD speech start/stop boundaries remain strictly owned downstream by `BotSpeechEndGate` (placed after `transport.output()`).
+- **Configuration & Documentation:**
+  - `SILENCE_TIMEOUT_SECONDS=45` added to `env.example`.
+  - Unit tests added in `tests/test_voice_cut_fixes.py` (pre-greeting grace period, dead-air hangup, upstream transcript activity reset, downstream transcript isolation, default `45s`).
+
 

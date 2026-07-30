@@ -17,7 +17,7 @@ from google.genai.types import HttpOptions
 from loguru import logger
 
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import LLMRunFrame, TranscriptionFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -26,12 +26,11 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.plivo import PlivoFrameSerializer
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
-from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-from pipecat.frames.frames import TranscriptionFrame, Frame
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
@@ -41,6 +40,7 @@ from pipecat.turns.user_mute import MuteUntilFirstBotCompleteUserMuteStrategy
 
 from call_limits import (
     BotSpeechEndGate,
+    SilenceActivityTap,
     end_call_function_schema,
     make_end_call_handler,
     parse_goodbye_hangup_delay_s,
@@ -50,7 +50,6 @@ from call_limits import (
     schedule_max_call_duration,
 )
 from call_metrics import UsageMetricsAccumulator, UsageMetricsTap
-from background_tasks import spawn_background_task
 from call_transcript import TranscriptBuffer, attach_pipeline_finalize
 from lead_context import LeadContext
 from script_runtime import resolve_sts_runtime, schedule_post_call_snapshot_write
@@ -63,18 +62,44 @@ def _context_window_compression_settings() -> dict[str, int | bool] | None:
 
     Pipecat's ``_connect`` reads this as a dict (``.get("enabled")``), not a Pydantic model.
     Retained token target defaults to trigger_tokens / 2 on the API side.
-    Default trigger 20000 → ~10k retained.
+    Default trigger 32000 → ~16k retained.
     """
     raw = (os.getenv("GEMINI_CONTEXT_COMPRESSION") or "1").strip().lower()
     if raw in ("0", "false", "no", "off"):
         return None
     try:
-        trigger = int(os.getenv("GEMINI_CWC_TRIGGER_TOKENS", "20000"))
+        trigger = int(os.getenv("GEMINI_CWC_TRIGGER_TOKENS", "32000"))
     except ValueError:
-        trigger = 20000
+        trigger = 32000
     if trigger < 1:
-        trigger = 20000
+        trigger = 32000
     return {"enabled": True, "trigger_tokens": trigger}
+
+
+class StsTranscriptionCatcher(FrameProcessor):
+    """Captures upstream TranscriptionFrames from GeminiLive into the transcript buffer.
+
+    GeminiLiveLLMService does not emit UserStoppedSpeakingFrame, so the standard
+    user_aggregator on_user_turn_stopped event never fires on the STS route.
+    This processor intercepts each upstream TranscriptionFrame and appends the
+    user turn directly to the transcript buffer.
+    """
+
+    def __init__(self, transcript_buffer) -> None:
+        super().__init__()
+        self._tb = transcript_buffer
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if (
+            isinstance(frame, TranscriptionFrame)
+            and direction == FrameDirection.UPSTREAM
+            and (getattr(frame, "text", None) or "").strip()
+        ):
+            ts = datetime.now(timezone.utc).isoformat()
+            self._tb.turns.append({"role": "user", "content": frame.text.strip(), "timestamp": ts})
+            self._tb._schedule_pg_flush()
+        await self.push_frame(frame, direction)
 
 
 async def run_bot(
@@ -116,6 +141,10 @@ async def run_bot(
     }
     if cwc is not None:
         llm_settings_kw["context_window_compression"] = cwc
+        logger.info(
+            "Gemini context window compression enabled trigger_tokens={}",
+            cwc.get("trigger_tokens"),
+        )
     if _affective:
         llm_settings_kw["enable_affective_dialog"] = True
 
@@ -128,7 +157,16 @@ async def run_bot(
     )
     _lap(t0, "GeminiLiveLLMService object created (not yet connected)")
 
+    @llm.event_handler("on_error")
+    async def on_llm_error(service, error):
+        logger.error("[gemini] Service error (may cause voice cut): {}", error)
+
+    @llm.event_handler("on_completion_timeout")
+    async def on_llm_completion_timeout(service):
+        logger.error("[gemini] Completion timeout — active call may experience voice cut")
+
     transcript_buffer = TranscriptBuffer(session_call_id=session_call_id)
+    sts_catcher = StsTranscriptionCatcher(transcript_buffer)
     usage_accumulator = UsageMetricsAccumulator()
     usage_tap = UsageMetricsTap(usage_accumulator)
 
@@ -140,40 +178,14 @@ async def run_bot(
         ),
     )
 
+    silence_tap = SilenceActivityTap()
     end_gate = BotSpeechEndGate()
-    class STSTranscriptionCatcher(FrameProcessor):
-        def __init__(self, tb):
-            super().__init__()
-            self._tb = tb
-        async def process_frame(self, frame: Frame, direction: FrameDirection):
-            await super().process_frame(frame, direction)
-            if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.UPSTREAM:
-                import db.postgres as pg_db
-                from call_transcript import _pg_pool, _pg_write
-                ts = datetime.now(timezone.utc).isoformat()
-                self._tb.turns.append({"role": "user", "content": frame.text, "timestamp": ts})
-                pool = _pg_pool()
-                if pool and self._tb._session_call_id:
-                    spawn_background_task(
-                        _pg_write(
-                            pg_db.append_transcript_turn(
-                                pool,
-                                self._tb._session_call_id,
-                                "user",
-                                frame.text,
-                                datetime.now(timezone.utc),
-                            )
-                        ),
-                        "sts_transcription_pg",
-                    )
-            await self.push_frame(frame, direction)
-
-    catcher = STSTranscriptionCatcher(transcript_buffer)
 
     pipeline = Pipeline([
         transport.input(),
         user_aggregator,
-        catcher,
+        silence_tap,
+        sts_catcher,
         llm,
         transport.output(),
         end_gate,
@@ -203,6 +215,7 @@ async def run_bot(
     )
     coordinator = call_limits.coordinator
     end_gate.bind(coordinator)
+    silence_tap.bind(coordinator)
     llm.register_function("end_call", make_end_call_handler(coordinator))
 
     started_at_iso = datetime.now(timezone.utc).isoformat()
