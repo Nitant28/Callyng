@@ -139,10 +139,31 @@ async def test_openai_prefers_openai_key_over_groq(monkeypatch: pytest.MonkeyPat
     assert capture["headers"]["Authorization"] == "Bearer sk-preferred"
 
 
+
+@pytest.mark.asyncio
+async def test_groq_provider_prefers_groq_key_over_openai(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("POST_CALL_PROVIDER", "groq")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-ignored")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-preferred")
+
+    capture: dict[str, Any] = {}
+    payload = {
+        "choices": [{"message": {"content": '{"intent_status":"Interested"}'}}]
+    }
+    with patch(
+        "post_call_extract._post_json",
+        new=AsyncMock(side_effect=_post_json_mock(capture, payload)),
+    ):
+        await extract_post_call(_TRANSCRIPT, extraction_schema=_MIN_SCHEMA)
+
+    assert capture["headers"]["Authorization"] == "Bearer gsk-preferred"
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_shape(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("POST_CALL_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
     monkeypatch.setenv("POST_CALL_MODEL", "claude-test")
 
     capture: dict[str, Any] = {}
