@@ -25,9 +25,16 @@ from unittest.mock import patch
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def setup_globals():
     """Manually initialize the database and redis pools for the test session."""
-    pool = await pg_db.init_pool()
-    app.state.pool = pool
-    await redis_db.init_redis(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+    pool = None
+    try:
+        pool = await pg_db.init_pool()
+        app.state.pool = pool
+    except Exception:
+        app.state.pool = None
+    try:
+        await redis_db.init_redis(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+    except Exception:
+        pass
     app.state.dialer_tasks = {}
     app.state.session = aiohttp.ClientSession()
     app.state.background_tasks = set()
@@ -36,54 +43,57 @@ async def setup_globals():
     
     yield
     
-    # Clean up all test-generated garbage data from the database
-    print("\nCleaning up test-generated database records...")
-    try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                # Delete logs and leads (non-existent in seed)
-                await conn.execute("DELETE FROM call_logs")
-                await conn.execute("DELETE FROM leads")
-                
-                # Delete campaigns except for the seed campaigns
-                await conn.execute(
-                    "DELETE FROM campaigns WHERE id NOT IN ("
-                    "'00000000-0000-4000-8000-000000000003', "
-                    "'00000000-0000-4000-8000-000000000006'"
-                    ")"
-                )
-                
-                # Delete bot configs except for the seed bots
-                await conn.execute(
-                    "DELETE FROM bot_configs WHERE id NOT IN ("
-                    "'00000000-0000-4000-8000-000000000002', "
-                    "'00000000-0000-4000-8000-000000000004', "
-                    "'00000000-0000-4000-8000-000000000005'"
-                    ")"
-                )
-                
-                # Delete webhook configs, credit transactions, and script configs
-                # for any client other than the seed client
-                await conn.execute(
-                    "DELETE FROM webhook_configs WHERE client_id != '00000000-0000-4000-8000-000000000001'"
-                )
-                await conn.execute(
-                    "DELETE FROM credit_transactions WHERE client_id != '00000000-0000-4000-8000-000000000001'"
-                )
-                await conn.execute(
-                    "DELETE FROM script_configs WHERE client_id != '00000000-0000-4000-8000-000000000001'"
-                )
-                
-                # Delete clients except for the seed client
-                await conn.execute(
-                    "DELETE FROM clients WHERE id != '00000000-0000-4000-8000-000000000001'"
-                )
-        print("Cleanup completed successfully.")
-    except Exception as e:
-        print(f"Warning: Failed to clean up database records: {e}")
+    if pool is not None:
+        # Clean up all test-generated garbage data from the database
+        print("\nCleaning up test-generated database records...")
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    # Delete logs and leads (non-existent in seed)
+                    await conn.execute("DELETE FROM call_logs")
+                    await conn.execute("DELETE FROM leads")
+                    
+                    # Delete campaigns except for the seed campaigns
+                    await conn.execute(
+                        "DELETE FROM campaigns WHERE id NOT IN ("
+                        "'00000000-0000-4000-8000-000000000003', "
+                        "'00000000-0000-4000-8000-000000000006'"
+                        ")"
+                    )
+                    
+                    # Delete bot configs except for the seed bots
+                    await conn.execute(
+                        "DELETE FROM bot_configs WHERE id NOT IN ("
+                        "'00000000-0000-4000-8000-000000000002', "
+                        "'00000000-0000-4000-8000-000000000004', "
+                        "'00000000-0000-4000-8000-000000000005'"
+                        ")"
+                    )
+                    
+                    # Delete webhook configs, credit transactions, and script configs
+                    # for any client other than the seed client
+                    await conn.execute(
+                        "DELETE FROM webhook_configs WHERE client_id != '00000000-0000-4000-8000-000000000001'"
+                    )
+                    await conn.execute(
+                        "DELETE FROM credit_transactions WHERE client_id != '00000000-0000-4000-8000-000000000001'"
+                    )
+                    await conn.execute(
+                        "DELETE FROM script_configs WHERE client_id != '00000000-0000-4000-8000-000000000001'"
+                    )
+                    
+                    # Delete clients except for the seed client
+                    await conn.execute(
+                        "DELETE FROM clients WHERE id != '00000000-0000-4000-8000-000000000001'"
+                    )
+            print("Cleanup completed successfully.")
+        except Exception as e:
+            print(f"Warning: Failed to clean up database records: {e}")
         
     await app.state.session.close()
-    await pg_db.close_pool()
+    if pool is not None:
+        await pg_db.close_pool()
+
 
 @pytest_asyncio.fixture(scope="session")
 async def _global_client():

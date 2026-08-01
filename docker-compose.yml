@@ -5,10 +5,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: aakashvani
-      POSTGRES_PASSWORD: devpassword
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
       POSTGRES_DB: aakashvani
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +22,9 @@ services:
     container_name: aakashvani-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -36,13 +38,13 @@ services:
     ports:
       - "127.0.0.1:5678:5678"
     environment:
-      N8N_HOST: localhost
+      N8N_HOST: n8n.aakashvani.bhuvisx.com
       N8N_PORT: 5678
-      N8N_PROTOCOL: http
+      N8N_PROTOCOL: https
       NODE_ENV: production
-      WEBHOOK_URL: http://localhost:5678/
+      WEBHOOK_URL: https://n8n.aakashvani.bhuvisx.com/
       GENERIC_TIMEZONE: Asia/Kolkata
-      N8N_ENFORCEMENT_SECURITY: "false"
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
     volumes:
       - n8n_data:/home/node/.n8n
 
@@ -54,21 +56,18 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      # Override localhost URLs for Docker networking
-      DATABASE_URL: postgresql://aakashvani:devpassword@postgres:5432/aakashvani
-      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:7860:7860"
+    volumes:
+      - ./data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:7860:7860"
-    volumes:
-      - ./data:/app/data
 
 volumes:
   pgdata:
   redisdata:
   n8n_data:
+
