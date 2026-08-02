@@ -1,41 +1,38 @@
-/* ── Layout & Containers ── */
+/* ── Layout & Containers — top-aligned, dense ── */
 
 :root {
-  --sidebar-width: 280px;
-  --page-gutter: 32px;
+  --sidebar-width: 240px;
+  --page-gutter: 20px;
   --topbar-height: 56px;
-  --page-section-gap: 32px;
+  --page-section-gap: 12px;
 }
 
 .cl-page-container {
   padding: 0 !important;
   display: flex;
   flex-direction: column;
-  gap: var(--page-section-gap, 32px);
+  gap: 8px;
   min-height: 0;
   box-sizing: border-box;
 }
 
-/* Header/top navigation height adjustments */
-
 .cl-topbar {
   height: var(--topbar-height, 56px) !important;
-  padding: 0 var(--page-gutter, 32px) !important;
-  left: var(--sidebar-width, 280px);
+  padding: 0 var(--page-gutter, 20px) !important;
+  left: var(--sidebar-width, 240px);
 }
 
 .cl-main {
-  margin-left: var(--sidebar-width, 280px) !important;
-  padding: var(--topbar-height, 56px) var(--page-gutter, 32px) var(--page-gutter, 32px) !important;
+  margin-left: var(--sidebar-width, 240px) !important;
+  padding: calc(var(--topbar-height, 56px) + 12px) var(--page-gutter, 20px) 16px !important;
 }
 
-/* Sidebar clean structure and hover bug fix */
 .cl-sidebar {
   position: fixed;
   top: 0;
   left: 0;
   bottom: 0;
-  width: var(--sidebar-width, 280px);
+  width: var(--sidebar-width, 240px);
   background: #0B0F19;
   display: flex;
   flex-direction: column;
@@ -81,11 +78,10 @@
   transition: color 0.15s;
 }
 
-/* Centered content container used by all pages */
 .cl-content-container {
   max-width: 1600px;
   margin: 0 auto;
-  padding: 32px;
+  padding: 0;
   box-sizing: border-box;
 }
 

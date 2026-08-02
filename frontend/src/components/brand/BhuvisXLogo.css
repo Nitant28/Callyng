@@ -1,0 +1,74 @@
+.bhuvisx-logo {
+  display: inline-flex;
+  align-items: baseline;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  font-family: Inter, "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.bhuvisx-logo__text,
+.bhuvisx-logo__x {
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+}
+
+/* Light surfaces — official mark: black + blue X */
+.bhuvisx-logo--dark .bhuvisx-logo__text { color: #0B0F19; }
+.bhuvisx-logo--dark .bhuvisx-logo__x { color: #2563EB; }
+
+/* Dark sidebar — white + brighter blue X */
+.bhuvisx-logo--light .bhuvisx-logo__text { color: #FFFFFF; }
+.bhuvisx-logo--light .bhuvisx-logo__x { color: #3B82F6; }
+
+.bhuvisx-logo--sm { font-size: 18px; }
+.bhuvisx-logo--md { font-size: 22px; }
+.bhuvisx-logo--lg { font-size: 28px; }
+
+/* Sidebar brand rail */
+.cl-sidebar__logo {
+  display: flex;
+  align-items: center;
+  padding: 20px 20px 16px;
+  min-height: 64px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  box-sizing: border-box;
+}
+
+.cl-sidebar__logo-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  line-height: 0;
+  border-radius: 6px;
+  transition: opacity 0.15s ease;
+}
+
+.cl-sidebar__logo-link:hover {
+  opacity: 0.92;
+}
+
+.cl-sidebar__logo-link:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.55);
+  outline-offset: 4px;
+}
+
+.cl-sidebar__logo .bhuvisx-logo {
+  font-size: 22px;
+}
+
+/* Login header brand */
+.cl-login__brand {
+  display: flex;
+  align-items: center;
+  line-height: 0;
+}
+
+.cl-login__brand .bhuvisx-logo {
+  font-size: 26px;
+}

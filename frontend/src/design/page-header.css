@@ -1,6 +1,7 @@
-/* Unified page header — actions align with H1, not eyebrow */
+/* Unified page header — dense vertical rhythm */
+
 .page-header {
-  margin-bottom: var(--space-4);
+  margin-bottom: 12px;
 }
 
 .page-header__eyebrow {
@@ -9,14 +10,14 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
-  margin: 0 0 var(--space-2);
+  margin: 0 0 4px;
 }
 
 .page-header__title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: 12px;
 }
 
 .page-header__copy {
@@ -34,7 +35,7 @@
 }
 
 .page-header__subtitle {
-  margin: var(--space-2) 0 0;
+  margin: 4px 0 0;
   font-size: var(--font-small);
   font-weight: var(--weight-normal);
   line-height: var(--line-normal);
@@ -44,45 +45,44 @@
 .page-header__actions {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: 8px;
   flex-shrink: 0;
   flex-wrap: wrap;
   align-self: flex-start;
-  padding-top: 4px;
+  padding-top: 0;
 }
 
 .page-header--bordered {
-  padding-bottom: var(--space-4);
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
-  margin-bottom: var(--space-4);
+  margin-bottom: 12px;
 }
 
-/* Page vertical rhythm */
 .page-toolbar {
-  margin-bottom: var(--space-3);
+  margin-bottom: 0;
 }
 
 .page-tabs {
-  margin-bottom: var(--space-4);
+  margin-bottom: 8px;
 }
 
 .page-content {
-  margin-bottom: var(--space-4);
+  margin-bottom: 0;
+  margin-top: 0;
 }
 
 @media (max-width: 768px) {
   .page-header__title {
-    font-size: clamp(32px, 8vw, var(--font-h1));
+    font-size: clamp(24px, 7vw, var(--font-h1));
   }
 
   .page-header__title-row {
     flex-direction: column;
     align-items: stretch;
-    gap: var(--space-2);
+    gap: 10px;
   }
 
   .page-header__actions {
     width: 100%;
-    padding-top: 0;
   }
 }

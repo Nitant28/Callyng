@@ -1,0 +1,51 @@
+.cl-scope-tabs {
+  margin: 0 0 16px;
+  border-bottom: 1px solid #E2E8F0;
+}
+
+.cl-scope-tabs__scroll {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-bottom: 0;
+}
+
+.cl-scope-tabs__tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border: none;
+  background: transparent;
+  color: #64748B;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: Inter, system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.12s ease;
+}
+
+.cl-scope-tabs__tab:hover {
+  color: #0F172A;
+}
+
+.cl-scope-tabs__tab--active {
+  color: #2563EB;
+  border-bottom-color: #2563EB;
+}
+
+.cl-scope-tabs__live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #16A34A;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18);
+  flex-shrink: 0;
+}

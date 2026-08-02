@@ -1,9 +1,9 @@
 /* ── Spacing Scales ── */
 
 :root {
-  --space-section: 32px;
-  --space-card: 24px;
-  --space-content: 24px;
+  --space-section: 12px;
+  --space-card: 16px;
+  --space-content: 12px;
   --space-label: 8px;
 }
 
@@ -24,7 +24,7 @@
 }
 
 .cl-mb-section {
-  margin-bottom: var(--space-section) !important;
+  margin-bottom: 12px !important;
 }
 
 .cl-mb-card {

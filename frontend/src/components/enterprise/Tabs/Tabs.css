@@ -2,7 +2,7 @@
   display: flex;
   gap: 0;
   border-bottom: 1px solid var(--border);
-  margin-bottom: var(--space-4);
+  margin-bottom: 8px;
 }
 
 .ent-tabs__tab {
