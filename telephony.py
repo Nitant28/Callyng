@@ -69,6 +69,17 @@ def build_hangup_url(session_call_id: str, *, host: str = "") -> str:
     return f"{base}/plivo-hangup?session_call_id={q}"
 
 
+def normalize_plivo_number(number: str) -> str:
+    """Ensure E.164 with leading + (Plivo expects +countrycode...)."""
+    n = (number or "").strip()
+    if not n:
+        return n
+    digits = "".join(ch for ch in n if ch.isdigit())
+    if not digits:
+        return n
+    return f"+{digits}"
+
+
 async def make_plivo_call(
     session: aiohttp.ClientSession,
     to_number: str,
@@ -82,8 +93,8 @@ async def make_plivo_call(
     url = f"https://api.plivo.com/v1/Account/{auth_id}/Call/"
     auth = aiohttp.BasicAuth(auth_id, auth_token)
     data = {
-        "to": to_number,
-        "from": from_number,
+        "to": normalize_plivo_number(to_number),
+        "from": normalize_plivo_number(from_number),
         "answer_url": answer_url,
         "answer_method": "GET",
     }

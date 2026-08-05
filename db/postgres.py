@@ -2368,7 +2368,13 @@ async def list_campaign_leads(
         idx += 1
 
     total_count = await pool.fetchval(count_query, *args)
-    query += f" ORDER BY l.created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+    query += (
+        f" ORDER BY"
+        f" CASE WHEN l.status = 'calling' THEN 0 ELSE 1 END,"
+        f" COALESCE(l.last_attempted_at, l.created_at) DESC NULLS LAST,"
+        f" l.created_at DESC"
+        f" LIMIT ${idx} OFFSET ${idx + 1}"
+    )
     args.extend([limit, offset])
 
     rows = await pool.fetch(query, *args)
@@ -3471,6 +3477,7 @@ async def list_call_logs(
             cl.usage_total_tokens, cl.usage_tts_characters,
             cl.recording_url, cl.extraction_model, cl.extraction_error,
             cl.cost_usd, cl.quality_score, cl.flagged_for_review,
+            jsonb_array_length(COALESCE(cl.transcript, '[]'::jsonb))::int AS transcript_turns,
             l.name, l.phone
         {base_query} {where_clause}
         ORDER BY cl.created_at DESC

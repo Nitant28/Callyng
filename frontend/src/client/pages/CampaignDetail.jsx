@@ -90,6 +90,8 @@ const CampaignDetail = () => {
   // Campaign Details & UI State
   const [campaign, setCampaign] = useState(null);
   const [leads, setLeads] = useState([]);
+  const [liveCallingLeads, setLiveCallingLeads] = useState([]);
+  const liveCallingLeadsRef = useRef([]);
   const [totalLeadsCount, setTotalLeadsCount] = useState(0);
   const [leadsLimit, setLeadsLimit] = useState(50);
   const [leadsOffset, setLeadsOffset] = useState(0);
@@ -204,27 +206,33 @@ const CampaignDetail = () => {
     }
   }, [id]);
 
-  // Load leads — during live dialing, merge in-calling rows and apply LIFO call stack sort
+  // Load leads — live concurrent calling rows are fetched separately and always pinned on top
   const loadLeads = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLeadsLoading(true);
     try {
-      const isLive =
+      const isLiveCampaign =
         campaign?.status === 'running' ||
         campaign?.status === 'pausing' ||
         (campaign?.status === 'paused' && (campaign?.calling_leads || 0) > 0);
 
-      const useStack = isLive && !leadsStatusFilter && !leadsSearch && !leadsOutcomeFilter;
-
-      let callingLeads = [];
-      if (useStack) {
+      // Always pull calling leads while campaign is live — independent of filters/search/page
+      let nextCalling = liveCallingLeadsRef.current;
+      if (isLiveCampaign) {
         try {
           const callingRes = await clientApi.get(`/api/campaigns/${id}/leads`, {
-            params: { limit: 50, offset: 0, status: 'calling' },
+            params: { limit: 100, offset: 0, status: 'calling' },
           });
-          callingLeads = callingRes.data?.leads || [];
+          nextCalling = sortLeadsCallStack(callingRes.data?.leads || [], { live: true });
+          liveCallingLeadsRef.current = nextCalling;
+          setLiveCallingLeads(nextCalling);
         } catch {
-          // non-fatal
+          // Keep previous liveCallingLeads so concurrent rows never blink away on a failed poll
+          nextCalling = liveCallingLeadsRef.current;
         }
+      } else if (campaign) {
+        nextCalling = [];
+        liveCallingLeadsRef.current = [];
+        setLiveCallingLeads([]);
       }
 
       const response = await clientApi.get(`/api/campaigns/${id}/leads`, {
@@ -237,25 +245,34 @@ const CampaignDetail = () => {
         },
       });
 
+      const callingIds = new Set(nextCalling.map((l) => l.id));
+
       if (response.data) {
         const pageLeads = response.data.leads || [];
-        const merged = useStack
-          ? [...callingLeads, ...pageLeads.filter((l) => !callingLeads.some((c) => c.id === l.id))]
-          : pageLeads;
-        setLeads(sortLeadsCallStack(merged, { live: useStack }));
+        // Page body excludes calling — those always come from the pinned live set
+        const rest = pageLeads.filter((l) => l.status !== 'calling' && !callingIds.has(l.id));
+        setLeads(rest);
         setTotalLeadsCount(response.data.total_count || 0);
       } else {
-        setLeads(useStack ? sortLeadsCallStack(callingLeads, { live: true }) : []);
-        setTotalLeadsCount(callingLeads.length);
+        setLeads([]);
       }
     } catch (err) {
       console.warn('API error listing leads', err);
+      // Do NOT clear liveCallingLeads here — concurrent calls must remain visible
       setLeads([]);
-      setTotalLeadsCount(0);
     } finally {
       if (showSpinner) setLeadsLoading(false);
     }
-  }, [id, leadsLimit, leadsOffset, leadsStatusFilter, leadsSearch, leadsOutcomeFilter, campaign?.status, campaign?.calling_leads]);
+  }, [
+    id,
+    leadsLimit,
+    leadsOffset,
+    leadsStatusFilter,
+    leadsSearch,
+    leadsOutcomeFilter,
+    campaign?.status,
+    campaign?.calling_leads,
+  ]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -333,21 +350,23 @@ const CampaignDetail = () => {
     if (campaign.status !== 'running' && !isPausing) return;
 
     // Poll faster when there are live calls so the stacking order updates in real-time
-    const hasLiveCalls = (campaign.calling_leads || 0) > 0;
+    const hasLiveCalls = (campaign.calling_leads || 0) > 0 || liveCallingLeads.length > 0;
     const interval = setInterval(() => {
       loadLeads(false);
     }, hasLiveCalls ? 1500 : 5000);
     return () => clearInterval(interval);
-  }, [campaign, activeTab, loadLeads]);
+  }, [campaign, activeTab, loadLeads, liveCallingLeads.length]);
 
   const handleOpenTranscript = (lead) => {
     setSelectedLeadForTranscript(lead);
     setIsTranscriptOpen(true);
   };
 
-  // Frontend filtering for attempts / turns (status + outcome filtered server-side)
+  // Frontend filtering for attempts / turns (status + outcome filtered server-side).
+  // Live calling leads are NEVER filtered out — they stay pinned on top.
   const getFilteredLeads = () => {
-    let filtered = [...leads];
+    const callingIds = new Set(liveCallingLeads.map((l) => l.id));
+    let filtered = leads.filter((l) => l.status !== 'calling' && !callingIds.has(l.id));
 
     if (leadsAttemptsFilter) {
       filtered = filtered.filter((l) => {
@@ -375,6 +394,19 @@ const CampaignDetail = () => {
   };
 
   const filteredLeads = getFilteredLeads();
+
+  const isLiveDialing =
+    campaign?.status === 'running' ||
+    campaign?.status === 'pausing' ||
+    (campaign?.status === 'paused' && ((campaign?.calling_leads || 0) > 0 || liveCallingLeads.length > 0));
+
+  // Always pin live concurrent calls above everything else
+  const sortedLeads = useMemo(() => {
+    const pinned = sortLeadsCallStack(liveCallingLeads, { live: true });
+    const rest = sortLeadsCallStack(filteredLeads, { live: isLiveDialing });
+    const pinnedIds = new Set(pinned.map((l) => l.id));
+    return [...pinned, ...rest.filter((l) => !pinnedIds.has(l.id))];
+  }, [liveCallingLeads, filteredLeads, isLiveDialing]);
 
   const handleToggleState = async () => {
     if (!campaign) return;
@@ -733,16 +765,6 @@ const CampaignDetail = () => {
       return <span className="cl-badge cl-badge--queued">{status || 'Unknown'}</span>;
     }
   };
-
-  const isLiveDialing =
-    campaign?.status === 'running' ||
-    campaign?.status === 'pausing' ||
-    (campaign?.status === 'paused' && (campaign?.calling_leads || 0) > 0);
-
-  const useCallStack =
-    isLiveDialing && !leadsStatusFilter && !leadsSearch && !leadsOutcomeFilter;
-
-  const sortedLeads = sortLeadsCallStack(filteredLeads, { live: useCallStack });
 
   const totalPages = Math.max(1, Math.ceil(totalLeadsCount / leadsLimit));
   const currentPage = Math.floor(leadsOffset / leadsLimit) + 1;
@@ -1103,7 +1125,7 @@ const CampaignDetail = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {leadsLoading ? (
+                      {leadsLoading && sortedLeads.length === 0 ? (
                         <tr>
                           <td colSpan="7" className="text-center text-muted">Loading leads...</td>
                         </tr>
@@ -1534,7 +1556,7 @@ const CampaignDetail = () => {
 
       <CallTranscriptDrawer
         isOpen={isTranscriptOpen}
-        sessionCallId={selectedLeadForTranscript ? (selectedLeadForTranscript.session_call_id || selectedLeadForTranscript.id) : null}
+        sessionCallId={selectedLeadForTranscript?.session_call_id || null}
         leadName={selectedLeadForTranscript ? selectedLeadForTranscript.name : ''}
         leadData={selectedLeadForTranscript}
         onClose={() => setIsTranscriptOpen(false)}

@@ -26,7 +26,12 @@ export function buildTurnsByLead(calls = []) {
   const bySession = new Map();
 
   (calls || []).forEach((call) => {
-    const count = computeTurnsFromTranscript(call.transcript);
+    // Prefer full transcript when present; list endpoints may only send transcript_turns.
+    const fromTranscript = computeTurnsFromTranscript(call.transcript);
+    const fromMeta = Number(call.transcript_turns);
+    const count = fromTranscript > 0
+      ? fromTranscript
+      : (Number.isFinite(fromMeta) && fromMeta > 0 ? fromMeta : 0);
     const leadId = call.lead_id != null ? String(call.lead_id) : null;
     const sessionId = call.session_call_id != null ? String(call.session_call_id) : null;
     if (leadId) {

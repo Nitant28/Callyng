@@ -19,7 +19,11 @@ async def test_list_call_logs_excludes_heavy_jsonb_columns():
     await pg_db.list_call_logs(pool, uuid4(), limit=10, offset=0)
 
     sql = pool.fetch.await_args.args[0]
-    assert "cl.transcript" not in sql
+    # Must not project the full transcript JSONB blob as a returned column.
+    assert "cl.transcript AS" not in sql
+    assert ", cl.transcript\n" not in sql
+    assert "transcript_turns" in sql
+    assert "COALESCE(cl.transcript" in sql
     assert "extraction_json" not in sql
     assert "plivo_hangup_json" not in sql
     assert "cl.session_call_id" in sql
