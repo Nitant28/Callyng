@@ -10,14 +10,12 @@ export function computeTurnsFromTranscript(transcript) {
   }
   if (!Array.isArray(turns) || turns.length === 0) return 0;
 
-  let aiTurns = 0;
-  let custTurns = 0;
+  let total = 0;
   turns.forEach((t) => {
     const role = t?.role;
-    if (role === 'assistant' || role === 'bot') aiTurns += 1;
-    else custTurns += 1;
+    if (role === 'assistant' || role === 'bot' || role === 'user') total += 1;
   });
-  return aiTurns + custTurns;
+  return total;
 }
 
 /** Map lead_id / session_call_id → turn count from already-loaded calls. */
@@ -26,12 +24,11 @@ export function buildTurnsByLead(calls = []) {
   const bySession = new Map();
 
   (calls || []).forEach((call) => {
-    // Prefer full transcript when present; list endpoints may only send transcript_turns.
     const fromTranscript = computeTurnsFromTranscript(call.transcript);
     const fromMeta = Number(call.transcript_turns);
     const count = fromTranscript > 0
       ? fromTranscript
-      : (Number.isFinite(fromMeta) && fromMeta > 0 ? fromMeta : 0);
+      : (Number.isFinite(fromMeta) && fromMeta >= 0 ? fromMeta : 0);
     const leadId = call.lead_id != null ? String(call.lead_id) : null;
     const sessionId = call.session_call_id != null ? String(call.session_call_id) : null;
     if (leadId) {
@@ -45,7 +42,17 @@ export function buildTurnsByLead(calls = []) {
 }
 
 export function getLeadTurns(lead, turnsIndex) {
-  if (!lead || !turnsIndex) return 0;
+  if (!lead) return 0;
+
+  // Prefer backend-provided count when the field is present on the lead row.
+  if (Object.prototype.hasOwnProperty.call(lead, 'transcript_turns')
+      && lead.transcript_turns != null
+      && lead.transcript_turns !== '') {
+    const fromLead = Number(lead.transcript_turns);
+    if (Number.isFinite(fromLead) && fromLead >= 0) return fromLead;
+  }
+
+  if (!turnsIndex) return 0;
   const sessionId = lead.session_call_id != null ? String(lead.session_call_id) : null;
   if (sessionId && turnsIndex.bySession.has(sessionId)) {
     return turnsIndex.bySession.get(sessionId) || 0;

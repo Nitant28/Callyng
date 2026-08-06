@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useTheme } from '../hooks/useTheme';
 
 import { useToast } from '../../contexts/ToastContext';
@@ -635,31 +635,57 @@ const CampaignDetail = () => {
             search: leadsSearch || undefined,
             status: leadsStatusFilter || undefined,
             outcome: leadsOutcomeFilter || undefined,
-            attempts: leadsAttemptsFilter || undefined,
           },
-          responseType: "blob",
-        }
+          responseType: 'blob',
+        },
       );
 
+      const slug = (campaign?.name || 'campaign').replace(/\s+/g, '_').slice(0, 40);
       const url = window.URL.createObjectURL(new Blob([response.data]));
-
-      const link = document.createElement("a");
+      const link = document.createElement('a');
       link.href = url;
-      link.download = `${campaign.name}-leads.xlsx`;
-
+      link.download = `${slug}_leads.xlsx`;
       document.body.appendChild(link);
       link.click();
-
       link.remove();
       window.URL.revokeObjectURL(url);
-
-      showToast("Export completed successfully.", "success");
+      showToast('Export completed successfully.', 'success');
     } catch (err) {
       console.error(err);
-      showToast(
-        err.customErrorMessage || "Failed to export leads.",
-        "error"
-      );
+      // Fallback: client-side CSV from lead rows (includes metadata columns)
+      try {
+        const pageSize = 200;
+        let offset = 0;
+        let total = Infinity;
+        const allRows = [];
+        while (offset < total) {
+          const res = await clientApi.get(`/api/campaigns/${id}/leads`, {
+            params: {
+              limit: pageSize,
+              offset,
+              search: leadsSearch || undefined,
+              status: leadsStatusFilter || undefined,
+              outcome: leadsOutcomeFilter || undefined,
+            },
+          });
+          const batch = res.data?.leads || [];
+          total = Number(res.data?.total_count ?? batch.length);
+          allRows.push(...batch);
+          if (batch.length === 0) break;
+          offset += pageSize;
+        }
+        const { buildLeadsExportCsv, downloadCsv } = await import('../utils/leadsExport');
+        const csv = buildLeadsExportCsv(allRows);
+        const slug = (campaign?.name || 'campaign').replace(/\s+/g, '_').slice(0, 40);
+        downloadCsv(`${slug}-leads.csv`, csv);
+        showToast(`Exported ${allRows.length.toLocaleString()} leads.`, 'success');
+      } catch (fallbackErr) {
+        console.error(fallbackErr);
+        showToast(
+          err.customErrorMessage || 'Failed to export leads.',
+          'error',
+        );
+      }
     }
   };
 
@@ -1085,8 +1111,8 @@ const CampaignDetail = () => {
                             </select>
                           </div>
                         </th>
-                        <th>
-                          <div className="cl-th-filter">
+                        <th className="cl-th--numeric">
+                          <div className="cl-th-filter cl-th-filter--center">
                             <span>Turns</span>
                             <select
                               value={leadsTurnsFilter}
@@ -1103,8 +1129,8 @@ const CampaignDetail = () => {
                             </select>
                           </div>
                         </th>
-                        <th>
-                          <div className="cl-th-filter">
+                        <th className="cl-th--numeric">
+                          <div className="cl-th-filter cl-th-filter--center">
                             <span>Attempts</span>
                             <select
                               value={leadsAttemptsFilter}
@@ -1159,8 +1185,8 @@ const CampaignDetail = () => {
                                 <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>—</span>
                               )}
                             </td>
-                            <td>{getLeadTurns(lead, turnsIndex)}</td>
-                            <td>{lead.attempts || 0}</td>
+                            <td className="cl-td--numeric">{getLeadTurns(lead, turnsIndex)}</td>
+                            <td className="cl-td--numeric">{lead.attempts || 0}</td>
                             <td className="text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex justify-end gap-2.5 flex-wrap">
                                 <button
@@ -1551,8 +1577,6 @@ const CampaignDetail = () => {
           )}
         </p>
       </Modal>
-
-
 
       <CallTranscriptDrawer
         isOpen={isTranscriptOpen}

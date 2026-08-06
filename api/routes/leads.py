@@ -17,9 +17,11 @@ from pydantic import BaseModel, Field
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from api.guards import require_campaign_modifiable, require_lead_editable
+from api.routes.campaigns import _get_lead_schema
 from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from lead_upload.normaliser import normalise_phone
+from lead_upload.validator import extract_lead_fields
 
 router = APIRouter(prefix="/api/campaigns", tags=["leads"])
 
@@ -69,6 +71,111 @@ async def _get_lead_or_404(pool, lead_id: UUID, cid: UUID, campaign_id: UUID) ->
     if str(lead.get("campaign_id")) != str(campaign_id):
         raise HTTPException(404, "Lead does not belong to this campaign")
     return lead
+
+
+def _parse_metadata(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        import json
+
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _build_export_layout(lead_schema: dict, rows: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Build import column specs (ordered) + system column specs for export.
+
+    Order: Name, Phone, schema/imported metadata columns, then system columns.
+    """
+    import_cols: list[dict] = []
+    seen: set[str] = set()
+    schema_keys: set[str] = set()
+
+    for label, key in [("Name", "name"), ("Phone", "phone")]:
+        import_cols.append({"header": label, "kind": "field", "key": key})
+        seen.add(label.lower())
+
+    for field in extract_lead_fields(lead_schema):
+        key = field.get("key")
+        csv_col = field.get("csv_column") or key
+        if not key:
+            continue
+        schema_keys.add(key)
+        schema_keys.add((csv_col or key).strip())
+        ncol = (csv_col or "").strip().lower()
+        if ncol in ("phone", "name", "lead_phone", "lead_name"):
+            continue
+        header = (csv_col or key).strip()
+        header_key = header.lower()
+        if header_key not in seen:
+            import_cols.append({"header": header, "kind": "metadata", "key": key, "alt_keys": [header]})
+            seen.add(header_key)
+
+    # Every metadata key present on any lead (preserves imported extras like email)
+    extra_keys: list[str] = []
+    for row in rows:
+        meta = _parse_metadata(row.get("metadata"))
+        for k in meta:
+            kl = str(k).strip()
+            if not kl:
+                continue
+            lower = kl.lower()
+            if lower in ("phone", "name", "lead_type"):
+                continue
+            if kl in schema_keys or lower in seen:
+                continue
+            if lower not in {e.lower() for e in extra_keys}:
+                extra_keys.append(kl)
+
+    for key in extra_keys:
+        header = str(key).strip()
+        if header.lower() not in seen:
+            import_cols.append({"header": header, "kind": "metadata", "key": key, "alt_keys": [header]})
+            seen.add(header.lower())
+
+    system_cols = [
+        ("Status", "status"),
+        ("Outcome", "outcome"),
+        ("Attempts", "attempts"),
+        ("Turns", "transcript_turns"),
+        ("Interested", "_interested"),
+        ("Last Call Duration", "last_call_duration_seconds"),
+        ("Last Call", "last_call_ended_at"),
+        ("Created Time", "created_at"),
+        ("Updated Time", "updated_at"),
+    ]
+    return import_cols, system_cols
+
+
+def _import_cell(row: dict, spec: dict) -> str:
+    if spec["kind"] == "field":
+        if spec["key"] == "phone":
+            return str(row.get("phone") or "")
+        return str(row.get("name") or "")
+    meta = _parse_metadata(row.get("metadata"))
+    for candidate in [spec.get("key"), *(spec.get("alt_keys") or []), spec.get("header")]:
+        if candidate is None:
+            continue
+        if candidate in meta and meta[candidate] is not None:
+            return str(meta[candidate])
+        # case-insensitive fallback
+        lower = str(candidate).lower()
+        for mk, mv in meta.items():
+            if str(mk).lower() == lower and mv is not None:
+                return str(mv)
+    return ""
+
+
+def _system_cell(row: dict, field: str):
+    if field == "_interested":
+        return "Yes" if (row.get("outcome") or "").strip() == "Interested" else "No"
+    val = row.get(field)
+    return "" if val is None else val
 
 
 # ── Feature 0: Read leads ───────────────────────────────────────────────────
@@ -124,43 +231,38 @@ async def export_leads(
         outcome=outcome,
     )
 
-    # Create workbook
+    bot = await pg_db.get_bot_config(
+        pool, UUID(str(camp["bot_config_id"])), cid
+    )
+    lead_schema = (
+        await _get_lead_schema(pool, bot, cid)
+        if bot is not None
+        else {"fields": []}
+    )
+    import_cols, system_cols = _build_export_layout(lead_schema, rows)
+    headers = [c["header"] for c in import_cols] + [label for label, _ in system_cols]
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Leads"
-
-    # Header row
-    headers = [
-        "Name",
-        "Phone",
-        "Status",
-        "Outcome",
-        "Attempts",
-        "Last Call Duration",
-        "Updated",
-    ]
-
     ws.append(headers)
 
-    # Make header bold
     for cell in ws[1]:
         cell.font = Font(bold=True)
 
-    # Data rows
     for row in rows:
-        ws.append([
-            row.get("name") or "",
-            str(row.get("phone") or ""),
-            row.get("status") or "",
-            row.get("outcome") or "",
-            row.get("attempts") or 0,
-            row.get("last_call_duration_seconds") or "",
-            str(row.get("updated_at") or ""),
-        ])
+        values = [_import_cell(row, spec) for spec in import_cols]
+        values.extend(_system_cell(row, field) for _, field in system_cols)
+        ws.append(values)
 
-    # Format phone column as text
-    for cell in ws["B"]:
-        cell.number_format = "@"
+    phone_col_idx = next(
+        (i + 1 for i, spec in enumerate(import_cols) if spec.get("key") == "phone"),
+        None,
+    )
+    if phone_col_idx:
+        col_letter = ws.cell(row=1, column=phone_col_idx).column_letter
+        for cell in ws[col_letter]:
+            cell.number_format = "@"
 
     slug = (camp.get("name") or "campaign").replace(" ", "_")[:40]
 

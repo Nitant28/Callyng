@@ -265,6 +265,7 @@ async def upload_leads(
             next_attempt_at = next_compliant_time()
 
         metadata: dict = {}
+        consumed_cols: set[str] = set()
         for field in extract_lead_fields(lead_schema):
             key = field.get("key")
             csv_col = field.get("csv_column") or key
@@ -273,6 +274,17 @@ async def upload_leads(
                 val = row[cmap[ncol]]
                 if pd.notna(val) and str(val).strip():
                     metadata[key] = str(val).strip()
+                consumed_cols.add(ncol)
+
+        # Preserve every imported CSV column (e.g. email) even if not in lead_schema
+        for ncol, original_col in cmap.items():
+            if ncol in ("phone", "name", "lead_type", "lead_phone", "lead_name"):
+                continue
+            if ncol in consumed_cols:
+                continue
+            val = row[original_col]
+            if pd.notna(val) and str(val).strip():
+                metadata[str(original_col).strip()] = str(val).strip()
 
         lt = "cold"
         if lead_type_col:
@@ -415,6 +427,24 @@ async def cancel_campaign(
         "campaign_id": str(campaign_id),
         **result,
     }
+
+
+@router.delete("/{campaign_id}")
+async def delete_campaign_route(
+    campaign_id: UUID,
+    client: dict = Depends(get_client_from_token),
+    pool=Depends(get_pool),
+):
+    cid = client_id_uuid(client)
+    camp = await pg_db.get_campaign(pool, campaign_id, cid)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    await stop_dialer(campaign_id, cid)
+    try:
+        result = await pg_db.delete_campaign(pool, campaign_id, cid)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
 
 
 @router.patch("/{campaign_id}/stop")

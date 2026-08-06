@@ -6,6 +6,7 @@ import LoaderOverlay from '../components/LoaderOverlay';
 import CallTranscriptDrawer from '../components/CallTranscriptDrawer';
 import { useDashboardData } from '../../contexts/DashboardDataContext';
 import { calculateDashboard } from '../utils/analytics';
+import { buildGraphData } from '../utils/analytics/graph.js';
 
 import DashboardHeader from '../components/dashboard/DashboardHeader';
 import DashboardKPIs from '../components/dashboard/DashboardKPIs';
@@ -34,7 +35,7 @@ const getIstStatus = () => {
 const Dashboard = () => {
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const { loading, refreshing, balance, campaigns, calls, totalCalls, refresh } = useDashboardData();
+  const { loading, refreshing, balance, campaigns, calls, refresh } = useDashboardData();
   const clientName = localStorage.getItem('client_name') || balance?.client_name || 'Client';
 
   const [istStatus, setIstStatus] = useState(getIstStatus());
@@ -44,6 +45,8 @@ const Dashboard = () => {
   const [confirmStart, setConfirmStart] = useState(null);
   const [scopeTab, setScopeTab] = useState('overall');
   const [drawerCall, setDrawerCall] = useState(null);
+  const [chartData, setChartData] = useState([]);
+  const [chartCallsCount, setChartCallsCount] = useState(0);
 
   const runningCampaigns = useMemo(
     () => (campaigns || []).filter((c) => c.status === 'running'),
@@ -82,12 +85,50 @@ const Dashboard = () => {
   const activeCampaign = scopedCampaigns[0] || null;
   const isCampaignScope = scopeTab !== 'overall';
 
-  const { graphData, activityEvents, metrics, campaignSummary } = calculateDashboard({
+  const { activityEvents, metrics, campaignSummary } = calculateDashboard({
     balance,
     campaigns: scopedCampaigns,
     calls: scopedCalls,
     options: { period, customStart, customEnd },
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    const params = { period };
+    if (customStart) params.custom_start = customStart;
+    if (customEnd) params.custom_end = customEnd;
+    if (scopeTab !== 'overall') params.campaign_id = scopeTab;
+
+    clientApi
+      .get('/api/dashboard/analytics', { params })
+      .then((res) => {
+        if (cancelled) return;
+        const series = res.data?.chart_series || [];
+        if (series.length > 0 || (res.data?.summary?.totalCalls ?? 0) === 0) {
+          setChartData(series);
+          setChartCallsCount(res.data?.summary?.totalCalls || 0);
+          return;
+        }
+        // Empty series with calls elsewhere — keep API counts, empty chart OK
+        setChartData(series);
+        setChartCallsCount(res.data?.summary?.totalCalls || 0);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Client-side fallback from already-loaded call rows
+        const scoped =
+          scopeTab === 'overall'
+            ? (calls || [])
+            : (calls || []).filter((c) => String(c.campaign_id) === String(scopeTab));
+        const fallback = buildGraphData(scoped, { period, customStart, customEnd });
+        setChartData(fallback);
+        setChartCallsCount(scoped.length);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [period, customStart, customEnd, scopeTab, refreshing, campaigns, calls]);
 
   useEffect(() => {
     const id = setInterval(() => setIstStatus(getIstStatus()), 30000);
@@ -114,9 +155,9 @@ const Dashboard = () => {
     (c) => c.status === 'pausing' || (c.status === 'paused' && (c.calling_leads || 0) > 0),
   );
 
-  const totalLeads = Number(activeCampaign?.total_leads || 0);
+  const campaignTotalLeads = Number(activeCampaign?.total_leads || 0);
   const completedLeads = Number(activeCampaign?.completed_leads || 0);
-  const campaignProgress = totalLeads > 0 ? Math.round((completedLeads / totalLeads) * 1000) / 10 : 0;
+  const campaignProgress = campaignTotalLeads > 0 ? Math.round((completedLeads / campaignTotalLeads) * 1000) / 10 : 0;
   const conversion = Number(
     activeCampaign?.conversion_rate != null
       ? activeCampaign.conversion_rate
@@ -164,9 +205,9 @@ const Dashboard = () => {
                 iconClass="icon-green"
               />
               <MetricCard
-                label="Answered Calls"
-                value={Number(metrics.answeredLeads || 0).toLocaleString()}
-                icon="call_received"
+                label="Total Leads"
+                value={campaignTotalLeads.toLocaleString()}
+                icon="groups"
                 iconClass="icon-teal"
               />
               <MetricCard
@@ -187,7 +228,7 @@ const Dashboard = () => {
           ) : (
             <DashboardKPIs
               interestedLeads={metrics.interestedLeads}
-              answeredLeads={metrics.answeredLeads}
+              totalLeads={metrics.totalLeads}
               runningCampaigns={metrics.runningCampaigns}
               liveCalls={metrics.liveCalls}
               creditsUsed={metrics.creditsUsed}
@@ -197,8 +238,8 @@ const Dashboard = () => {
 
           <div className="cl-dashboard-grid cl-mb-section">
             <DashboardAnalytics
-              chartData={graphData}
-              callsCount={scopedCalls.length || (isCampaignScope ? 0 : totalCalls)}
+              chartData={chartData}
+              callsCount={chartCallsCount}
               period={period}
               onPeriodChange={setPeriod}
             />

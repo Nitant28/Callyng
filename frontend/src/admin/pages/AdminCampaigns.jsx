@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import adminApi from '../../shared/api/admin';
 import { useAdminData } from '../contexts/AdminDataContext';
+import AdminCustomerFilter from '../components/AdminCustomerFilter';
 
 export default function AdminCampaigns() {
   const { clients, clientsMap, botConfigs, botConfigsMap } = useAdminData();
@@ -8,6 +9,7 @@ export default function AdminCampaigns() {
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [clientFilter, setClientFilter] = useState('');
   
   const [copiedCampaignId, setCopiedCampaignId] = useState(null);
 
@@ -35,12 +37,17 @@ export default function AdminCampaigns() {
   // Drawer state
   const [selectedCampaign, setSelectedCampaign] = useState(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchCampaigns = useCallback(async () => {
     setLoading(true);
     try {
       const res = await adminApi.get('/internal/campaigns', {
-        params: { search: search || undefined }
+        params: {
+          search: search || undefined,
+          client_id: clientFilter || undefined,
+        },
       });
       setCampaigns(res.data.campaigns || []);
     } catch (err) {
@@ -48,7 +55,7 @@ export default function AdminCampaigns() {
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, [search, clientFilter]);
 
   useEffect(() => {
     fetchCampaigns();
@@ -127,6 +134,24 @@ export default function AdminCampaigns() {
     }
   };
 
+  const handleDeleteCampaign = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await adminApi.delete(`/internal/campaigns/${deleteTarget.id}`);
+      setDeleteTarget(null);
+      if (selectedCampaign?.id === deleteTarget.id) {
+        setIsDrawerOpen(false);
+        setSelectedCampaign(null);
+      }
+      fetchCampaigns();
+    } catch (err) {
+      alert(err.customErrorMessage || 'Failed to delete campaign');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const openDrawer = async (camp) => {
     setSelectedCampaign(camp);
     setIsDrawerOpen(true);
@@ -155,21 +180,26 @@ export default function AdminCampaigns() {
 
   return (
     <div className="w-full relative">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-stack-lg gap-4">
-        <div>
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4">
+        <div className="min-w-0">
           <h2 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text">Campaigns</h2>
           <p className="font-body-md text-body-md text-arctic-text-muted dark:text-molten-text-muted mt-1">Manage global dialing jobs and monitor progress.</p>
         </div>
-        <div className="flex gap-3 items-center">
-          <input 
+        <div className="flex flex-nowrap items-center gap-3 shrink-0">
+          <AdminCustomerFilter
+            clients={clients}
+            value={clientFilter}
+            onChange={setClientFilter}
+          />
+          <input
             type="text"
             placeholder="Search campaigns"
-            className="px-4 py-2 bg-surface-container-lowest dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm text-on-surface dark:text-molten-text"
+            className="h-10 w-[220px] px-3 bg-surface-container-lowest dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button 
-            className="bg-primary text-on-primary dark:bg-molten-primary rounded-lg py-2 px-4 font-label-md flex items-center gap-2 hover:-translate-y-[1px] transition-transform active:scale-95"
+          <button
+            className="h-10 shrink-0 bg-primary text-on-primary dark:bg-molten-primary rounded-lg px-4 font-label-md flex items-center gap-2 hover:-translate-y-[1px] transition-transform active:scale-95 whitespace-nowrap"
             onClick={() => setIsCreateOpen(true)}
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
@@ -242,6 +272,10 @@ export default function AdminCampaigns() {
                           className="px-2 py-1 text-xs rounded bg-error-container dark:bg-molten-error/20 text-on-error-container dark:text-molten-error hover:opacity-80"
                         >Cancel</button>
                       )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeleteTarget(camp); }}
+                        className="px-2 py-1 text-xs rounded bg-error/10 dark:bg-molten-error/10 text-error dark:text-molten-error hover:opacity-80"
+                      >Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -359,6 +393,12 @@ export default function AdminCampaigns() {
                   {(selectedCampaign.status !== 'completed' && selectedCampaign.status !== 'cancelled') && (
                     <button onClick={() => handleAction('cancel', selectedCampaign.id)} className="px-2 py-1 text-xs rounded bg-error-container dark:bg-molten-error/20 text-on-error-container dark:text-molten-error hover:opacity-80">Cancel</button>
                   )}
+                  <button
+                    onClick={() => setDeleteTarget(selectedCampaign)}
+                    className="px-2 py-1 text-xs rounded bg-error/10 dark:bg-molten-error/10 text-error dark:text-molten-error hover:opacity-80"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
 
@@ -391,6 +431,24 @@ export default function AdminCampaigns() {
                 <div className="flex justify-between"><span>Retry Delay:</span> <span className="dark:text-molten-text">{selectedCampaign.retry_delay_minutes}m</span></div>
                 <div className="flex justify-between"><span>Max Call Length:</span> <span className="dark:text-molten-text">{selectedCampaign.max_call_minutes}m</span></div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/50 z-[110] flex items-center justify-center p-4" onClick={() => !deleting && setDeleteTarget(null)}>
+          <div className="bg-surface-container-lowest dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-headline-sm text-on-surface dark:text-molten-text mb-2">Delete campaign?</h3>
+            <p className="text-sm text-on-surface-variant dark:text-molten-text-muted mb-6">
+              Remove <strong>{deleteTarget.name}</strong> from the Client Panel and admin Campaigns list?
+              This action requires confirmation.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" disabled={deleting} onClick={() => setDeleteTarget(null)} className="px-4 py-2 rounded-lg border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text">Keep</button>
+              <button type="button" disabled={deleting} onClick={handleDeleteCampaign} className="px-4 py-2 rounded-lg bg-error text-white disabled:opacity-60">
+                {deleting ? 'Deleting...' : 'Delete campaign'}
+              </button>
             </div>
           </div>
         </div>

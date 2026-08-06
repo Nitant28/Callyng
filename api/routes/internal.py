@@ -498,6 +498,24 @@ async def cancel_campaign_admin(
     return {"campaign_id": str(campaign_id), **result}
 
 
+@router.delete("/campaigns/{campaign_id}")
+async def delete_campaign_admin(
+    campaign_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    camp = await pg_db.get_campaign_admin(pool, campaign_id)
+    if camp is None:
+        raise HTTPException(404, "Campaign not found")
+    client_id = UUID(str(camp["client_id"]))
+    await stop_dialer(campaign_id, client_id)
+    try:
+        result = await pg_db.delete_campaign(pool, campaign_id, client_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
+
+
 @router.post("/campaigns/{campaign_id}/reconcile")
 async def reconcile_campaign(
     campaign_id: UUID,
