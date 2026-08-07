@@ -8,6 +8,10 @@ from uuid import UUID
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
+from io import BytesIO
+from openpyxl import Workbook
+from openpyxl.styles import Font
 from typing import Optional
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
@@ -17,7 +21,13 @@ from db import postgres as pg_db
 from dialer.concurrent_dialer import start_dialer, stop_dialer
 from lead_upload.normaliser import normalise_phone
 from lead_upload.parser import parse_upload
-from lead_upload.validator import validate_dataframe, extract_lead_fields
+from lead_upload.validator import (
+    validate_dataframe,
+    extract_lead_fields,
+    field_display_header,
+    _field_header_candidates,
+    _normalize_col,
+)
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 
@@ -232,13 +242,17 @@ async def upload_leads(
 
     lead_schema = await _get_lead_schema(pool, bot, cid)
 
+    filename = file.filename or "upload.xlsx"
+    if not filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "Only Excel (.xlsx) files are supported")
+
     content = await file.read()
     import io
 
     try:
-        df = parse_upload(io.BytesIO(content), file.filename or "upload.csv")
-    except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
-        raise HTTPException(400, "Uploaded file is empty, malformed, or missing columns")
+        df = parse_upload(io.BytesIO(content), filename)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError) as exc:
+        raise HTTPException(400, str(exc) or "Uploaded file is empty, malformed, or missing columns")
     errors = validate_dataframe(df, lead_schema)
     if errors:
         raise HTTPException(400, {"errors": errors})
@@ -264,27 +278,25 @@ async def upload_leads(
         if not allowed and "window" in reason:
             next_attempt_at = next_compliant_time()
 
+        # Schema is the single source of truth — only store schema fields
         metadata: dict = {}
-        consumed_cols: set[str] = set()
         for field in extract_lead_fields(lead_schema):
             key = field.get("key")
-            csv_col = field.get("csv_column") or key
-            ncol = (csv_col or "").strip().lower()
-            if ncol in cmap and key:
-                val = row[cmap[ncol]]
-                if pd.notna(val) and str(val).strip():
-                    metadata[key] = str(val).strip()
-                consumed_cols.add(ncol)
-
-        # Preserve every imported CSV column (e.g. email) even if not in lead_schema
-        for ncol, original_col in cmap.items():
-            if ncol in ("phone", "name", "lead_type", "lead_phone", "lead_name"):
+            if not key:
                 continue
-            if ncol in consumed_cols:
+            matched_col = None
+            for cand in _field_header_candidates(field):
+                ncol = _normalize_col(cand)
+                if ncol in ("phone", "name", "lead_phone", "lead_name", "lead_type"):
+                    continue
+                if ncol in cmap:
+                    matched_col = cmap[ncol]
+                    break
+            if matched_col is None:
                 continue
-            val = row[original_col]
+            val = row[matched_col]
             if pd.notna(val) and str(val).strip():
-                metadata[str(original_col).strip()] = str(val).strip()
+                metadata[key] = str(val).strip()
 
         lt = "cold"
         if lead_type_col:
@@ -318,14 +330,13 @@ async def upload_leads(
     }
 
 
-from fastapi.responses import PlainTextResponse
-
-@router.get("/{campaign_id}/leads/template", response_class=PlainTextResponse)
+@router.get("/{campaign_id}/leads/template")
 async def get_lead_template(
     campaign_id: UUID,
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
 ):
+    """Download Excel template generated from the campaign Lead Schema."""
     cid = client_id_uuid(client)
     campaign = await pg_db.get_campaign(pool, campaign_id, cid)
     if campaign is None:
@@ -341,24 +352,99 @@ async def get_lead_template(
         lead_schema = await _get_lead_schema(pool, bot, cid)
     except HTTPException:
         lead_schema = {"fields": []}
-    
-    headers = ["phone", "name"]
-    for field in extract_lead_fields(lead_schema):
-        csv_col = field.get("csv_column") or field.get("key")
-        if csv_col and csv_col.lower() not in ("phone", "name", "lead_phone", "lead_name"):
-            headers.append(csv_col)
-            
-    import csv
-    import io
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(headers)
-    
-    return PlainTextResponse(
-        content=output.getvalue(),
+
+    headers = ["Name", "Phone"]
+    example = ["Rahul Patil", "+919876543210"]
+    required_notes: list[str] = ["Name", "Phone"]
+    fields = extract_lead_fields(lead_schema)
+
+    for field in fields:
+        key = (field.get("key") or "").strip().lower()
+        header = field_display_header(field)
+        if key in ("phone", "name", "lead_phone", "lead_name", "lead_type") or header.lower() in (
+            "phone", "name", "lead_phone", "lead_name", "lead_type",
+        ):
+            continue
+        headers.append(header)
+        ftype = (field.get("type") or "text").lower()
+        if ftype == "number":
+            example.append("3500000")
+        elif ftype == "dropdown" and field.get("options"):
+            example.append(str(field["options"][0]))
+        else:
+            example.append(field.get("placeholder") or f"Example {header}")
+        if field.get("required"):
+            required_notes.append(header)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Leads"
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.append(example)
+
+    # Phone column as text so +91… is preserved
+    phone_idx = headers.index("Phone") + 1
+    phone_letter = ws.cell(row=1, column=phone_idx).column_letter
+    for cell in ws[phone_letter]:
+        cell.number_format = "@"
+
+    instr = wb.create_sheet("Instructions")
+    instr.append(["Lead Import Instructions"])
+    instr["A1"].font = Font(bold=True, size=14)
+    instr.append([])
+    instr.append(["Required fields"])
+    instr["A3"].font = Font(bold=True)
+    for name in required_notes:
+        instr.append([name])
+    instr.append([])
+    instr.append(["Phone format"])
+    instr["A" + str(instr.max_row)].font = Font(bold=True)
+    instr.append(["Include country code, e.g. +919876543210"])
+    instr.append([])
+    instr.append(["Lead Type (optional column)"])
+    instr["A" + str(instr.max_row)].font = Font(bold=True)
+    instr.append(["Accepted values: cold, warm, hot"])
+    instr.append([])
+    instr.append(["Field details"])
+    instr["A" + str(instr.max_row)].font = Font(bold=True)
+    instr.append(["Label", "Key", "Type", "Required", "Accepted values"])
+    for cell in instr[instr.max_row]:
+        cell.font = Font(bold=True)
+    for field in fields:
+        key = (field.get("key") or "").strip().lower()
+        header = field_display_header(field)
+        if key in ("phone", "name", "lead_phone", "lead_name", "lead_type") or header.lower() in (
+            "phone", "name", "lead_phone", "lead_name", "lead_type",
+        ):
+            continue
+        opts = ""
+        if (field.get("type") or "").lower() == "dropdown" and field.get("options"):
+            opts = ", ".join(str(o) for o in field["options"])
+        instr.append([
+            header,
+            field.get("key") or "",
+            field.get("type") or "text",
+            "Yes" if field.get("required") else "No",
+            opts,
+        ])
+    instr.append([])
+    instr.append(["Example row"])
+    instr["A" + str(instr.max_row)].font = Font(bold=True)
+    instr.append(headers)
+    instr.append(example)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    script_id = bot.get("script_id") or "leads"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="template_{bot["script_id"]}.csv"'
-        }
+            "Content-Disposition": f'attachment; filename="template_{script_id}.xlsx"'
+        },
     )
 
 

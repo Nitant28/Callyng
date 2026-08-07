@@ -3470,11 +3470,11 @@ async def get_call_log(
     session_call_id: str,
     client_id: UUID,
 ) -> dict | None:
+    """Fetch a single call by session id (includes test calls — detail view)."""
     row = await pool.fetchrow(
         """
         SELECT * FROM call_logs
         WHERE session_call_id = $1 AND client_id = $2
-          AND (call_data->>'is_test_call' IS NULL OR call_data->>'is_test_call' != 'true')
         """,
         session_call_id,
         client_id,
@@ -3487,11 +3487,11 @@ async def get_latest_call_log_for_lead(
     lead_id: UUID,
     client_id: UUID,
 ) -> dict | None:
+    """Latest call for a lead (includes test calls — detail / drawer)."""
     row = await pool.fetchrow(
         """
         SELECT * FROM call_logs
         WHERE lead_id = $1 AND client_id = $2
-          AND (call_data->>'is_test_call' IS NULL OR call_data->>'is_test_call' != 'true')
         ORDER BY created_at DESC
         LIMIT 1
         """,

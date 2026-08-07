@@ -21,7 +21,7 @@ from api.routes.campaigns import _get_lead_schema
 from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from lead_upload.normaliser import normalise_phone
-from lead_upload.validator import extract_lead_fields
+from lead_upload.validator import extract_lead_fields, field_display_header
 
 router = APIRouter(prefix="/api/campaigns", tags=["leads"])
 
@@ -87,14 +87,15 @@ def _parse_metadata(raw) -> dict:
     return {}
 
 
-def _build_export_layout(lead_schema: dict, rows: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:
-    """Build import column specs (ordered) + system column specs for export.
 
-    Order: Name, Phone, schema/imported metadata columns, then system columns.
+def _build_export_layout(lead_schema: dict, rows: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Build schema-driven columns + system columns for export.
+
+    Order: Name, Phone, Lead Schema fields, then system columns.
+    Lead Schema is the single source of truth — no ad-hoc metadata extras.
     """
     import_cols: list[dict] = []
     seen: set[str] = set()
-    schema_keys: set[str] = set()
 
     for label, key in [("Name", "name"), ("Phone", "phone")]:
         import_cols.append({"header": label, "kind": "field", "key": key})
@@ -102,41 +103,22 @@ def _build_export_layout(lead_schema: dict, rows: list[dict]) -> tuple[list[dict
 
     for field in extract_lead_fields(lead_schema):
         key = field.get("key")
-        csv_col = field.get("csv_column") or key
         if not key:
             continue
-        schema_keys.add(key)
-        schema_keys.add((csv_col or key).strip())
-        ncol = (csv_col or "").strip().lower()
-        if ncol in ("phone", "name", "lead_phone", "lead_name"):
+        if str(key).strip().lower() in ("phone", "name", "lead_phone", "lead_name", "lead_type"):
             continue
-        header = (csv_col or key).strip()
+        header = field_display_header(field)
+        ncol = header.strip().lower()
+        if ncol in ("phone", "name", "lead_phone", "lead_name", "lead_type"):
+            continue
         header_key = header.lower()
         if header_key not in seen:
-            import_cols.append({"header": header, "kind": "metadata", "key": key, "alt_keys": [header]})
+            alt = []
+            for cand in (field.get("csv_column"), field.get("label"), field.get("key"), key):
+                if cand and str(cand).strip() and str(cand).strip().lower() not in {a.lower() for a in alt}:
+                    alt.append(str(cand).strip())
+            import_cols.append({"header": header, "kind": "metadata", "key": key, "alt_keys": alt})
             seen.add(header_key)
-
-    # Every metadata key present on any lead (preserves imported extras like email)
-    extra_keys: list[str] = []
-    for row in rows:
-        meta = _parse_metadata(row.get("metadata"))
-        for k in meta:
-            kl = str(k).strip()
-            if not kl:
-                continue
-            lower = kl.lower()
-            if lower in ("phone", "name", "lead_type"):
-                continue
-            if kl in schema_keys or lower in seen:
-                continue
-            if lower not in {e.lower() for e in extra_keys}:
-                extra_keys.append(kl)
-
-    for key in extra_keys:
-        header = str(key).strip()
-        if header.lower() not in seen:
-            import_cols.append({"header": header, "kind": "metadata", "key": key, "alt_keys": [header]})
-            seen.add(header.lower())
 
     system_cols = [
         ("Status", "status"),
@@ -150,7 +132,6 @@ def _build_export_layout(lead_schema: dict, rows: list[dict]) -> tuple[list[dict
         ("Updated Time", "updated_at"),
     ]
     return import_cols, system_cols
-
 
 def _import_cell(row: dict, spec: dict) -> str:
     if spec["kind"] == "field":

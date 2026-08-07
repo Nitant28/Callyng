@@ -8,10 +8,15 @@ import clientApi from '../../api/client';
 import LoaderOverlay from '../components/LoaderOverlay';
 import CallTranscriptDrawer from '../components/CallTranscriptDrawer';
 import { Modal, Button } from '../../components/enterprise';
-import CustomMetadataFields from '../../components/client/CustomMetadataFields';
-import { buildMetadataFromCustomFields } from '../../utils/leadFormHelpers';
-import { sortLeadsCallStack } from '../../pages/client/LeadSheet/leadUtils';
 import { buildTurnsByLead, getLeadTurns } from '../utils/computeTurns';
+import {
+  createEmptyDialerQueues,
+  resetDialerQueues,
+  reconcileDialerQueues,
+  flattenDialerQueues,
+  filterFlattenedQueue,
+  isLiveLeadRow,
+} from '../utils/leadsDisplayQueue';
 
 /** Friendly labels for canonical backend outcomes (call_outcomes.py / ┬º1.2). */
 const OUTCOME_LABELS = {
@@ -89,9 +94,14 @@ const CampaignDetail = () => {
 
   // Campaign Details & UI State
   const [campaign, setCampaign] = useState(null);
-  const [leads, setLeads] = useState([]);
-  const [liveCallingLeads, setLiveCallingLeads] = useState([]);
-  const liveCallingLeadsRef = useRef([]);
+  const [displayQueue, setDisplayQueue] = useState([]);
+  const dialerQueuesRef = useRef(createEmptyDialerQueues());
+  const pollVersionRef = useRef(0);
+  const applyingPollRef = useRef(null);
+  const prevCampaignStatusRef = useRef(null);
+  /** Last known live flag — never drop slots because campaign state is briefly stale. */
+  const campaignLiveRef = useRef(false);
+  const campaignConcurrencyRef = useRef(0);
   const [totalLeadsCount, setTotalLeadsCount] = useState(0);
   const [leadsLimit, setLeadsLimit] = useState(50);
   const [leadsOffset, setLeadsOffset] = useState(0);
@@ -117,7 +127,6 @@ const CampaignDetail = () => {
   // Manual Add Lead Modal State
   const [isAddLeadOpen, setIsAddLeadOpen] = useState(false);
   const [newLead, setNewLead] = useState({ name: '', phone: '', lead_type: 'cold', metadata: {} });
-  const [addLeadCustomColumns, setAddLeadCustomColumns] = useState([]);
 
   // Edit Lead Modal State
   const [isEditLeadOpen, setIsEditLeadOpen] = useState(false);
@@ -142,15 +151,64 @@ const CampaignDetail = () => {
   const getDynamicLeadFields = useCallback(() => {
     const schema = campaign?.bot_config?.lead_schema;
     if (!schema) return [];
-    if (schema.fields && Array.isArray(schema.fields)) return schema.fields;
-
-    return Object.entries(schema).map(([key, value]) => {
-      if (typeof value === 'object') {
-        return { key, ...value };
-      }
-      return null;
-    }).filter(f => f !== null);
+    let fields = [];
+    if (schema.fields && Array.isArray(schema.fields)) {
+      fields = schema.fields;
+    } else {
+      fields = Object.entries(schema).map(([key, value]) => {
+        if (typeof value === 'object') {
+          return { key, ...value };
+        }
+        return null;
+      }).filter((f) => f !== null);
+    }
+    return fields
+      .filter((f) => f.key && !['lead_name', 'lead_phone', 'name', 'phone', 'lead_type'].includes(f.key))
+      .map((f) => ({
+        ...f,
+        label: f.label || f.csv_column || f.key.replace(/_/g, ' '),
+        type: f.type === 'string' ? 'text' : (f.type || 'text'),
+        placeholder: f.placeholder || f.description || '',
+        options: Array.isArray(f.options) ? f.options : [],
+      }));
   }, [campaign]);
+
+  const renderSchemaFieldInput = (field, value, onChange) => {
+    const label = (
+      <>
+        {field.label}{field.required ? ' *' : ''}
+      </>
+    );
+    if (field.type === 'dropdown') {
+      return (
+        <label key={field.key}>
+          {label}
+          <select
+            required={field.required}
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            <option value="">Select {field.label}</option>
+            {(field.options || []).map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+    return (
+      <label key={field.key}>
+        {label}
+        <input
+          type={field.type === 'number' ? 'number' : 'text'}
+          required={field.required}
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder || `Enter ${field.label}`}
+        />
+      </label>
+    );
+  };
 
   useEffect(() => {
     const updateIst = () => {
@@ -206,33 +264,43 @@ const CampaignDetail = () => {
     }
   }, [id]);
 
-  // Load leads — live concurrent calling rows are fetched separately and always pinned on top
+  // Transition-based dialer display queues (slot reservation, no sticky timer)
   const loadLeads = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLeadsLoading(true);
+    const pollVersion = ++pollVersionRef.current;
+    applyingPollRef.current = pollVersion;
     try {
-      const isLiveCampaign =
+      const statusKnown = Boolean(campaign?.status);
+      const isLiveFromCampaign =
         campaign?.status === 'running' ||
         campaign?.status === 'pausing' ||
         (campaign?.status === 'paused' && (campaign?.calling_leads || 0) > 0);
 
-      // Always pull calling leads while campaign is live — independent of filters/search/page
-      let nextCalling = liveCallingLeadsRef.current;
+      // Sticky live: once running, stay live across stale polls until status is
+      // explicitly idle (draft/completed/cancelled/paused-with-no-calls).
+      if (statusKnown) {
+        campaignLiveRef.current = Boolean(isLiveFromCampaign);
+        campaignConcurrencyRef.current = Math.max(
+          Number(campaign?.max_concurrent_calls) || 0,
+          campaignConcurrencyRef.current,
+        );
+      }
+      const isLiveCampaign = statusKnown ? Boolean(isLiveFromCampaign) : campaignLiveRef.current;
+
+      let callingLeads = [];
       if (isLiveCampaign) {
         try {
           const callingRes = await clientApi.get(`/api/campaigns/${id}/leads`, {
             params: { limit: 100, offset: 0, status: 'calling' },
           });
-          nextCalling = sortLeadsCallStack(callingRes.data?.leads || [], { live: true });
-          liveCallingLeadsRef.current = nextCalling;
-          setLiveCallingLeads(nextCalling);
+          callingLeads = callingRes.data?.leads || [];
         } catch {
-          // Keep previous liveCallingLeads so concurrent rows never blink away on a failed poll
-          nextCalling = liveCallingLeadsRef.current;
+          // Network blip: keep every occupied slot (real + reserved) as live so
+          // concurrent rows never vanish from the top of the table.
+          callingLeads = dialerQueuesRef.current.activeSlots
+            .filter((s) => s.lead)
+            .map((s) => ({ ...s.lead, status: 'calling' }));
         }
-      } else if (campaign) {
-        nextCalling = [];
-        liveCallingLeadsRef.current = [];
-        setLiveCallingLeads([]);
       }
 
       const response = await clientApi.get(`/api/campaigns/${id}/leads`, {
@@ -245,22 +313,37 @@ const CampaignDetail = () => {
         },
       });
 
-      const callingIds = new Set(nextCalling.map((l) => l.id));
-
-      if (response.data) {
-        const pageLeads = response.data.leads || [];
-        // Page body excludes calling — those always come from the pinned live set
-        const rest = pageLeads.filter((l) => l.status !== 'calling' && !callingIds.has(l.id));
-        setLeads(rest);
-        setTotalLeadsCount(response.data.total_count || 0);
-      } else {
-        setLeads([]);
+      // Only the latest in-flight poll may apply (Poll 11 wins; Poll 10 ignored)
+      if (pollVersion !== pollVersionRef.current || applyingPollRef.current !== pollVersion) {
+        return;
       }
+
+      const pageLeads = response.data?.leads || [];
+      // Slot capacity = configured concurrency (floor). Never shrink below
+      // currently occupied slots while live — that was dropping live rows.
+      const concurrency = Math.max(
+        Number(campaign?.max_concurrent_calls) || campaignConcurrencyRef.current || 0,
+        Number(campaign?.calling_leads) || 0,
+        callingLeads.length,
+        dialerQueuesRef.current.activeSlots.length,
+      );
+
+      const { state, ignored } = reconcileDialerQueues(dialerQueuesRef.current, {
+        callingLeads,
+        pageLeads,
+        isLive: Boolean(isLiveCampaign),
+        concurrency,
+        pollVersion,
+      });
+      if (ignored || pollVersion !== pollVersionRef.current) return;
+
+      dialerQueuesRef.current = state;
+      setDisplayQueue(flattenDialerQueues(state));
+      setTotalLeadsCount(response.data?.total_count || 0);
     } catch (err) {
       console.warn('API error listing leads', err);
-      // Do NOT clear liveCallingLeads here — concurrent calls must remain visible
-      setLeads([]);
     } finally {
+      if (applyingPollRef.current === pollVersion) applyingPollRef.current = null;
       if (showSpinner) setLeadsLoading(false);
     }
   }, [
@@ -272,6 +355,7 @@ const CampaignDetail = () => {
     leadsOutcomeFilter,
     campaign?.status,
     campaign?.calling_leads,
+    campaign?.max_concurrent_calls,
   ]);
 
   useEffect(() => {
@@ -343,70 +427,66 @@ const CampaignDetail = () => {
     return () => clearInterval(interval);
   }, [campaign, loadCampaignDetails]);
 
+  useEffect(() => {
+    dialerQueuesRef.current = resetDialerQueues(dialerQueuesRef.current);
+    pollVersionRef.current = 0;
+    applyingPollRef.current = null;
+    prevCampaignStatusRef.current = null;
+    campaignLiveRef.current = false;
+    campaignConcurrencyRef.current = 0;
+    setDisplayQueue([]);
+  }, [id]);
+
+  // Full reset on campaign restart (paused/draft/completed → running)
+  useEffect(() => {
+    const prev = prevCampaignStatusRef.current;
+    const next = campaign?.status;
+    prevCampaignStatusRef.current = next;
+    if (campaign?.max_concurrent_calls) {
+      campaignConcurrencyRef.current = Math.max(
+        campaignConcurrencyRef.current,
+        Number(campaign.max_concurrent_calls) || 0,
+      );
+    }
+    if (!prev || !next) return;
+    const wasIdle = ['paused', 'draft', 'completed', 'cancelled'].includes(prev);
+    if (wasIdle && next === 'running') {
+      dialerQueuesRef.current = resetDialerQueues(dialerQueuesRef.current);
+      pollVersionRef.current = 0;
+      applyingPollRef.current = null;
+      campaignLiveRef.current = true;
+      setDisplayQueue([]);
+    }
+  }, [campaign?.status, campaign?.max_concurrent_calls]);
+
   // Poll leads table while campaign is active
   useEffect(() => {
     if (!campaign || activeTab !== 'leads') return;
     const isPausing = campaign.status === 'pausing' || (campaign.status === 'paused' && campaign.calling_leads > 0);
     if (campaign.status !== 'running' && !isPausing) return;
 
-    // Poll faster when there are live calls so the stacking order updates in real-time
-    const hasLiveCalls = (campaign.calling_leads || 0) > 0 || liveCallingLeads.length > 0;
+    const activeCount = dialerQueuesRef.current.activeSlots.length;
+    const hasLiveCalls = (campaign.calling_leads || 0) > 0 || activeCount > 0;
     const interval = setInterval(() => {
       loadLeads(false);
     }, hasLiveCalls ? 1500 : 5000);
     return () => clearInterval(interval);
-  }, [campaign, activeTab, loadLeads, liveCallingLeads.length]);
+  }, [campaign, activeTab, loadLeads]);
 
   const handleOpenTranscript = (lead) => {
     setSelectedLeadForTranscript(lead);
     setIsTranscriptOpen(true);
   };
 
-  // Frontend filtering for attempts / turns (status + outcome filtered server-side).
-  // Live calling leads are NEVER filtered out — they stay pinned on top.
-  const getFilteredLeads = () => {
-    const callingIds = new Set(liveCallingLeads.map((l) => l.id));
-    let filtered = leads.filter((l) => l.status !== 'calling' && !callingIds.has(l.id));
-
-    if (leadsAttemptsFilter) {
-      filtered = filtered.filter((l) => {
-        const attempts = l.attempts || 0;
-        if (leadsAttemptsFilter === '1') return attempts === 1;
-        if (leadsAttemptsFilter === '2') return attempts === 2;
-        if (leadsAttemptsFilter === '3') return attempts === 3;
-        if (leadsAttemptsFilter === '4+') return attempts >= 4;
-        return true;
-      });
-    }
-
-    if (leadsTurnsFilter) {
-      filtered = filtered.filter((l) => {
-        const turns = getLeadTurns(l, turnsIndex);
-        if (leadsTurnsFilter === '0') return turns === 0;
-        if (leadsTurnsFilter === '1-3') return turns >= 1 && turns <= 3;
-        if (leadsTurnsFilter === '4-8') return turns >= 4 && turns <= 8;
-        if (leadsTurnsFilter === '9+') return turns >= 9;
-        return true;
-      });
-    }
-
-    return filtered;
-  };
-
-  const filteredLeads = getFilteredLeads();
-
-  const isLiveDialing =
-    campaign?.status === 'running' ||
-    campaign?.status === 'pausing' ||
-    (campaign?.status === 'paused' && ((campaign?.calling_leads || 0) > 0 || liveCallingLeads.length > 0));
-
-  // Always pin live concurrent calls above everything else
-  const sortedLeads = useMemo(() => {
-    const pinned = sortLeadsCallStack(liveCallingLeads, { live: true });
-    const rest = sortLeadsCallStack(filteredLeads, { live: isLiveDialing });
-    const pinnedIds = new Set(pinned.map((l) => l.id));
-    return [...pinned, ...rest.filter((l) => !pinnedIds.has(l.id))];
-  }, [liveCallingLeads, filteredLeads, isLiveDialing]);
+  // Filters never strip active slots; order = activeSlots + side queues
+  const sortedLeads = useMemo(
+    () => filterFlattenedQueue(displayQueue, {
+      attemptsFilter: leadsAttemptsFilter,
+      turnsFilter: leadsTurnsFilter,
+      getTurns: (l) => getLeadTurns(l, turnsIndex),
+    }),
+    [displayQueue, leadsAttemptsFilter, leadsTurnsFilter, turnsIndex],
+  );
 
   const handleToggleState = async () => {
     if (!campaign) return;
@@ -491,14 +571,14 @@ const CampaignDetail = () => {
     e.preventDefault();
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
-      uploadCSVFile(files[0]);
+      uploadExcelFile(files[0]);
     }
   };
 
   const handleFileBrowse = (e) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      uploadCSVFile(files[0]);
+      uploadExcelFile(files[0]);
     }
   };
 
@@ -510,16 +590,23 @@ const CampaignDetail = () => {
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `template.csv`);
+      link.setAttribute('download', `template.xlsx`);
       document.body.appendChild(link);
       link.click();
       link.parentNode.removeChild(link);
     } catch (err) {
       console.warn('Failed to download template', err);
+      showToast(err.customErrorMessage || 'Failed to download template.', 'error');
     }
   };
 
-  const uploadCSVFile = async (file) => {
+  const uploadExcelFile = async (file) => {
+    const name = (file?.name || '').toLowerCase();
+    if (!name.endsWith('.xlsx') && !name.endsWith('.xls')) {
+      showToast('Only Excel (.xlsx) files are supported.', 'error');
+      return;
+    }
+
     setIsUploading(true);
     setUploadResult(null);
 
@@ -545,10 +632,14 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.error('File upload failed', err);
-      showToast(err.customErrorMessage || 'Failed to upload leads. Please verify file formatting.', 'error');
+      const apiErrors = err?.response?.data?.detail?.errors || err?.response?.data?.errors;
+      const message = Array.isArray(apiErrors)
+        ? apiErrors.join('; ')
+        : (err.customErrorMessage || 'Failed to upload leads. Please verify file formatting.');
+      showToast(message, 'error');
       setUploadResult({
         success: false,
-        message: err.customErrorMessage || 'Failed to upload leads. Please verify file formatting.'
+        message,
       });
     } finally {
       setIsUploading(false);
@@ -562,7 +653,7 @@ const CampaignDetail = () => {
     try {
       const payload = {
         ...newLead,
-        metadata: buildMetadataFromCustomFields(newLead.metadata, addLeadCustomColumns),
+        metadata: newLead.metadata || {},
       };
       const response = await clientApi.post(`/api/campaigns/${id}/leads`, payload);
       if (response.data) {
@@ -570,7 +661,6 @@ const CampaignDetail = () => {
         showToast('Lead added successfully.', 'success');
         setIsAddLeadOpen(false);
         setNewLead({ name: '', phone: '', lead_type: 'cold', metadata: {} });
-        setAddLeadCustomColumns([]);
         loadLeads();
         loadCampaignDetails();
         return;
@@ -586,10 +676,11 @@ const CampaignDetail = () => {
     if (!editLeadData.name?.trim()) return;
 
     try {
-      // 1. Update basic fields
+      // 1. Update basic fields + schema metadata
       await clientApi.patch(`/api/campaigns/${id}/leads/${editLeadData.id}`, {
         name: editLeadData.name,
-        lead_type: editLeadData.lead_type || 'cold'
+        lead_type: editLeadData.lead_type || 'cold',
+        metadata: editLeadData.metadata || {},
       });
 
       // 2. Update status if changed
@@ -652,40 +743,7 @@ const CampaignDetail = () => {
       showToast('Export completed successfully.', 'success');
     } catch (err) {
       console.error(err);
-      // Fallback: client-side CSV from lead rows (includes metadata columns)
-      try {
-        const pageSize = 200;
-        let offset = 0;
-        let total = Infinity;
-        const allRows = [];
-        while (offset < total) {
-          const res = await clientApi.get(`/api/campaigns/${id}/leads`, {
-            params: {
-              limit: pageSize,
-              offset,
-              search: leadsSearch || undefined,
-              status: leadsStatusFilter || undefined,
-              outcome: leadsOutcomeFilter || undefined,
-            },
-          });
-          const batch = res.data?.leads || [];
-          total = Number(res.data?.total_count ?? batch.length);
-          allRows.push(...batch);
-          if (batch.length === 0) break;
-          offset += pageSize;
-        }
-        const { buildLeadsExportCsv, downloadCsv } = await import('../utils/leadsExport');
-        const csv = buildLeadsExportCsv(allRows);
-        const slug = (campaign?.name || 'campaign').replace(/\s+/g, '_').slice(0, 40);
-        downloadCsv(`${slug}-leads.csv`, csv);
-        showToast(`Exported ${allRows.length.toLocaleString()} leads.`, 'success');
-      } catch (fallbackErr) {
-        console.error(fallbackErr);
-        showToast(
-          err.customErrorMessage || 'Failed to export leads.',
-          'error',
-        );
-      }
+      showToast(err.customErrorMessage || 'Failed to export leads.', 'error');
     }
   };
 
@@ -777,7 +835,7 @@ const CampaignDetail = () => {
 
   const renderStatusBadges = (lead) => {
     const status = lead.status;
-    if (status === 'calling') {
+    if (isLiveLeadRow(lead)) {
       return <span className="cl-badge cl-badge--live">Live</span>;
     } else if (status === 'callback_scheduled') {
       return <span className="cl-badge cl-badge--callback">Callback Due</span>;
@@ -1011,13 +1069,13 @@ const CampaignDetail = () => {
                                 ref={fileInputRef}
                                 onChange={handleFileBrowse}
                                 className="hidden"
-                                accept=".csv,.xlsx"
+                                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                               />
 
                               <button
                                 onClick={() => fileInputRef.current?.click()}
                                 className="cl-btn cl-btn--secondary cl-btn--sm"
-                                title="Import CSV"
+                                title="Import Excel (.xlsx)"
                               >
                                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
                                   upload_file
@@ -1028,7 +1086,7 @@ const CampaignDetail = () => {
                               <button
                                 onClick={handleDownloadTemplate}
                                 className="cl-btn cl-btn--secondary cl-btn--sm"
-                                title="Download template"
+                                title="Download Excel template"
                               >
                                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
                                   download
@@ -1163,7 +1221,7 @@ const CampaignDetail = () => {
                         sortedLeads.map((lead) => (
                           <tr
                             key={lead.id}
-                            className={lead.status === 'calling' ? 'cl-lead--live' : ''}
+                            className={isLiveLeadRow(lead) ? 'cl-lead--live' : ''}
                             onClick={() => handleOpenTranscript(lead)}
                           >
                             <td className="font-semibold text-primary">{lead.name || '—'}</td>
@@ -1343,17 +1401,14 @@ const CampaignDetail = () => {
 
       <Modal
         open={isAddLeadOpen}
-        onClose={() => {
-          setIsAddLeadOpen(false);
-          setAddLeadCustomColumns([]);
-        }}
+        onClose={() => setIsAddLeadOpen(false)}
         title="Add New Lead"
         subtitle="Add a lead manually to start AI outreach instantly."
         icon="person_add"
         width={480}
         footer={(
           <>
-            <Button variant="ghost" onClick={() => { setIsAddLeadOpen(false); setAddLeadCustomColumns([]); }}>Cancel</Button>
+            <Button variant="ghost" onClick={() => setIsAddLeadOpen(false)}>Cancel</Button>
             <Button variant="primary" onClick={handleAddLead}>Add Contact</Button>
           </>
         )}
@@ -1392,25 +1447,16 @@ const CampaignDetail = () => {
             </select>
           </label>
 
-          {getDynamicLeadFields()
-            .filter((f) => f.key !== 'lead_name' && f.key !== 'lead_phone' && f.key !== 'name' && f.key !== 'phone')
-            .map((field) => (
-              <label key={field.key}>
-                {field.key.replace(/_/g, ' ')}{field.required ? ' *' : ''}
-                <input
-                  type={field.type === 'number' ? 'number' : 'text'}
-                  required={field.required}
-                  value={newLead.metadata[field.key] || ''}
-                  onChange={(e) => setNewLead({
-                    ...newLead,
-                    metadata: { ...newLead.metadata, [field.key]: e.target.value },
-                  })}
-                  placeholder={field.description || ''}
-                />
-              </label>
-            ))}
-
-          <CustomMetadataFields fields={addLeadCustomColumns} onChange={setAddLeadCustomColumns} />
+          {getDynamicLeadFields().map((field) =>
+            renderSchemaFieldInput(
+              field,
+              newLead.metadata?.[field.key],
+              (val) => setNewLead({
+                ...newLead,
+                metadata: { ...newLead.metadata, [field.key]: val },
+              }),
+            )
+          )}
         </form>
       </Modal>
 
@@ -1457,23 +1503,16 @@ const CampaignDetail = () => {
               </select>
             </label>
 
-            {getDynamicLeadFields()
-              .filter((f) => f.key !== 'lead_name' && f.key !== 'lead_phone' && f.key !== 'name' && f.key !== 'phone')
-              .map((field) => (
-                <label key={field.key}>
-                  {field.key.replace(/_/g, ' ')}{field.required ? ' *' : ''}
-                  <input
-                    type={field.type === 'number' ? 'number' : 'text'}
-                    required={field.required}
-                    value={editLeadData.metadata?.[field.key] || ''}
-                    onChange={(e) => setEditLeadData({
-                      ...editLeadData,
-                      metadata: { ...(editLeadData.metadata || {}), [field.key]: e.target.value },
-                    })}
-                    placeholder={field.description || ''}
-                  />
-                </label>
-              ))}
+            {getDynamicLeadFields().map((field) =>
+              renderSchemaFieldInput(
+                field,
+                editLeadData.metadata?.[field.key],
+                (val) => setEditLeadData({
+                  ...editLeadData,
+                  metadata: { ...(editLeadData.metadata || {}), [field.key]: val },
+                }),
+              )
+            )}
 
             <label>
               Status

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import adminApi from '../../shared/api/admin';
 import AdminCustomerFilter from '../components/AdminCustomerFilter';
+import LeadSchemaBuilder, { toSchemaJson, parseSchema } from '../components/LeadSchemaBuilder';
 
 import ScriptingGuideModal from '../components/ScriptingGuideModal';
 
@@ -438,6 +439,15 @@ export default function AdminScriptConfigs() {
         setActiveTab(fieldTabMap[field] || 'general');
         return;
       }
+    }
+
+    // Finalize lead schema drafts (fill empty key/label/csv from each other)
+    try {
+      payload.lead_schema = JSON.parse(toSchemaJson(parseSchema(editingConfig.lead_schema).fields));
+    } catch {
+      setSaveError('Invalid JSON in field: lead_schema');
+      setActiveTab('advanced');
+      return;
     }
     
     try {
@@ -926,10 +936,10 @@ export default function AdminScriptConfigs() {
               
               {activeTab === 'advanced' && (
                 <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Lead Schema (JSON)</label>
-                    <textarea rows="5" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.lead_schema || ''} onChange={e => handleEditorChange('lead_schema', e.target.value)}></textarea>
-                  </div>
+                  <LeadSchemaBuilder
+                    value={editingConfig.lead_schema || ''}
+                    onChange={(json) => handleEditorChange('lead_schema', json)}
+                  />
                   <div>
                     <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Cascade Live Tools (JSON)</label>
                     <textarea rows="5" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.cascade_live_tools || ''} onChange={e => handleEditorChange('cascade_live_tools', e.target.value)}></textarea>
