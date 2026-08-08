@@ -170,17 +170,18 @@ jobs:
 
             echo "Health check..."
             success=0
-            for i in $(seq 1 30); do
+            for i in $(seq 1 90); do
               if curl -fsS http://localhost:7860/health >/dev/null 2>&1; then
                 echo "Health check passed!"
                 success=1
                 break
               fi
-              echo "Waiting for health check ($i/30)..."
+              echo "Waiting for health check ($i/90)..."
               sleep 2
             done
             if [ "$success" -ne 1 ]; then
-              echo "ERROR: Health check timed out after 60s"
+              echo "ERROR: Health check timed out after 180s"
+              docker logs aakashvani-backend --tail 100
               exit 1
             fi
 
