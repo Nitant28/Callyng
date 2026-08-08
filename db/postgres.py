@@ -2409,16 +2409,12 @@ async def list_campaign_leads(
                lc.ended_at AS last_call_ended_at,
                lc.in_progress AS last_call_in_progress,
                lc.transcript_turns,
-               lc.plivo_hangup_json->>'hangup_source' AS last_hangup_source
-        FROM leads l
-        LEFT JOIN LATERAL (
-            SELECT session_call_id, duration_seconds, outcome, ended_at, plivo_hangup_json, in_progress,
-                   {turns_expr} AS transcript_turns
                lc.plivo_hangup_json->>'hangup_source' AS last_hangup_source,
                COALESCE(lc.turn_count, 0) AS turns
         FROM leads l
         LEFT JOIN LATERAL (
             SELECT session_call_id, duration_seconds, outcome, ended_at, plivo_hangup_json, in_progress,
+                   {turns_expr} AS transcript_turns,
                    CASE WHEN jsonb_typeof(transcript) = 'array' THEN jsonb_array_length(transcript) ELSE 0 END AS turn_count
             FROM call_logs
             WHERE lead_id = l.id

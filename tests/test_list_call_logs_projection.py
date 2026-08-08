@@ -46,3 +46,24 @@ async def test_answer_exempt_from_rate_limit(client):
     res = await client.get("/answer")
     assert res.status_code == 200
     assert "<Stream" in res.text
+
+
+@pytest.mark.asyncio
+async def test_list_campaign_leads_query_syntax():
+    from db import postgres as pg_db
+
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=0)
+    pool.fetch = AsyncMock(return_value=[])
+
+    campaign_id = uuid4()
+    client_id = uuid4()
+    await pg_db.list_campaign_leads(pool, campaign_id, client_id, limit=10, offset=0)
+
+    sql = pool.fetch.await_args.args[0]
+    assert "FROM leads l" in sql
+    assert "LEFT JOIN LATERAL (" in sql
+    assert "lc.transcript_turns" in sql
+    assert "COALESCE(lc.turn_count, 0) AS turns" in sql
+    assert "WHERE l.campaign_id = $1 AND l.client_id = $2" in sql
+
