@@ -948,4 +948,40 @@ Implemented an automated 45-second silence / dead-air watchdog across both STS (
   - `SILENCE_TIMEOUT_SECONDS=45` added to `env.example`.
   - Unit tests added in `tests/test_voice_cut_fixes.py` (pre-greeting grace period, dead-air hangup, upstream transcript activity reset, downstream transcript isolation, default `45s`).
 
+---
+
+## Addendum: Nitant Update — Lead Schema, Custom Export & Admin Improvements (2026-08-08)
+
+Implemented schema-driven Excel/CSV lead management, custom metadata export, unified turn tracking, admin client filtering, and diagnostic automation.
+
+### 1. Lead Schema & Dynamic Excel/CSV Import & Export
+- **Visual Lead Schema Builder**: Added `LeadSchemaBuilder.jsx` component to `frontend/src/admin/components/` allowing admins to visually construct lead schemas (field keys, display labels, types, required flags, and CSV column aliases).
+- **Schema-Driven Lead Validation**: Updated `lead_upload/validator.py` and `lead_upload/parser.py` to validate uploaded lead files (Excel `.xlsx`, `.xls`, and `.csv`) dynamically against configured script lead schemas.
+- **Enhanced Lead Export (`/api/campaigns/{campaign_id}/leads/export`)**: Updated `api/routes/leads.py` to export both standard columns (`Name`, `Phone`), custom lead schema metadata fields, and system columns (`Status`, `Outcome`, `Attempts`, `Turns`, `Interested`, `Last Call Duration`, `Last Call`, `Created Time`, `Updated Time`). Enforced text formatting (`@`) on phone columns in exported Excel workbooks.
+
+### 2. Unified Turn Count Tracking
+- **PostgreSQL LATERAL Query**: Updated `db/postgres.py` (`list_campaign_leads`) to compute transcript turns (`CASE WHEN jsonb_typeof(transcript) = 'array' THEN jsonb_array_length(transcript) ELSE 0 END`) and expose both `turns` and `transcript_turns` aliases.
+- **Frontend Turn Utilities**: Enhanced `frontend/src/client/utils/computeTurns.js` with robust multi-fallback resolution (`turn_count`, `turns`, `last_call_turns`, `transcript_turns`, and direct transcript array turn parsing).
+- **UI Integration**: Updated `CallTranscriptDrawer` and `CampaignDetail` lead views to render real-time turn count badges.
+
+### 3. Dashboard Metrics & Caching
+- **Dashboard Refactoring**: Updated `api/routes/dashboard.py` for conversion rate and outcome metric calculations.
+- **In-Memory Stat Caching**: Added short TTL caching (`_STATS_CACHE_TTL_S = 10.0`) in `db/postgres.py` to reduce database query load during high-frequency poll traffic.
+
+### 4. Admin Portal Filtering & UI Polish
+- **Admin Customer Filter**: Added `AdminCustomerFilter.jsx` component (`frontend/src/admin/components/AdminCustomerFilter.jsx`) to filter campaigns, calls, and script configs by customer/client across the admin portal.
+- **Admin Styling**: Redesigned `AdminOverview` styling and aligned top toolbar layouts across `AdminBotConfigs`, `AdminCampaigns`, and `AdminScriptConfigs`.
+
+### 5. Automated Diagnostic Scripts
+- Added diagnostic and automated testing scripts in `scripts/`:
+  - `_concurrent_live_campaign.py`
+  - `_diag_post_call.py`
+  - `_e2e_agent_call.py`
+  - `_e2e_preflight.py`
+  - `_e2e_prowave_campaign.py`
+  - `_plivo_numbers.py`
+  - `_redial_e2e.py`
+  - `_set_plivo_from.py`
+
+
 
