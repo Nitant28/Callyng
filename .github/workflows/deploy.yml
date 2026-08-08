@@ -78,10 +78,13 @@ jobs:
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
         run: |
           port="${SERVER_PORT:-22}"
+          # Trim any hidden whitespace/newlines from host and user secrets
+          host="$(echo -n "${SERVER_HOST}" | tr -d '[:space:]')"
+          user="$(echo -n "${SERVER_USER}" | tr -d '[:space:]')"
           printf '%s\n' "$SERVER_SSH_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
-          echo "Attempting SSH connection test to ${SERVER_USER}@${SERVER_HOST}:${port} (Timeout 10s)..."
-          if ! ssh -vvv -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i /tmp/deploy_key -p "$port" "${SERVER_USER}@${SERVER_HOST}" 'echo "SSH Connection OK"'; then
+          echo "Attempting SSH connection test to ${user}@${host}:${port} (Host length: ${#host} chars, Timeout 10s)..."
+          if ! ssh -vvv -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i /tmp/deploy_key -p "$port" "${user}@${host}" 'echo "SSH Connection OK"'; then
             echo "::error::SSH test failed. Check SERVER_HOST, SERVER_PORT (default 22), SERVER_USER, SERVER_SSH_KEY, and VPS firewall/UFW rules."
             rm -f /tmp/deploy_key
             exit 1
