@@ -32,15 +32,16 @@ export function buildTurnsByLead(calls = []) {
   (calls || []).forEach((call) => {
     const fromTranscript = computeTurnsFromTranscript(call.transcript);
     const fromMeta = Number(call.transcript_turns);
-    const count = fromTranscript > 0
-      ? fromTranscript
-      : (Number.isFinite(fromMeta) && fromMeta >= 0 ? fromMeta : 0);
     const count =
       typeof call.turn_count === 'number'
         ? call.turn_count
         : typeof call.turns === 'number'
         ? call.turns
-        : computeTurnsFromTranscript(call.transcript);
+        : fromTranscript > 0
+        ? fromTranscript
+        : Number.isFinite(fromMeta) && fromMeta >= 0
+        ? fromMeta
+        : 0;
     const leadId = call.lead_id != null ? String(call.lead_id) : null;
     const sessionId = call.session_call_id != null ? String(call.session_call_id) : null;
     if (leadId) {
