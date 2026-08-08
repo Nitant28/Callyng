@@ -25,6 +25,13 @@ _interested_counts_cache: dict[str, tuple[float, dict[str, int]]] = {}
 # Worst-case credits reserved per lead at dialer claim time (see dialer/cost_guard.py).
 RESERVE_CREDITS_PER_LEAD = Decimal("2.0")
 
+# Count assistant/user/bot turns — matches post_call_processor + frontend analytics.
+_TRANSCRIPT_TURNS_EXPR = """
+(SELECT COUNT(*)::int
+ FROM jsonb_array_elements(COALESCE({alias}.transcript, '[]'::jsonb)) AS t(elem)
+ WHERE COALESCE(elem->>'role', '') IN ('assistant', 'user', 'bot'))
+"""
+
 
 def resolve_lead_retry_or_failed(
     attempts: int,
@@ -2302,6 +2309,73 @@ async def cancel_campaign(
     }
 
 
+async def delete_campaign(
+    pool: asyncpg.Pool,
+    campaign_id: UUID,
+    client_id: UUID,
+) -> dict[str, Any]:
+    """Hard-delete a campaign, its leads, call logs, and related rows."""
+    await finalize_stale_in_progress_call_logs(pool, campaign_id, client_id)
+    await release_stuck_calling_leads(pool, campaign_id, client_id)
+
+    credits_returned = Decimal(0)
+    async with pool.acquire() as conn, conn.transaction():
+        camp = await conn.fetchrow(
+            """
+            SELECT status, budget_returned_at
+            FROM campaigns
+            WHERE id = $1 AND client_id = $2
+            FOR UPDATE
+            """,
+            campaign_id,
+            client_id,
+        )
+        if camp is None:
+            raise ValueError(f"Campaign not found: {campaign_id}")
+
+        in_progress = await conn.fetchval(
+            """
+            SELECT COUNT(*)::int FROM call_logs
+            WHERE campaign_id = $1 AND client_id = $2 AND in_progress = TRUE
+            """,
+            campaign_id,
+            client_id,
+        )
+        if in_progress > 0:
+            raise ValueError("Cannot delete campaign while calls are in progress")
+
+        if camp["budget_returned_at"] is None and camp["status"] not in (
+            "completed",
+            "cancelled",
+        ):
+            await terminalize_campaign_leads(conn, campaign_id, client_id)
+            credits_returned, _ = await try_settle_campaign_budget(
+                campaign_id,
+                client_id,
+                final_status="cancelled",
+                conn=conn,
+            )
+
+        await conn.execute(
+            "DELETE FROM call_logs WHERE campaign_id = $1 AND client_id = $2",
+            campaign_id,
+            client_id,
+        )
+        deleted = await conn.execute(
+            "DELETE FROM campaigns WHERE id = $1 AND client_id = $2",
+            campaign_id,
+            client_id,
+        )
+        if deleted == "DELETE 0":
+            raise ValueError(f"Campaign not found: {campaign_id}")
+
+    return {
+        "deleted": True,
+        "campaign_id": str(campaign_id),
+        "credits_returned": float(credits_returned),
+    }
+
+
 async def get_lead(
     pool: asyncpg.Pool,
     lead_id: UUID,
@@ -2326,13 +2400,20 @@ async def list_campaign_leads(
     outcome: str | None = None,
 ) -> tuple[list[dict], int]:
     """Return a paginated list of leads for a campaign, plus total count."""
-    query = """
+    turns_expr = _TRANSCRIPT_TURNS_EXPR.format(alias="call_logs").strip()
+    query = f"""
         SELECT l.*,
                lc.session_call_id,
                lc.duration_seconds AS last_call_duration_seconds,
                lc.outcome AS last_call_outcome,
                lc.ended_at AS last_call_ended_at,
                lc.in_progress AS last_call_in_progress,
+               lc.transcript_turns,
+               lc.plivo_hangup_json->>'hangup_source' AS last_hangup_source
+        FROM leads l
+        LEFT JOIN LATERAL (
+            SELECT session_call_id, duration_seconds, outcome, ended_at, plivo_hangup_json, in_progress,
+                   {turns_expr} AS transcript_turns
                lc.plivo_hangup_json->>'hangup_source' AS last_hangup_source,
                COALESCE(lc.turn_count, 0) AS turns
         FROM leads l
@@ -2370,7 +2451,13 @@ async def list_campaign_leads(
         idx += 1
 
     total_count = await pool.fetchval(count_query, *args)
-    query += f" ORDER BY l.created_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+    query += (
+        f" ORDER BY"
+        f" CASE WHEN l.status = 'calling' THEN 0 ELSE 1 END,"
+        f" COALESCE(l.last_attempted_at, l.created_at) DESC NULLS LAST,"
+        f" l.created_at DESC"
+        f" LIMIT ${idx} OFFSET ${idx + 1}"
+    )
     args.extend([limit, offset])
 
     rows = await pool.fetch(query, *args)
@@ -3389,11 +3476,11 @@ async def get_call_log(
     session_call_id: str,
     client_id: UUID,
 ) -> dict | None:
+    """Fetch a single call by session id (includes test calls — detail view)."""
     row = await pool.fetchrow(
         """
         SELECT * FROM call_logs
         WHERE session_call_id = $1 AND client_id = $2
-          AND (call_data->>'is_test_call' IS NULL OR call_data->>'is_test_call' != 'true')
         """,
         session_call_id,
         client_id,
@@ -3406,11 +3493,11 @@ async def get_latest_call_log_for_lead(
     lead_id: UUID,
     client_id: UUID,
 ) -> dict | None:
+    """Latest call for a lead (includes test calls — detail / drawer)."""
     row = await pool.fetchrow(
         """
         SELECT * FROM call_logs
         WHERE lead_id = $1 AND client_id = $2
-          AND (call_data->>'is_test_call' IS NULL OR call_data->>'is_test_call' != 'true')
         ORDER BY created_at DESC
         LIMIT 1
         """,
@@ -3461,6 +3548,7 @@ async def list_call_logs(
     total = await pool.fetchval(f"SELECT COUNT(*) {base_query} {where_clause}", *args)
     
     args.extend([limit, offset])
+    turns_expr = _TRANSCRIPT_TURNS_EXPR.format(alias="cl").strip()
     rows = await pool.fetch(
         f"""
         SELECT
@@ -3473,6 +3561,7 @@ async def list_call_logs(
             cl.usage_total_tokens, cl.usage_tts_characters,
             cl.recording_url, cl.extraction_model, cl.extraction_error,
             cl.cost_usd, cl.quality_score, cl.flagged_for_review,
+            {turns_expr} AS transcript_turns,
             CASE WHEN jsonb_typeof(transcript) = 'array' THEN jsonb_array_length(transcript) ELSE 0 END AS turns,
             l.name, l.phone
         {base_query} {where_clause}

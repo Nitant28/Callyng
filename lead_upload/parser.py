@@ -1,8 +1,7 @@
-"""Parse CSV/Excel uploads into a string-typed DataFrame."""
+"""Parse Excel (.xlsx) uploads into a string-typed DataFrame."""
 
 from __future__ import annotations
 
-import io
 from typing import BinaryIO
 
 import pandas as pd
@@ -10,14 +9,6 @@ import pandas as pd
 
 def parse_upload(file: BinaryIO, filename: str) -> pd.DataFrame:
     name = (filename or "").lower()
-    if name.endswith(".xlsx") or name.endswith(".xls"):
-        return pd.read_excel(file, dtype=str, engine="openpyxl")
-    raw = file.read()
-    if isinstance(raw, bytes):
-        try:
-            text = raw.decode("utf-8-sig")
-        except UnicodeDecodeError as exc:
-            raise ValueError("File is not a valid UTF-8 CSV") from exc
-    else:
-        text = raw
-    return pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
+    if not (name.endswith(".xlsx") or name.endswith(".xls")):
+        raise ValueError("Only Excel (.xlsx) files are supported")
+    return pd.read_excel(file, dtype=str, engine="openpyxl")

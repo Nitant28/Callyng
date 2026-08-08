@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import adminApi from '../../shared/api/admin';
+import AdminCustomerFilter from '../components/AdminCustomerFilter';
+import LeadSchemaBuilder, { toSchemaJson, parseSchema } from '../components/LeadSchemaBuilder';
 
 import ScriptingGuideModal from '../components/ScriptingGuideModal';
 
@@ -241,6 +243,7 @@ export default function AdminScriptConfigs() {
   const [configs, setConfigs] = useState([]);
   const [clients, setClients] = useState([]);
   const [search, setSearch] = useState('');
+  const [clientFilter, setClientFilter] = useState('');
   
   // Modals
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -292,7 +295,12 @@ export default function AdminScriptConfigs() {
 
   const fetchConfigs = async () => {
     try {
-      const res = await adminApi.get('/internal/script-configs?active_only=false');
+      const res = await adminApi.get('/internal/script-configs', {
+        params: {
+          active_only: false,
+          client_id: clientFilter || undefined,
+        },
+      });
       setConfigs(res.data.script_configs || []);
     } catch (error) {
       console.error("Failed to fetch script configs", error);
@@ -301,8 +309,11 @@ export default function AdminScriptConfigs() {
 
   useEffect(() => {
     fetchClients();
-    fetchConfigs();
   }, []);
+
+  useEffect(() => {
+    fetchConfigs();
+  }, [clientFilter]);
 
   const getClientName = (clientId) => {
     const c = clients.find(c => c.id === clientId);
@@ -428,6 +439,15 @@ export default function AdminScriptConfigs() {
         setActiveTab(fieldTabMap[field] || 'general');
         return;
       }
+    }
+
+    // Finalize lead schema drafts (fill empty key/label/csv from each other)
+    try {
+      payload.lead_schema = JSON.parse(toSchemaJson(parseSchema(editingConfig.lead_schema).fields));
+    } catch {
+      setSaveError('Invalid JSON in field: lead_schema');
+      setActiveTab('advanced');
+      return;
     }
     
     try {
@@ -581,22 +601,27 @@ export default function AdminScriptConfigs() {
 
   return (
     <>
-      <div className="flex justify-between items-end mb-stack-lg">
-        <div>
-          <h2 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text mb-2">Script Templates</h2>
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4">
+        <div className="min-w-0">
+          <h2 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text mb-1">Script Templates</h2>
           <p className="font-body-md text-body-md text-arctic-text-muted dark:text-molten-text-muted">Manage conversational logic, extraction schemas, and models for agents.</p>
         </div>
-        <div className="flex gap-2 items-center">
-          <input 
+        <div className="flex flex-nowrap items-center gap-3 shrink-0">
+          <AdminCustomerFilter
+            clients={clients}
+            value={clientFilter}
+            onChange={setClientFilter}
+          />
+          <input
             type="text"
             placeholder="Search templates"
-            className="px-4 py-2 bg-surface-container-lowest dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm text-on-surface dark:text-molten-text"
+            className="h-10 w-[220px] px-3 bg-surface-container-lowest dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button 
+          <button
             onClick={openCreator}
-            className="px-4 py-2 rounded-lg bg-primary dark:bg-molten-primary text-white dark:text-molten-bg font-label-md text-label-md hover:brightness-110 transition-all flex items-center gap-2"
+            className="h-10 shrink-0 px-4 rounded-lg bg-primary dark:bg-molten-primary text-white dark:text-molten-bg font-label-md text-label-md hover:brightness-110 transition-all flex items-center gap-2 whitespace-nowrap"
           >
             <span className="material-symbols-outlined text-[18px]">add</span> Create Template
           </button>
@@ -911,10 +936,10 @@ export default function AdminScriptConfigs() {
               
               {activeTab === 'advanced' && (
                 <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Lead Schema (JSON)</label>
-                    <textarea rows="5" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.lead_schema || ''} onChange={e => handleEditorChange('lead_schema', e.target.value)}></textarea>
-                  </div>
+                  <LeadSchemaBuilder
+                    value={editingConfig.lead_schema || ''}
+                    onChange={(json) => handleEditorChange('lead_schema', json)}
+                  />
                   <div>
                     <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Cascade Live Tools (JSON)</label>
                     <textarea rows="5" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.cascade_live_tools || ''} onChange={e => handleEditorChange('cascade_live_tools', e.target.value)}></textarea>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useTheme } from '../hooks/useTheme';
 
 import { useToast } from '../../contexts/ToastContext';
@@ -8,10 +8,15 @@ import clientApi from '../../api/client';
 import LoaderOverlay from '../components/LoaderOverlay';
 import CallTranscriptDrawer from '../components/CallTranscriptDrawer';
 import { Modal, Button } from '../../components/enterprise';
-import CustomMetadataFields from '../../components/client/CustomMetadataFields';
-import { buildMetadataFromCustomFields } from '../../utils/leadFormHelpers';
-import { sortLeadsCallStack } from '../../pages/client/LeadSheet/leadUtils';
 import { buildTurnsByLead, getLeadTurns } from '../utils/computeTurns';
+import {
+  createEmptyDialerQueues,
+  resetDialerQueues,
+  reconcileDialerQueues,
+  flattenDialerQueues,
+  filterFlattenedQueue,
+  isLiveLeadRow,
+} from '../utils/leadsDisplayQueue';
 
 /** Friendly labels for canonical backend outcomes (call_outcomes.py / ┬º1.2). */
 const OUTCOME_LABELS = {
@@ -89,7 +94,14 @@ const CampaignDetail = () => {
 
   // Campaign Details & UI State
   const [campaign, setCampaign] = useState(null);
-  const [leads, setLeads] = useState([]);
+  const [displayQueue, setDisplayQueue] = useState([]);
+  const dialerQueuesRef = useRef(createEmptyDialerQueues());
+  const pollVersionRef = useRef(0);
+  const applyingPollRef = useRef(null);
+  const prevCampaignStatusRef = useRef(null);
+  /** Last known live flag — never drop slots because campaign state is briefly stale. */
+  const campaignLiveRef = useRef(false);
+  const campaignConcurrencyRef = useRef(0);
   const [totalLeadsCount, setTotalLeadsCount] = useState(0);
   const [leadsLimit, setLeadsLimit] = useState(50);
   const [leadsOffset, setLeadsOffset] = useState(0);
@@ -115,7 +127,6 @@ const CampaignDetail = () => {
   // Manual Add Lead Modal State
   const [isAddLeadOpen, setIsAddLeadOpen] = useState(false);
   const [newLead, setNewLead] = useState({ name: '', phone: '', lead_type: 'cold', metadata: {} });
-  const [addLeadCustomColumns, setAddLeadCustomColumns] = useState([]);
 
   // Edit Lead Modal State
   const [isEditLeadOpen, setIsEditLeadOpen] = useState(false);
@@ -140,15 +151,64 @@ const CampaignDetail = () => {
   const getDynamicLeadFields = useCallback(() => {
     const schema = campaign?.bot_config?.lead_schema;
     if (!schema) return [];
-    if (schema.fields && Array.isArray(schema.fields)) return schema.fields;
-
-    return Object.entries(schema).map(([key, value]) => {
-      if (typeof value === 'object') {
-        return { key, ...value };
-      }
-      return null;
-    }).filter(f => f !== null);
+    let fields = [];
+    if (schema.fields && Array.isArray(schema.fields)) {
+      fields = schema.fields;
+    } else {
+      fields = Object.entries(schema).map(([key, value]) => {
+        if (typeof value === 'object') {
+          return { key, ...value };
+        }
+        return null;
+      }).filter((f) => f !== null);
+    }
+    return fields
+      .filter((f) => f.key && !['lead_name', 'lead_phone', 'name', 'phone', 'lead_type'].includes(f.key))
+      .map((f) => ({
+        ...f,
+        label: f.label || f.csv_column || f.key.replace(/_/g, ' '),
+        type: f.type === 'string' ? 'text' : (f.type || 'text'),
+        placeholder: f.placeholder || f.description || '',
+        options: Array.isArray(f.options) ? f.options : [],
+      }));
   }, [campaign]);
+
+  const renderSchemaFieldInput = (field, value, onChange) => {
+    const label = (
+      <>
+        {field.label}{field.required ? ' *' : ''}
+      </>
+    );
+    if (field.type === 'dropdown') {
+      return (
+        <label key={field.key}>
+          {label}
+          <select
+            required={field.required}
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value)}
+          >
+            <option value="">Select {field.label}</option>
+            {(field.options || []).map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        </label>
+      );
+    }
+    return (
+      <label key={field.key}>
+        {label}
+        <input
+          type={field.type === 'number' ? 'number' : 'text'}
+          required={field.required}
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder || `Enter ${field.label}`}
+        />
+      </label>
+    );
+  };
 
   useEffect(() => {
     const updateIst = () => {
@@ -204,26 +264,42 @@ const CampaignDetail = () => {
     }
   }, [id]);
 
-  // Load leads — during live dialing, merge in-calling rows and apply LIFO call stack sort
+  // Transition-based dialer display queues (slot reservation, no sticky timer)
   const loadLeads = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLeadsLoading(true);
+    const pollVersion = ++pollVersionRef.current;
+    applyingPollRef.current = pollVersion;
     try {
-      const isLive =
+      const statusKnown = Boolean(campaign?.status);
+      const isLiveFromCampaign =
         campaign?.status === 'running' ||
         campaign?.status === 'pausing' ||
         (campaign?.status === 'paused' && (campaign?.calling_leads || 0) > 0);
 
-      const useStack = isLive && !leadsStatusFilter && !leadsSearch && !leadsOutcomeFilter;
+      // Sticky live: once running, stay live across stale polls until status is
+      // explicitly idle (draft/completed/cancelled/paused-with-no-calls).
+      if (statusKnown) {
+        campaignLiveRef.current = Boolean(isLiveFromCampaign);
+        campaignConcurrencyRef.current = Math.max(
+          Number(campaign?.max_concurrent_calls) || 0,
+          campaignConcurrencyRef.current,
+        );
+      }
+      const isLiveCampaign = statusKnown ? Boolean(isLiveFromCampaign) : campaignLiveRef.current;
 
       let callingLeads = [];
-      if (useStack) {
+      if (isLiveCampaign) {
         try {
           const callingRes = await clientApi.get(`/api/campaigns/${id}/leads`, {
-            params: { limit: 50, offset: 0, status: 'calling' },
+            params: { limit: 100, offset: 0, status: 'calling' },
           });
           callingLeads = callingRes.data?.leads || [];
         } catch {
-          // non-fatal
+          // Network blip: keep every occupied slot (real + reserved) as live so
+          // concurrent rows never vanish from the top of the table.
+          callingLeads = dialerQueuesRef.current.activeSlots
+            .filter((s) => s.lead)
+            .map((s) => ({ ...s.lead, status: 'calling' }));
         }
       }
 
@@ -237,25 +313,50 @@ const CampaignDetail = () => {
         },
       });
 
-      if (response.data) {
-        const pageLeads = response.data.leads || [];
-        const merged = useStack
-          ? [...callingLeads, ...pageLeads.filter((l) => !callingLeads.some((c) => c.id === l.id))]
-          : pageLeads;
-        setLeads(sortLeadsCallStack(merged, { live: useStack }));
-        setTotalLeadsCount(response.data.total_count || 0);
-      } else {
-        setLeads(useStack ? sortLeadsCallStack(callingLeads, { live: true }) : []);
-        setTotalLeadsCount(callingLeads.length);
+      // Only the latest in-flight poll may apply (Poll 11 wins; Poll 10 ignored)
+      if (pollVersion !== pollVersionRef.current || applyingPollRef.current !== pollVersion) {
+        return;
       }
+
+      const pageLeads = response.data?.leads || [];
+      // Slot capacity = configured concurrency (floor). Never shrink below
+      // currently occupied slots while live — that was dropping live rows.
+      const concurrency = Math.max(
+        Number(campaign?.max_concurrent_calls) || campaignConcurrencyRef.current || 0,
+        Number(campaign?.calling_leads) || 0,
+        callingLeads.length,
+        dialerQueuesRef.current.activeSlots.length,
+      );
+
+      const { state, ignored } = reconcileDialerQueues(dialerQueuesRef.current, {
+        callingLeads,
+        pageLeads,
+        isLive: Boolean(isLiveCampaign),
+        concurrency,
+        pollVersion,
+      });
+      if (ignored || pollVersion !== pollVersionRef.current) return;
+
+      dialerQueuesRef.current = state;
+      setDisplayQueue(flattenDialerQueues(state));
+      setTotalLeadsCount(response.data?.total_count || 0);
     } catch (err) {
       console.warn('API error listing leads', err);
-      setLeads([]);
-      setTotalLeadsCount(0);
     } finally {
+      if (applyingPollRef.current === pollVersion) applyingPollRef.current = null;
       if (showSpinner) setLeadsLoading(false);
     }
-  }, [id, leadsLimit, leadsOffset, leadsStatusFilter, leadsSearch, leadsOutcomeFilter, campaign?.status, campaign?.calling_leads]);
+  }, [
+    id,
+    leadsLimit,
+    leadsOffset,
+    leadsStatusFilter,
+    leadsSearch,
+    leadsOutcomeFilter,
+    campaign?.status,
+    campaign?.calling_leads,
+    campaign?.max_concurrent_calls,
+  ]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -326,14 +427,46 @@ const CampaignDetail = () => {
     return () => clearInterval(interval);
   }, [campaign, loadCampaignDetails]);
 
+  useEffect(() => {
+    dialerQueuesRef.current = resetDialerQueues(dialerQueuesRef.current);
+    pollVersionRef.current = 0;
+    applyingPollRef.current = null;
+    prevCampaignStatusRef.current = null;
+    campaignLiveRef.current = false;
+    campaignConcurrencyRef.current = 0;
+    setDisplayQueue([]);
+  }, [id]);
+
+  // Full reset on campaign restart (paused/draft/completed → running)
+  useEffect(() => {
+    const prev = prevCampaignStatusRef.current;
+    const next = campaign?.status;
+    prevCampaignStatusRef.current = next;
+    if (campaign?.max_concurrent_calls) {
+      campaignConcurrencyRef.current = Math.max(
+        campaignConcurrencyRef.current,
+        Number(campaign.max_concurrent_calls) || 0,
+      );
+    }
+    if (!prev || !next) return;
+    const wasIdle = ['paused', 'draft', 'completed', 'cancelled'].includes(prev);
+    if (wasIdle && next === 'running') {
+      dialerQueuesRef.current = resetDialerQueues(dialerQueuesRef.current);
+      pollVersionRef.current = 0;
+      applyingPollRef.current = null;
+      campaignLiveRef.current = true;
+      setDisplayQueue([]);
+    }
+  }, [campaign?.status, campaign?.max_concurrent_calls]);
+
   // Poll leads table while campaign is active
   useEffect(() => {
     if (!campaign || activeTab !== 'leads') return;
     const isPausing = campaign.status === 'pausing' || (campaign.status === 'paused' && campaign.calling_leads > 0);
     if (campaign.status !== 'running' && !isPausing) return;
 
-    // Poll faster when there are live calls so the stacking order updates in real-time
-    const hasLiveCalls = (campaign.calling_leads || 0) > 0;
+    const activeCount = dialerQueuesRef.current.activeSlots.length;
+    const hasLiveCalls = (campaign.calling_leads || 0) > 0 || activeCount > 0;
     const interval = setInterval(() => {
       loadLeads(false);
     }, hasLiveCalls ? 1500 : 5000);
@@ -345,36 +478,15 @@ const CampaignDetail = () => {
     setIsTranscriptOpen(true);
   };
 
-  // Frontend filtering for attempts / turns (status + outcome filtered server-side)
-  const getFilteredLeads = () => {
-    let filtered = [...leads];
-
-    if (leadsAttemptsFilter) {
-      filtered = filtered.filter((l) => {
-        const attempts = l.attempts || 0;
-        if (leadsAttemptsFilter === '1') return attempts === 1;
-        if (leadsAttemptsFilter === '2') return attempts === 2;
-        if (leadsAttemptsFilter === '3') return attempts === 3;
-        if (leadsAttemptsFilter === '4+') return attempts >= 4;
-        return true;
-      });
-    }
-
-    if (leadsTurnsFilter) {
-      filtered = filtered.filter((l) => {
-        const turns = getLeadTurns(l, turnsIndex);
-        if (leadsTurnsFilter === '0') return turns === 0;
-        if (leadsTurnsFilter === '1-3') return turns >= 1 && turns <= 3;
-        if (leadsTurnsFilter === '4-8') return turns >= 4 && turns <= 8;
-        if (leadsTurnsFilter === '9+') return turns >= 9;
-        return true;
-      });
-    }
-
-    return filtered;
-  };
-
-  const filteredLeads = getFilteredLeads();
+  // Filters never strip active slots; order = activeSlots + side queues
+  const sortedLeads = useMemo(
+    () => filterFlattenedQueue(displayQueue, {
+      attemptsFilter: leadsAttemptsFilter,
+      turnsFilter: leadsTurnsFilter,
+      getTurns: (l) => getLeadTurns(l, turnsIndex),
+    }),
+    [displayQueue, leadsAttemptsFilter, leadsTurnsFilter, turnsIndex],
+  );
 
   const handleToggleState = async () => {
     if (!campaign) return;
@@ -459,14 +571,14 @@ const CampaignDetail = () => {
     e.preventDefault();
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
-      uploadCSVFile(files[0]);
+      uploadExcelFile(files[0]);
     }
   };
 
   const handleFileBrowse = (e) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      uploadCSVFile(files[0]);
+      uploadExcelFile(files[0]);
     }
   };
 
@@ -478,16 +590,23 @@ const CampaignDetail = () => {
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `template.csv`);
+      link.setAttribute('download', `template.xlsx`);
       document.body.appendChild(link);
       link.click();
       link.parentNode.removeChild(link);
     } catch (err) {
       console.warn('Failed to download template', err);
+      showToast(err.customErrorMessage || 'Failed to download template.', 'error');
     }
   };
 
-  const uploadCSVFile = async (file) => {
+  const uploadExcelFile = async (file) => {
+    const name = (file?.name || '').toLowerCase();
+    if (!name.endsWith('.xlsx') && !name.endsWith('.xls')) {
+      showToast('Only Excel (.xlsx) files are supported.', 'error');
+      return;
+    }
+
     setIsUploading(true);
     setUploadResult(null);
 
@@ -513,10 +632,14 @@ const CampaignDetail = () => {
       }
     } catch (err) {
       console.error('File upload failed', err);
-      showToast(err.customErrorMessage || 'Failed to upload leads. Please verify file formatting.', 'error');
+      const apiErrors = err?.response?.data?.detail?.errors || err?.response?.data?.errors;
+      const message = Array.isArray(apiErrors)
+        ? apiErrors.join('; ')
+        : (err.customErrorMessage || 'Failed to upload leads. Please verify file formatting.');
+      showToast(message, 'error');
       setUploadResult({
         success: false,
-        message: err.customErrorMessage || 'Failed to upload leads. Please verify file formatting.'
+        message,
       });
     } finally {
       setIsUploading(false);
@@ -530,7 +653,7 @@ const CampaignDetail = () => {
     try {
       const payload = {
         ...newLead,
-        metadata: buildMetadataFromCustomFields(newLead.metadata, addLeadCustomColumns),
+        metadata: newLead.metadata || {},
       };
       const response = await clientApi.post(`/api/campaigns/${id}/leads`, payload);
       if (response.data) {
@@ -538,7 +661,6 @@ const CampaignDetail = () => {
         showToast('Lead added successfully.', 'success');
         setIsAddLeadOpen(false);
         setNewLead({ name: '', phone: '', lead_type: 'cold', metadata: {} });
-        setAddLeadCustomColumns([]);
         loadLeads();
         loadCampaignDetails();
         return;
@@ -554,10 +676,11 @@ const CampaignDetail = () => {
     if (!editLeadData.name?.trim()) return;
 
     try {
-      // 1. Update basic fields
+      // 1. Update basic fields + schema metadata
       await clientApi.patch(`/api/campaigns/${id}/leads/${editLeadData.id}`, {
         name: editLeadData.name,
-        lead_type: editLeadData.lead_type || 'cold'
+        lead_type: editLeadData.lead_type || 'cold',
+        metadata: editLeadData.metadata || {},
       });
 
       // 2. Update status if changed
@@ -603,31 +726,24 @@ const CampaignDetail = () => {
             search: leadsSearch || undefined,
             status: leadsStatusFilter || undefined,
             outcome: leadsOutcomeFilter || undefined,
-            attempts: leadsAttemptsFilter || undefined,
           },
-          responseType: "blob",
-        }
+          responseType: 'blob',
+        },
       );
 
+      const slug = (campaign?.name || 'campaign').replace(/\s+/g, '_').slice(0, 40);
       const url = window.URL.createObjectURL(new Blob([response.data]));
-
-      const link = document.createElement("a");
+      const link = document.createElement('a');
       link.href = url;
-      link.download = `${campaign.name}-leads.xlsx`;
-
+      link.download = `${slug}_leads.xlsx`;
       document.body.appendChild(link);
       link.click();
-
       link.remove();
       window.URL.revokeObjectURL(url);
-
-      showToast("Export completed successfully.", "success");
+      showToast('Export completed successfully.', 'success');
     } catch (err) {
       console.error(err);
-      showToast(
-        err.customErrorMessage || "Failed to export leads.",
-        "error"
-      );
+      showToast(err.customErrorMessage || 'Failed to export leads.', 'error');
     }
   };
 
@@ -719,7 +835,7 @@ const CampaignDetail = () => {
 
   const renderStatusBadges = (lead) => {
     const status = lead.status;
-    if (status === 'calling') {
+    if (isLiveLeadRow(lead)) {
       return <span className="cl-badge cl-badge--live">Live</span>;
     } else if (status === 'callback_scheduled') {
       return <span className="cl-badge cl-badge--callback">Callback Due</span>;
@@ -733,16 +849,6 @@ const CampaignDetail = () => {
       return <span className="cl-badge cl-badge--queued">{status || 'Unknown'}</span>;
     }
   };
-
-  const isLiveDialing =
-    campaign?.status === 'running' ||
-    campaign?.status === 'pausing' ||
-    (campaign?.status === 'paused' && (campaign?.calling_leads || 0) > 0);
-
-  const useCallStack =
-    isLiveDialing && !leadsStatusFilter && !leadsSearch && !leadsOutcomeFilter;
-
-  const sortedLeads = sortLeadsCallStack(filteredLeads, { live: useCallStack });
 
   const totalPages = Math.max(1, Math.ceil(totalLeadsCount / leadsLimit));
   const currentPage = Math.floor(leadsOffset / leadsLimit) + 1;
@@ -963,13 +1069,13 @@ const CampaignDetail = () => {
                                 ref={fileInputRef}
                                 onChange={handleFileBrowse}
                                 className="hidden"
-                                accept=".csv,.xlsx"
+                                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                               />
 
                               <button
                                 onClick={() => fileInputRef.current?.click()}
                                 className="cl-btn cl-btn--secondary cl-btn--sm"
-                                title="Import CSV"
+                                title="Import Excel (.xlsx)"
                               >
                                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
                                   upload_file
@@ -980,7 +1086,7 @@ const CampaignDetail = () => {
                               <button
                                 onClick={handleDownloadTemplate}
                                 className="cl-btn cl-btn--secondary cl-btn--sm"
-                                title="Download template"
+                                title="Download Excel template"
                               >
                                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
                                   download
@@ -1063,8 +1169,8 @@ const CampaignDetail = () => {
                             </select>
                           </div>
                         </th>
-                        <th>
-                          <div className="cl-th-filter">
+                        <th className="cl-th--numeric">
+                          <div className="cl-th-filter cl-th-filter--center">
                             <span>Turns</span>
                             <select
                               value={leadsTurnsFilter}
@@ -1081,8 +1187,8 @@ const CampaignDetail = () => {
                             </select>
                           </div>
                         </th>
-                        <th>
-                          <div className="cl-th-filter">
+                        <th className="cl-th--numeric">
+                          <div className="cl-th-filter cl-th-filter--center">
                             <span>Attempts</span>
                             <select
                               value={leadsAttemptsFilter}
@@ -1103,7 +1209,7 @@ const CampaignDetail = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {leadsLoading ? (
+                      {leadsLoading && sortedLeads.length === 0 ? (
                         <tr>
                           <td colSpan="7" className="text-center text-muted">Loading leads...</td>
                         </tr>
@@ -1115,7 +1221,7 @@ const CampaignDetail = () => {
                         sortedLeads.map((lead) => (
                           <tr
                             key={lead.id}
-                            className={lead.status === 'calling' ? 'cl-lead--live' : ''}
+                            className={isLiveLeadRow(lead) ? 'cl-lead--live' : ''}
                             onClick={() => handleOpenTranscript(lead)}
                           >
                             <td className="font-semibold text-primary">{lead.name || '—'}</td>
@@ -1137,8 +1243,8 @@ const CampaignDetail = () => {
                                 <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>—</span>
                               )}
                             </td>
-                            <td>{getLeadTurns(lead, turnsIndex)}</td>
-                            <td>{lead.attempts || 0}</td>
+                            <td className="cl-td--numeric">{getLeadTurns(lead, turnsIndex)}</td>
+                            <td className="cl-td--numeric">{lead.attempts || 0}</td>
                             <td className="text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex justify-end gap-2.5 flex-wrap">
                                 <button
@@ -1295,17 +1401,14 @@ const CampaignDetail = () => {
 
       <Modal
         open={isAddLeadOpen}
-        onClose={() => {
-          setIsAddLeadOpen(false);
-          setAddLeadCustomColumns([]);
-        }}
+        onClose={() => setIsAddLeadOpen(false)}
         title="Add New Lead"
         subtitle="Add a lead manually to start AI outreach instantly."
         icon="person_add"
         width={480}
         footer={(
           <>
-            <Button variant="ghost" onClick={() => { setIsAddLeadOpen(false); setAddLeadCustomColumns([]); }}>Cancel</Button>
+            <Button variant="ghost" onClick={() => setIsAddLeadOpen(false)}>Cancel</Button>
             <Button variant="primary" onClick={handleAddLead}>Add Contact</Button>
           </>
         )}
@@ -1344,25 +1447,16 @@ const CampaignDetail = () => {
             </select>
           </label>
 
-          {getDynamicLeadFields()
-            .filter((f) => f.key !== 'lead_name' && f.key !== 'lead_phone' && f.key !== 'name' && f.key !== 'phone')
-            .map((field) => (
-              <label key={field.key}>
-                {field.key.replace(/_/g, ' ')}{field.required ? ' *' : ''}
-                <input
-                  type={field.type === 'number' ? 'number' : 'text'}
-                  required={field.required}
-                  value={newLead.metadata[field.key] || ''}
-                  onChange={(e) => setNewLead({
-                    ...newLead,
-                    metadata: { ...newLead.metadata, [field.key]: e.target.value },
-                  })}
-                  placeholder={field.description || ''}
-                />
-              </label>
-            ))}
-
-          <CustomMetadataFields fields={addLeadCustomColumns} onChange={setAddLeadCustomColumns} />
+          {getDynamicLeadFields().map((field) =>
+            renderSchemaFieldInput(
+              field,
+              newLead.metadata?.[field.key],
+              (val) => setNewLead({
+                ...newLead,
+                metadata: { ...newLead.metadata, [field.key]: val },
+              }),
+            )
+          )}
         </form>
       </Modal>
 
@@ -1409,23 +1503,16 @@ const CampaignDetail = () => {
               </select>
             </label>
 
-            {getDynamicLeadFields()
-              .filter((f) => f.key !== 'lead_name' && f.key !== 'lead_phone' && f.key !== 'name' && f.key !== 'phone')
-              .map((field) => (
-                <label key={field.key}>
-                  {field.key.replace(/_/g, ' ')}{field.required ? ' *' : ''}
-                  <input
-                    type={field.type === 'number' ? 'number' : 'text'}
-                    required={field.required}
-                    value={editLeadData.metadata?.[field.key] || ''}
-                    onChange={(e) => setEditLeadData({
-                      ...editLeadData,
-                      metadata: { ...(editLeadData.metadata || {}), [field.key]: e.target.value },
-                    })}
-                    placeholder={field.description || ''}
-                  />
-                </label>
-              ))}
+            {getDynamicLeadFields().map((field) =>
+              renderSchemaFieldInput(
+                field,
+                editLeadData.metadata?.[field.key],
+                (val) => setEditLeadData({
+                  ...editLeadData,
+                  metadata: { ...(editLeadData.metadata || {}), [field.key]: val },
+                }),
+              )
+            )}
 
             <label>
               Status
@@ -1530,11 +1617,9 @@ const CampaignDetail = () => {
         </p>
       </Modal>
 
-
-
       <CallTranscriptDrawer
         isOpen={isTranscriptOpen}
-        sessionCallId={selectedLeadForTranscript ? (selectedLeadForTranscript.session_call_id || selectedLeadForTranscript.id) : null}
+        sessionCallId={selectedLeadForTranscript?.session_call_id || null}
         leadName={selectedLeadForTranscript ? selectedLeadForTranscript.name : ''}
         leadData={selectedLeadForTranscript}
         onClose={() => setIsTranscriptOpen(false)}
