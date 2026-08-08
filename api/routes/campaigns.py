@@ -243,8 +243,8 @@ async def upload_leads(
     lead_schema = await _get_lead_schema(pool, bot, cid)
 
     filename = file.filename or "upload.xlsx"
-    if not filename.lower().endswith((".xlsx", ".xls")):
-        raise HTTPException(400, "Only Excel (.xlsx) files are supported")
+    if not filename.lower().endswith((".xlsx", ".xls", ".csv")):
+        raise HTTPException(400, "Only CSV and Excel (.xlsx, .csv) files are supported")
 
     content = await file.read()
     import io
