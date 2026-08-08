@@ -84,7 +84,7 @@ jobs:
           printf '%s\n' "$SERVER_SSH_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
           echo "Attempting SSH connection test to ${user}@${host}:${port} (Host length: ${#host} chars, Timeout 30s)..."
-          if ! ssh -vvv -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i /tmp/deploy_key -p "$port" "${user}@${host}" 'echo "SSH Connection OK"'; then
+          if ! ssh -4 -vvv -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i /tmp/deploy_key -p "$port" "${user}@${host}" 'echo "SSH Connection OK"'; then
             echo "::error::SSH test failed. Check SERVER_HOST, SERVER_PORT (default 22), SERVER_USER, SERVER_SSH_KEY, and VPS firewall/UFW rules."
             rm -f /tmp/deploy_key
             exit 1
