@@ -1,6 +1,12 @@
 /** Same turn count used in CallTranscriptDrawer / LeadDrawer analytics. */
-export function computeTurnsFromTranscript(transcript) {
-  let turns = transcript;
+export function computeTurnsFromTranscript(callOrTranscript) {
+  let turns = callOrTranscript;
+  if (typeof turns === 'number') return turns;
+  if (turns && typeof turns === 'object' && !Array.isArray(turns)) {
+    if (typeof turns.turn_count === 'number') return turns.turn_count;
+    if (typeof turns.turns === 'number') return turns.turns;
+    turns = turns.transcript;
+  }
   if (typeof turns === 'string') {
     try {
       turns = JSON.parse(turns);
@@ -29,6 +35,12 @@ export function buildTurnsByLead(calls = []) {
     const count = fromTranscript > 0
       ? fromTranscript
       : (Number.isFinite(fromMeta) && fromMeta >= 0 ? fromMeta : 0);
+    const count =
+      typeof call.turn_count === 'number'
+        ? call.turn_count
+        : typeof call.turns === 'number'
+        ? call.turns
+        : computeTurnsFromTranscript(call.transcript);
     const leadId = call.lead_id != null ? String(call.lead_id) : null;
     const sessionId = call.session_call_id != null ? String(call.session_call_id) : null;
     if (leadId) {
@@ -52,6 +64,9 @@ export function getLeadTurns(lead, turnsIndex) {
     if (Number.isFinite(fromLead) && fromLead >= 0) return fromLead;
   }
 
+  if (typeof lead.turns === 'number') return lead.turns;
+  if (typeof lead.turn_count === 'number') return lead.turn_count;
+  if (typeof lead.last_call_turns === 'number') return lead.last_call_turns;
   if (!turnsIndex) return 0;
   const sessionId = lead.session_call_id != null ? String(lead.session_call_id) : null;
   if (sessionId && turnsIndex.bySession.has(sessionId)) {

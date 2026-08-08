@@ -59,10 +59,43 @@ jobs:
       contents: read
 
     steps:
+      - name: Validate deploy secrets
+        run: |
+          if [ -z "${{ secrets.GH_DEPLOY_TOKEN }}" ]; then
+            echo "::error::GH_DEPLOY_TOKEN secret is missing. Add a Personal Access Token (Contents: Read) as repo secret GH_DEPLOY_TOKEN."
+            exit 1
+          fi
+          if [ -z "${{ secrets.SERVER_HOST }}" ] || [ -z "${{ secrets.SERVER_USER }}" ] || [ -z "${{ secrets.SERVER_SSH_KEY }}" ]; then
+            echo "::error::One of SERVER_HOST / SERVER_USER / SERVER_SSH_KEY secrets is missing in repository settings."
+            exit 1
+          fi
+
+      - name: Test SSH connectivity to VPS
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+        run: |
+          port="${SERVER_PORT:-22}"
+          # Trim any hidden whitespace/newlines from host and user secrets
+          host="$(echo -n "${SERVER_HOST}" | tr -d '[:space:]')"
+          user="$(echo -n "${SERVER_USER}" | tr -d '[:space:]')"
+          printf '%s\n' "$SERVER_SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          echo "Attempting SSH connection test to ${user}@${host}:${port} (Host length: ${#host} chars, Timeout 30s)..."
+          if ! ssh -vvv -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=30 -i /tmp/deploy_key -p "$port" "${user}@${host}" 'echo "SSH Connection OK"'; then
+            echo "::error::SSH test failed. Check SERVER_HOST, SERVER_PORT (default 22), SERVER_USER, SERVER_SSH_KEY, and VPS firewall/UFW rules."
+            rm -f /tmp/deploy_key
+            exit 1
+          fi
+          rm -f /tmp/deploy_key
+
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1
         env:
           DEPLOY_SHA: ${{ github.sha }}
+
           GH_REPO: ${{ github.repository }}
           # Private repo: use a classic/fine-grained PAT with Contents: Read.
           # Repo Settings → Secrets → Actions → GH_DEPLOY_TOKEN
@@ -140,17 +173,18 @@ jobs:
 
             echo "Health check..."
             success=0
-            for i in $(seq 1 30); do
+            for i in $(seq 1 90); do
               if curl -fsS http://localhost:7860/health >/dev/null 2>&1; then
                 echo "Health check passed!"
                 success=1
                 break
               fi
-              echo "Waiting for health check ($i/30)..."
+              echo "Waiting for health check ($i/90)..."
               sleep 2
             done
             if [ "$success" -ne 1 ]; then
-              echo "ERROR: Health check timed out after 60s"
+              echo "ERROR: Health check timed out after 180s"
+              docker logs aakashvani-backend --tail 100
               exit 1
             fi
 

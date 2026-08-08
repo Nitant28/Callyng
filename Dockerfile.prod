@@ -25,6 +25,7 @@ RUN uv sync --locked --no-dev
 # Application code
 COPY . .
 RUN mkdir -p /app/data
+RUN python -m compileall -q .
 
 EXPOSE 7860
 

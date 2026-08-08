@@ -12,12 +12,14 @@ import aiohttp
 from loguru import logger
 
 _DEFAULT_MODEL = "llama-3.3-70b-versatile"
-_DEFAULT_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
+_DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+_DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 _DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+
 _GEMINI_GENERATE_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
-_VALID_PROVIDERS = frozenset({"openai", "anthropic", "gemini"})
+_VALID_PROVIDERS = frozenset({"openai", "groq", "anthropic", "gemini"})
 _ANTHROPIC_VERSION = "2023-06-01"
 _ANTHROPIC_MAX_TOKENS = 4096
 
@@ -29,9 +31,15 @@ def post_call_provider() -> str:
 
 
 def _resolve_openai_key(api_key: str | None = None) -> str:
+    if api_key and api_key.strip():
+        return api_key.strip()
+    if post_call_provider() == "groq":
+        return (
+            (os.getenv("GROQ_API_KEY") or "").strip()
+            or (os.getenv("OPENAI_API_KEY") or "").strip()
+        )
     return (
-        (api_key or "").strip()
-        or (os.getenv("OPENAI_API_KEY") or "").strip()
+        (os.getenv("OPENAI_API_KEY") or "").strip()
         or (os.getenv("GROQ_API_KEY") or "").strip()
     )
 
@@ -39,7 +47,7 @@ def _resolve_openai_key(api_key: str | None = None) -> str:
 def _resolve_provider_key(provider: str, api_key: str | None = None) -> str:
     if api_key and api_key.strip():
         return api_key.strip()
-    if provider == "openai":
+    if provider in ("openai", "groq"):
         return _resolve_openai_key(None)
     if provider == "anthropic":
         return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
@@ -63,9 +71,12 @@ def post_call_missing_key_message() -> str:
         return "ANTHROPIC_API_KEY not configured"
     if provider == "gemini":
         return "GOOGLE_API_KEY not configured"
-    if provider == "openai":
+    if provider in ("openai", "groq"):
         return "OPENAI_API_KEY or GROQ_API_KEY not configured"
-    return f"unsupported POST_CALL_PROVIDER={provider!r} (expected openai|anthropic|gemini)"
+    return f"unsupported POST_CALL_PROVIDER={provider!r} (expected openai|groq|anthropic|gemini)"
+
+
+
 
 _VALID_MODES = frozenset({"fields", "summary", "both"})
 
@@ -512,8 +523,17 @@ async def _chat_openai_compat(
     api_key: str,
     timeout_sec: float,
 ) -> tuple[str | None, str | None]:
-    base = (os.getenv("OPENAI_BASE_URL") or _DEFAULT_OPENAI_BASE_URL).rstrip("/")
+    if os.getenv("OPENAI_BASE_URL"):
+        base = os.getenv("OPENAI_BASE_URL").rstrip("/")
+    elif post_call_provider() == "groq" or api_key.startswith("gsk") or (os.getenv("GROQ_API_KEY") and api_key == os.getenv("GROQ_API_KEY").strip()):
+        base = _DEFAULT_GROQ_BASE_URL.rstrip("/")
+    else:
+        base = _DEFAULT_OPENAI_BASE_URL.rstrip("/")
     url = f"{base}/chat/completions"
+
+
+
+
     body = {
         "model": model,
         "temperature": 0.1,
@@ -592,9 +612,11 @@ async def extract_post_call(
 ) -> tuple[dict[str, Any] | None, str | None, str]:
     """Call the configured post-call LLM; return (parsed, error, model_used)."""
     system_prompt = build_extraction_system_prompt(extraction_schema)
-    mdl = model or os.getenv("POST_CALL_MODEL", _DEFAULT_MODEL)
     provider = post_call_provider()
+    default_model = "llama-3.3-70b-versatile" if provider == "groq" else ("gpt-4o-mini" if provider == "openai" else _DEFAULT_MODEL)
+    mdl = model or os.getenv("POST_CALL_MODEL", default_model)
     if provider not in _VALID_PROVIDERS:
+
         err = (
             f"unsupported POST_CALL_PROVIDER={provider!r} "
             f"(expected {sorted(_VALID_PROVIDERS)})"
@@ -608,7 +630,7 @@ async def extract_post_call(
 
     user_content = _user_extraction_message(format_transcript_for_extraction(transcript))
 
-    if provider == "openai":
+    if provider in ("openai", "groq"):
         content, err = await _chat_openai_compat(
             system_prompt=system_prompt,
             user_content=user_content,
@@ -616,6 +638,7 @@ async def extract_post_call(
             api_key=key,
             timeout_sec=timeout_sec,
         )
+
     elif provider == "anthropic":
         content, err = await _chat_anthropic(
             system_prompt=system_prompt,
