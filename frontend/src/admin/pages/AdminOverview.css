@@ -1,4 +1,4 @@
-/* AdminOverview.css — scoped animations only */
+/* AdminOverview.css — page layout + animations */
 
 @keyframes soundwave {
   0%, 100% { opacity: 0.5; }
@@ -16,4 +16,83 @@
 
 @keyframes fadeUp {
   to { opacity: 1; transform: translateY(0); }
+}
+
+.admin-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
+.admin-kpi-grid .kpi-card {
+  min-height: 140px;
+  height: 100%;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.admin-overview-grid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.admin-overview-grid > .admin-card {
+  padding: 16px;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-card__header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.admin-infra-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-alert {
+  padding: 12px 16px;
+  border-radius: var(--admin-radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--admin-text-base);
+}
+
+.admin-alert--error {
+  background: var(--admin-error-bg);
+  color: var(--admin-error);
+  border: 1px solid var(--admin-error);
+}
+
+.admin-empty-inline {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--admin-text-muted);
+  font-size: var(--admin-text-sm);
+}
+
+@media (max-width: 1100px) {
+  .admin-overview-grid {
+    grid-template-columns: 1fr;
+  }
+  .admin-infra-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .admin-kpi-grid {
+    grid-template-columns: 1fr;
+  }
 }

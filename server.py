@@ -523,7 +523,7 @@ async def health():
 
 
 def _register_api_routes() -> None:
-    from api.routes import calls, campaigns, client_leads, credits, internal, internal_script_configs, leads
+    from api.routes import calls, campaigns, client_leads, credits, dashboard, internal, internal_script_configs, leads
 
     app.include_router(internal.router)
     app.include_router(internal_script_configs.router)
@@ -532,6 +532,7 @@ def _register_api_routes() -> None:
     app.include_router(client_leads.router)
     app.include_router(calls.router)
     app.include_router(credits.router)
+    app.include_router(dashboard.router)
 
 
 _register_api_routes()

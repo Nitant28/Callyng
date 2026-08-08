@@ -183,9 +183,12 @@ const leadWasDialed = (lead) =>
 
 /**
  * Live dial stack: current call(s) on top, each finished call drops one row below in LIFO order.
+ * Concurrent live calls are always ordered newest-first by last_attempted_at.
  */
 export const sortLeadsCallStack = (rows, { live = false } = {}) => {
   if (!rows?.length) return rows;
+
+  const byId = (a, b) => String(a?.id || '').localeCompare(String(b?.id || ''));
 
   if (!live) {
     return [...rows].sort((a, b) => {
@@ -194,7 +197,8 @@ export const sortLeadsCallStack = (rows, { live = false } = {}) => {
       if (ra !== rb) return ra - rb;
       const ta = leadTimestamp(a, 'updated_at', 'updatedAt', 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'created_at', 'createdAt');
       const tb = leadTimestamp(b, 'updated_at', 'updatedAt', 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'created_at', 'createdAt');
-      return tb - ta;
+      if (tb !== ta) return tb - ta;
+      return byId(a, b);
     });
   }
 
@@ -204,8 +208,11 @@ export const sortLeadsCallStack = (rows, { live = false } = {}) => {
     if (aLive !== bLive) return aLive ? -1 : 1;
 
     if (aLive && bLive) {
-      return leadTimestamp(b, 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt')
+      const diff =
+        leadTimestamp(b, 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt')
         - leadTimestamp(a, 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt');
+      if (diff !== 0) return diff;
+      return byId(b, a);
     }
 
     const aDialed = leadWasDialed(a);
@@ -213,11 +220,17 @@ export const sortLeadsCallStack = (rows, { live = false } = {}) => {
     if (aDialed !== bDialed) return aDialed ? -1 : 1;
 
     if (aDialed && bDialed) {
-      return leadTimestamp(b, 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt')
+      const diff =
+        leadTimestamp(b, 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt')
         - leadTimestamp(a, 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt');
+      if (diff !== 0) return diff;
+      return byId(b, a);
     }
 
-    return leadTimestamp(b, 'created_at', 'createdAt') - leadTimestamp(a, 'created_at', 'createdAt');
+    const createdDiff =
+      leadTimestamp(b, 'created_at', 'createdAt') - leadTimestamp(a, 'created_at', 'createdAt');
+    if (createdDiff !== 0) return createdDiff;
+    return byId(b, a);
   });
 };
 

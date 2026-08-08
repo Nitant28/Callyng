@@ -16,14 +16,12 @@ export function computeTurnsFromTranscript(callOrTranscript) {
   }
   if (!Array.isArray(turns) || turns.length === 0) return 0;
 
-  let aiTurns = 0;
-  let custTurns = 0;
+  let total = 0;
   turns.forEach((t) => {
     const role = t?.role;
-    if (role === 'assistant' || role === 'bot') aiTurns += 1;
-    else custTurns += 1;
+    if (role === 'assistant' || role === 'bot' || role === 'user') total += 1;
   });
-  return aiTurns + custTurns;
+  return total;
 }
 
 /** Map lead_id / session_call_id → turn count from already-loaded calls. */
@@ -32,6 +30,11 @@ export function buildTurnsByLead(calls = []) {
   const bySession = new Map();
 
   (calls || []).forEach((call) => {
+    const fromTranscript = computeTurnsFromTranscript(call.transcript);
+    const fromMeta = Number(call.transcript_turns);
+    const count = fromTranscript > 0
+      ? fromTranscript
+      : (Number.isFinite(fromMeta) && fromMeta >= 0 ? fromMeta : 0);
     const count =
       typeof call.turn_count === 'number'
         ? call.turn_count
@@ -52,6 +55,15 @@ export function buildTurnsByLead(calls = []) {
 
 export function getLeadTurns(lead, turnsIndex) {
   if (!lead) return 0;
+
+  // Prefer backend-provided count when the field is present on the lead row.
+  if (Object.prototype.hasOwnProperty.call(lead, 'transcript_turns')
+      && lead.transcript_turns != null
+      && lead.transcript_turns !== '') {
+    const fromLead = Number(lead.transcript_turns);
+    if (Number.isFinite(fromLead) && fromLead >= 0) return fromLead;
+  }
+
   if (typeof lead.turns === 'number') return lead.turns;
   if (typeof lead.turn_count === 'number') return lead.turn_count;
   if (typeof lead.last_call_turns === 'number') return lead.last_call_turns;
