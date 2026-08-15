@@ -2,6 +2,16 @@ import React, { useState, useEffect } from 'react';
 import adminApi from '../../shared/api/admin';
 import AdminCustomerFilter from '../components/AdminCustomerFilter';
 
+const formatInr = (n) =>
+  `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const previewCharge = (seconds, rate, setup) => {
+  const r = Math.max(0, parseFloat(rate) || 0);
+  const s = Math.max(0, parseFloat(setup) || 0);
+  const started = Math.max(1, Math.ceil(Number(seconds) / 60));
+  return (started * s + (Number(seconds) / 60) * r).toFixed(2);
+};
+
 
 export default function AdminBotConfigs() {
   const [bots, setBots] = useState([]);
@@ -9,6 +19,7 @@ export default function AdminBotConfigs() {
   const [modalClosing, setModalClosing] = useState(false);
   const [editingBot, setEditingBot] = useState(null);
   const [editPrice, setEditPrice] = useState('');
+  const [editSetup, setEditSetup] = useState('0.60');
   const [search, setSearch] = useState('');
   const [clientFilter, setClientFilter] = useState('');
   
@@ -23,6 +34,7 @@ export default function AdminBotConfigs() {
   const [newBotScriptConfigId, setNewBotScriptConfigId] = useState('');
   const [newBotTelephonyNumber, setNewBotTelephonyNumber] = useState('');
   const [newBotCreditsPerMinute, setNewBotCreditsPerMinute] = useState('');
+  const [newBotSetupCredits, setNewBotSetupCredits] = useState('0.60');
   const [createError, setCreateError] = useState('');
   const [scriptConfigs, setScriptConfigs] = useState([]);
 
@@ -45,6 +57,7 @@ export default function AdminBotConfigs() {
           bgColorClass: isOnline ? 'bg-secondary/15 dark:bg-[#0a0e17]' : 'bg-arctic-warning/15 dark:bg-[#0a0e17]',
           borderColorClass: isOnline ? 'border-secondary/20 dark:border-[#2a345e]' : 'border-arctic-warning/20 dark:border-[#2a345e]',
           price: bot.credits_per_minute || 0,
+          setup: bot.fixed_start_credits ?? 0.6,
           active: bot.active,
           route: bot.route,
           script_id: bot.script_id,
@@ -77,6 +90,7 @@ export default function AdminBotConfigs() {
   const openPriceModal = (bot) => {
     setEditingBot(bot);
     setEditPrice(bot.price.toFixed(2));
+    setEditSetup(Number(bot.setup ?? 0.6).toFixed(2));
     setModalClosing(false);
     setIsModalOpen(true);
   };
@@ -91,14 +105,17 @@ export default function AdminBotConfigs() {
   };
 
   const savePrice = async () => {
-    if (!editingBot || !editPrice) return;
+    if (!editingBot) return;
+    const newPrice = parseFloat(editPrice);
+    const newSetup = parseFloat(editSetup);
+    if (Number.isNaN(newPrice) || newPrice < 0 || Number.isNaN(newSetup) || newSetup < 0) return;
     try {
-      const newPrice = parseFloat(editPrice) || 0;
       await adminApi.patch(`/internal/bot-configs/${editingBot.id}`, {
-        credits_per_minute: newPrice
+        credits_per_minute: newPrice,
+        fixed_start_credits: newSetup,
       });
       
-      setBots(bots.map(b => b.id === editingBot.id ? { ...b, price: newPrice } : b));
+      setBots(bots.map(b => b.id === editingBot.id ? { ...b, price: newPrice, setup: newSetup } : b));
       closePriceModal();
     } catch (error) {
       console.error("Failed to save price", error);
@@ -123,6 +140,7 @@ export default function AdminBotConfigs() {
       setNewBotScriptConfigId('');
       setNewBotTelephonyNumber('');
       setNewBotCreditsPerMinute('');
+      setNewBotSetupCredits('0.60');
       setCreateError('');
       setCreateClosing(false);
     }, 200);
@@ -134,6 +152,12 @@ export default function AdminBotConfigs() {
     
     if (!newBotClientId || !newBotName || !newBotRoute || !newBotScriptId || !newBotTelephonyNumber || !newBotCreditsPerMinute) {
       setCreateError('All fields are required.');
+      return;
+    }
+    const rate = parseFloat(newBotCreditsPerMinute);
+    const setup = parseFloat(newBotSetupCredits);
+    if (Number.isNaN(rate) || rate < 0 || Number.isNaN(setup) || setup < 0) {
+      setCreateError('Rates must be zero or greater.');
       return;
     }
     
@@ -151,7 +175,8 @@ export default function AdminBotConfigs() {
         script_id: newBotScriptId,
         script_config_id: newBotScriptConfigId || null,
         telephony_number: newBotTelephonyNumber,
-        credits_per_minute: parseFloat(newBotCreditsPerMinute)
+        credits_per_minute: rate,
+        fixed_start_credits: setup,
       });
       
       fetchBots();
@@ -229,8 +254,9 @@ export default function AdminBotConfigs() {
 
             <div className="flex justify-between items-center border-t border-outline-variant/50 dark:border-[#2a345e] pt-4 mt-auto">
               <div className="flex flex-col">
-                <span className="font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted">RATE (INR/HR)</span>
-                <span className="font-body-lg text-body-lg text-on-surface dark:text-molten-text tabular-nums font-medium">₹{bot.price?.toFixed(2)}</span>
+                <span className="font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted">₹ / MIN</span>
+                <span className="font-body-lg text-body-lg text-on-surface dark:text-molten-text tabular-nums font-medium">{formatInr(bot.price)} / min</span>
+                <span className="font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted mt-1">Setup {formatInr(bot.setup)} / started min</span>
               </div>
               <button 
                 className="px-4 py-2 bg-primary dark:bg-molten-primary text-on-primary font-label-md text-label-md rounded-lg shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] hover:bg-primary-fixed-variant dark:hover:brightness-90 transition-colors flex items-center gap-2"
@@ -261,19 +287,38 @@ export default function AdminBotConfigs() {
                 <span className="material-symbols-outlined" data-icon="close">close</span>
               </button>
             </div>
-            <p className="font-body-sm text-body-sm text-on-surface-variant dark:text-molten-text-muted mb-stack-md">Adjust the hourly billing rate for this neural agent. Changes take effect immediately for new sessions.</p>
-            <div className="mb-stack-lg">
-              <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-2 uppercase tracking-wide">Hourly Rate (INR)</label>
+            <p className="font-body-sm text-body-sm text-on-surface-variant dark:text-molten-text-muted mb-stack-md">Talk time is billed per second. Setup is charged each started minute (0s and 60s = 1; 61s = 2). A 15-second call at ₹4.00/min + ₹0.60 setup costs ₹1.60. Changes apply to <strong>new dials only</strong>; calls already ringing keep the old rate.</p>
+            <div className="mb-stack-md">
+              <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-2 uppercase tracking-wide">Rate (₹ / min)</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 font-body-md text-on-surface-variant dark:text-molten-text-muted">₹</span>
                 <input 
                   className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg pl-8 pr-4 py-2.5 font-body-md text-body-md text-on-surface dark:text-molten-text tabular-nums focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors" 
-                  type="text" 
+                  type="number"
+                  step="0.01"
+                  min="0"
                   value={editPrice}
                   onChange={(e) => setEditPrice(e.target.value)}
                 />
               </div>
             </div>
+            <div className="mb-stack-md">
+              <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-2 uppercase tracking-wide">Setup (₹ / started min)</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 font-body-md text-on-surface-variant dark:text-molten-text-muted">₹</span>
+                <input 
+                  className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg pl-8 pr-4 py-2.5 font-body-md text-body-md text-on-surface dark:text-molten-text tabular-nums focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors" 
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={editSetup}
+                  onChange={(e) => setEditSetup(e.target.value)}
+                />
+              </div>
+            </div>
+            <p className="font-body-sm text-body-sm text-on-surface-variant dark:text-molten-text-muted mb-stack-lg">
+              Preview: 15s ₹{previewCharge(15, editPrice, editSetup)} · 1 min ₹{previewCharge(60, editPrice, editSetup)} · 2 min ₹{previewCharge(120, editPrice, editSetup)}
+            </p>
             <div className="flex justify-end gap-3">
               <button 
                 className="px-5 py-2.5 rounded-lg border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text font-label-md text-label-md hover:bg-surface-container-low dark:hover:bg-molten-surface transition-colors"
@@ -388,16 +433,33 @@ export default function AdminBotConfigs() {
               </div>
               
               <div>
-                <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">Credits Per Minute</label>
+                <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">Rate (₹ / min)</label>
                 <input 
                   className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
-                  placeholder="e.g. 0.50"
+                  placeholder="e.g. 4.00"
                   type="number"
                   step="0.01"
+                  min="0"
                   value={newBotCreditsPerMinute}
                   onChange={(e) => setNewBotCreditsPerMinute(e.target.value)}
                   required
                 />
+              </div>
+              <div>
+                <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">Setup (₹ / started min)</label>
+                <input 
+                  className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
+                  placeholder="0.60"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={newBotSetupCredits}
+                  onChange={(e) => setNewBotSetupCredits(e.target.value)}
+                  required
+                />
+                <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant dark:text-molten-text-muted">
+                  Preview: 15s ₹{previewCharge(15, newBotCreditsPerMinute, newBotSetupCredits)} · 1 min ₹{previewCharge(60, newBotCreditsPerMinute, newBotSetupCredits)} · 2 min ₹{previewCharge(120, newBotCreditsPerMinute, newBotSetupCredits)}
+                </p>
               </div>
               
               <div className="flex justify-end gap-3 pt-2">

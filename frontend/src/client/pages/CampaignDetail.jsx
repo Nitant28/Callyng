@@ -1014,7 +1014,16 @@ const CampaignDetail = () => {
                   </div>
                   <div>
                     <div className="text-xs text-muted font-medium">Pricing Rate</div>
-                    <div className="text-sm font-semibold text-primary mt-1">{campaign.bot_config?.credits_per_minute || 1} credits/min</div>
+                    <div className="text-sm font-semibold text-primary mt-1">
+                      {campaign.bot_config?.credits_per_minute != null
+                        ? `₹${Number(campaign.bot_config.credits_per_minute).toFixed(2)} per minute`
+                        : '—'}
+                    </div>
+                    {campaign.bot_config?.fixed_start_credits != null && (
+                      <div className="text-xs text-muted mt-1">
+                        ₹{Number(campaign.bot_config.fixed_start_credits).toFixed(2)} / started min
+                      </div>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs text-muted font-medium">Max Call Attempts</div>

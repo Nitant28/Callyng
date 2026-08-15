@@ -79,7 +79,8 @@ DID + per-minute price + optional dynamic `script_config_id`.
 | `route` | VARCHAR(20) NOT NULL CHECK in (`sts`,`cascaded`) | |
 | `script_id` | VARCHAR(100) NOT NULL | resolves `sts_scripts/<id>.py` or `cascade_scripts/<id>.py`; validated `^[a-z][a-z0-9_]*$` |
 | `telephony_number` | VARCHAR(20) | Plivo DID (E.164) |
-| `credits_per_minute` | NUMERIC(6,2) NOT NULL | billed per ceil-minute. **Never shown to client.** |
+| `credits_per_minute` | NUMERIC(6,2) NOT NULL | ₹ per connected minute (pro-rata per second) |
+| `fixed_start_credits` | NUMERIC(10,4) NOT NULL DEFAULT 0.6000 | setup fee when Plivo accepts the dial |
 | `active` | BOOLEAN DEFAULT TRUE | |
 | `script_config_id` | UUID → script_configs ON DELETE SET NULL | added in 006; non-null = use DB script config |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
@@ -206,14 +207,14 @@ Key columns (see `001_initial.sql` lines 321–435 + `002_compat.sql`):
 | `started_at` | TIMESTAMPTZ | set at insert (call start) |
 | `ended_at` | TIMESTAMPTZ | set by finalize |
 | `duration_seconds` | INTEGER | connected duration |
-| `billed_minutes` | INTEGER | `ceil(duration/60)` (0 if duration 0) |
+| `billed_minutes` | NUMERIC(10,4) | `duration_seconds / 60` (15s → 0.2500) |
+| `credits_charged` | NUMERIC(10,4) | setup + billed_minutes × rate (4 dp) |
 | `route` | VARCHAR(20) CHECK (sts/cascaded) | |
 | `outcome` | VARCHAR(50) | this attempt's outcome |
 | `qualified` | BOOLEAN DEFAULT FALSE | `outcome == 'Interested'` |
 | `in_progress` | BOOLEAN DEFAULT TRUE | **TRUE while live → frontend polls** |
 | `transcript` | JSONB DEFAULT '[]' | array of `{role, content, ts,...}` turns |
 | `usage_prompt_tokens` / `usage_completion_tokens` / `usage_total_tokens` / `usage_tts_characters` | INTEGER | from `call_metrics` |
-| `credits_charged` | NUMERIC(10,4) | `billed_minutes * credits_per_minute` |
 | `cost_usd` | NUMERIC(10,6) | internal margin (never shown to client) |
 | `extraction_json` | JSONB DEFAULT '{}' | raw per-attempt extraction |
 | `extraction_model` | VARCHAR(100) | e.g. `groq/llama-3.3-70b-versatile` |

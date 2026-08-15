@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useRef, useCallback } from "react";
 import clientApi from "../../api/client";
+import { formatCallCost } from "../../utils/callLogsHelpers";
 
 const HIDDEN_LEAD_DETAIL_KEYS = new Set([
   'id', 'client_id', 'campaign_id', 'lead_id', 'bot_config_id', 'session_call_id',
@@ -369,6 +370,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                   <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e8ecf2", overflow: "hidden" }}>
                     {[
                       { icon: "timer", label: "Duration", value: fmt(callData.duration_seconds) },
+                      { icon: "payments", label: "Cost", value: formatCallCost(callData.credits_charged, { inProgress: callData.in_progress === true }) },
                       { icon: "swap_horiz", label: "Turns", value: stats.turns },
                       { icon: "smart_toy", label: "AI Turns", value: `${stats.aiTurns} (${stats.aiRatio}%)` },
                       { icon: "person", label: "Customer Turns", value: `${stats.custTurns} (${stats.custRatio}%)` },

@@ -55,7 +55,7 @@ CREATE TABLE clients (
 -- Prevents path traversal. '../secrets' fails the regex.
 --
 -- credits_per_minute: set by us based on route + providers used.
--- Billed in ceiling minutes: ceil(duration_seconds / 60).
+-- Talk time is billed pro-rata per second (duration_seconds / 60).
 -- Clients never see this number — they see credits consumed.
 -- ============================================================
 CREATE TABLE bot_configs (
@@ -79,11 +79,13 @@ CREATE TABLE bot_configs (
     -- Plivo DID assigned to this bot. E.164: '+912240000000'
 
     credits_per_minute   NUMERIC(6,2) NOT NULL,
-    -- Credits charged per billed minute for calls using this bot.
-    -- Billed minute = ceil(duration_seconds / 60).
-    -- 61 seconds → 2 billed minutes → 2 * credits_per_minute deducted.
-    -- Example: 1.49 for cascaded Sarvam+Groq+Cartesia.
+    -- Credits charged per minute of connected talk time (pro-rata per second).
+    -- 15 seconds at 4.00/min → 1.00 duration credits.
     -- Set by us. Reflects our provider costs + margin.
+
+    fixed_start_credits  NUMERIC(10,4) NOT NULL DEFAULT 0.6000,
+    -- Setup fee charged when Plivo accepted the dial (ringing/busy/connected).
+    -- Not charged if the dial never left our stack. Admin-editable; 0 is allowed.
 
     active               BOOLEAN DEFAULT TRUE,
     created_at           TIMESTAMPTZ DEFAULT NOW()
@@ -98,8 +100,8 @@ CREATE TABLE bot_configs (
 -- CREDITS (pre-allocation model, eliminates race conditions):
 --   At campaign start:
 --     clients.balance_credits  -= budget_credits   (one-time deduction)
---   Per call end:
---     budget_used_credits      += billed_minutes * credits_per_minute
+--   Per call end (delta settle vs claim reservation):
+--     budget_used_credits      += round_half_up(setup + billed_minutes * rate, 2)
 --   At campaign completion:
 --     clients.balance_credits  += (budget_credits - budget_used_credits)
 --
@@ -136,9 +138,9 @@ CREATE TABLE campaigns (
     -- Deducted from master balance once. Not touched per call.
 
     budget_used_credits  NUMERIC(12,2) DEFAULT 0,
-    -- Running total of credits consumed. Incremented per call:
-    -- += ceil(duration_seconds / 60) * bot_config.credits_per_minute
-    -- Atomic SQL increment — no race condition possible.
+    -- Running total of credits consumed. Incremented per call (2 dp HALF_UP):
+    -- += setup + (duration_seconds / 60) * bot_config.credits_per_minute
+    -- Claim time reserves setup + rate × 2 minutes; settle applies the delta.
 
     -- ── DIALER THROTTLE ───────────────────────────────────────
     max_concurrent_calls INTEGER DEFAULT 5,
@@ -345,9 +347,9 @@ CREATE TABLE call_logs (
     duration_seconds        INTEGER,
     -- Actual connected duration. Computed at call end.
 
-    billed_minutes          INTEGER,
-    -- ceil(duration_seconds / 60).
-    -- 61s → 2, 60s → 1, 1s → 1.
+    billed_minutes          NUMERIC(10,4),
+    -- Exact minutes as duration_seconds / 60 (no ceiling).
+    -- 15s → 0.2500, 60s → 1.0000, 61s → 1.0167.
     -- Stored explicitly for billing auditability.
 
     -- ── PIPELINE ──────────────────────────────────────────────
@@ -386,8 +388,8 @@ CREATE TABLE call_logs (
 
     -- ── BILLING ───────────────────────────────────────────────
     credits_charged         NUMERIC(10,4),
-    -- billed_minutes * bot_config.credits_per_minute
-    -- This is what gets added to campaign.budget_used_credits.
+    -- setup + billed_minutes * credits_per_minute (4 dp).
+    -- Campaign/wallet apply the same figure rounded HALF_UP to 2 dp.
     -- Stored here as audit record: "this call cost X credits."
 
     cost_usd                NUMERIC(10,6),

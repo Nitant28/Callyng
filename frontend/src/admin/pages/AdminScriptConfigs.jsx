@@ -274,6 +274,7 @@ export default function AdminScriptConfigs() {
   const [deployBotName, setDeployBotName] = useState('');
   const [deployTelephonyNumber, setDeployTelephonyNumber] = useState('');
   const [deployCredits, setDeployCredits] = useState('');
+  const [deploySetup, setDeploySetup] = useState('0.60');
   const [deployError, setDeployError] = useState('');
 
   // Test Call form
@@ -525,6 +526,7 @@ export default function AdminScriptConfigs() {
     setDeployBotName('');
     setDeployTelephonyNumber('');
     setDeployCredits('');
+    setDeploySetup('0.60');
     setDeployError('');
     setIsDeployBotOpen(true);
   };
@@ -540,7 +542,8 @@ export default function AdminScriptConfigs() {
         script_id: deployTemplate.script_id,
         script_config_id: deployTemplate.id,
         telephony_number: deployTelephonyNumber,
-        credits_per_minute: parseFloat(deployCredits)
+        credits_per_minute: parseFloat(deployCredits),
+        fixed_start_credits: parseFloat(deploySetup),
       });
       setIsDeployBotOpen(false);
       navigate('/admin/bot-configs');
@@ -736,8 +739,13 @@ export default function AdminScriptConfigs() {
                 <input className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={deployTelephonyNumber} onChange={e => setDeployTelephonyNumber(e.target.value)} required placeholder="e.g. +14155552671"/>
               </div>
               <div>
-                <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Credits Per Minute</label>
-                <input type="number" step="0.01" className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={deployCredits} onChange={e => setDeployCredits(e.target.value)} required placeholder="e.g. 0.50"/>
+                <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Rate (₹ / min)</label>
+                <input type="number" step="0.01" min="0" className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={deployCredits} onChange={e => setDeployCredits(e.target.value)} required placeholder="e.g. 4.00"/>
+              </div>
+              <div>
+                <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Setup (₹ / started min)</label>
+                <input type="number" step="0.01" min="0" className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={deploySetup} onChange={e => setDeploySetup(e.target.value)} required placeholder="0.60"/>
+                <p className="mt-1 text-xs text-on-surface-variant dark:text-molten-text-muted">Talk time is billed per second. Setup is charged each started minute (0s and 60s = 1; 61s = 2). A 15-second call at ₹4.00/min + ₹0.60 setup costs ₹1.60. Changes apply to new dials only.</p>
               </div>
               <div className="flex justify-end gap-3 pt-4">
                 <button type="button" onClick={() => setIsDeployBotOpen(false)} className="px-4 py-2 border border-outline-variant dark:border-[#2A345E] rounded-lg text-on-surface dark:text-molten-text">Cancel</button>

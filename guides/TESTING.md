@@ -107,7 +107,7 @@ asyncio.run(check())
 ```
 
 ## 7. Credit and billing verification
-Review `billed_minutes`, `credits_charged` on latest `call_logs` row after a campaign call.
+Review `billed_minutes` (fractional, e.g. 0.25 for 15s), `credits_charged` (setup + talk) on the latest `call_logs` row after a campaign call. Busy/no-answer should show setup only. Test calls should be ₹0.
 
 ## 8. Stop and resume campaign
 ```bash

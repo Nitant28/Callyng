@@ -1,4 +1,4 @@
-import { formatCallDuration, formatCallTime, outcomeLabel } from '../../../../utils/callLogsHelpers';
+import { formatCallCost, formatCallDuration, formatCallTime, outcomeLabel } from '../../../../utils/callLogsHelpers';
 import './MetadataPanel.css';
 
 const Row = ({ label, value }) => (
@@ -15,6 +15,16 @@ const MetadataPanel = ({ call, campaignName, recordingAvailable }) => (
     <Row label="Lead" value={call?.name || call?.leadName} />
     <Row label="Phone" value={call?.phone || call?.leadPhone} />
     <Row label="Duration" value={formatCallDuration(call?.duration_seconds ?? call?.durationSeconds)} />
+    <Row
+      label="Cost"
+      value={
+        call?.is_test_call
+          ? '—'
+          : formatCallCost(call?.credits_charged ?? call?.creditsCharged, {
+              inProgress: call?.in_progress === true || call?.inProgress === true,
+            })
+      }
+    />
     <Row label="Outcome" value={outcomeLabel(call?.outcome)} />
     <Row label="Time" value={formatCallTime(call?.created_at ?? call?.createdAt)} />
     <Row label="Recording" value={recordingAvailable ? 'Available' : 'Unavailable'} />

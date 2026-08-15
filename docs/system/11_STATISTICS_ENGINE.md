@@ -94,8 +94,8 @@ On the `campaigns` row:
 ### Reservation + settlement model (verified)
 
 At dial claim (`claim_leads_for_dialer`): `reserve_campaign_budget` adds
-`RESERVE_CREDITS_PER_LEAD (=2) × lead_count` to `budget_used_credits`, and the
-reserved amount is stored on the call_log `call_data.budget_reserved_credits`.
+`R = setup + rate × 2 minutes` × lead_count to `budget_used_credits`, and the
+reserved amount plus rate/setup snapshots are stored on call_log `call_data`.
 
 At call end (`post_call_processor._finalize_call_log_and_settle_budget` →
 `settle_call_budget`):
@@ -107,20 +107,19 @@ At call end (`post_call_processor._finalize_call_log_and_settle_budget` →
 i.e. `budget_used_credits += (actual_charge − reservation)`. So after settlement
 the net effect on `budget_used_credits` is exactly `credits_charged`.
 
-**Billing math** (`process_post_call`, lines 342–345):
+**Billing math** (`billing.compute_call_charge`):
 ```python
-credits_per_minute = bot_config.credits_per_minute
-billed_minutes = ceil(duration_seconds / 60) if duration_seconds > 0 else 0
-credits_charged = billed_minutes * credits_per_minute
+billed_minutes = duration_seconds / 60
+credits_charged = setup + billed_minutes * rate   # 4 dp on the call log
+budget_amount = round_half_up(credits_charged, 2) # campaign / wallet
 ```
-- `_MIN_BILLABLE_DURATION_S = 0` → any connected call ≥1s bills ≥1 minute.
-- Unanswered calls (busy/no-answer/etc.) are settled at **0 credits**
-  (`settle_unanswered_call`) and the reservation is released.
+- Unanswered calls (Plivo accepted) charge **setup only**.
+- Never-Plivo / test calls settle at **0 credits** and the reservation is released.
 
 ### Remaining budget
-`remaining = budget_credits − budget_used_credits`. Start endpoints require
-`remaining ≥ 2`. The dialer cost guard (`dialer/cost_guard.check_campaign_budget`)
-pauses dialing when `remaining < MIN_REMAINING_CREDITS`.
+`remaining = budget_credits − budget_used_credits`. The dialer cost guard
+(`dialer/cost_guard.check_campaign_budget`) pauses when `remaining < R`
+for this campaign's bot (`setup + rate × 2 minutes`).
 
 > **Frontend rule:** show `budget_credits`, `budget_used_credits`, and derive
 > `remaining = budget_credits − budget_used_credits` (safe arithmetic on
@@ -135,9 +134,9 @@ Stored explicitly (never recompute on frontend):
 - `duration_seconds`, `billed_minutes`, `credits_charged`, `qualified`
   (`outcome=='Interested'`), `outcome`, `usage_*` tokens.
 
-`billed_minutes = ceil(duration_seconds/60)` is computed **once** at finalize and
-stored. The frontend may *format* duration (e.g. `mm:ss`) but must display
-`billed_minutes`/`credits_charged` from the row.
+`billed_minutes = duration_seconds / 60` is computed **once** at finalize and
+stored (fractional, e.g. 15s → 0.25). The frontend may *format* duration (e.g. `mm:ss`) but must display
+`credits_charged` from the row as ₹ with 2 decimals.
 
 ---
 

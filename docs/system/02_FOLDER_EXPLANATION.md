@@ -97,7 +97,7 @@ balance, compliance, and concurrency limits.
   `stop_campaign` register tasks in `app.state.dialer_tasks`.
 - `dialer_lock.py` — Redis lock (`dialer_lock:<campaign_id>`) so only one worker
   dials a campaign.
-- `cost_guard.py` — `check_campaign_budget` (remaining ≥ `MIN_REMAINING_CREDITS`).
+- `cost_guard.py` — `check_campaign_budget` (remaining ≥ this campaign's reservation).
 - `plivo_balance.py` — cached Plivo cash-credit guard (`PLIVO_MIN_BALANCE_USD`).
 - `maintenance.py` — `stale_call_log_loop` finalizes orphaned `in_progress` logs.
 

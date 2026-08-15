@@ -1,4 +1,5 @@
 import {
+  formatCallCost,
   formatCallDuration,
   formatCallTime,
   outcomeLabel,
@@ -15,6 +16,7 @@ const CallTable = ({ calls = [], loading = false, onOpen, onTranscript }) => (
           <th>Name</th>
           <th>Phone</th>
           <th>Duration</th>
+          <th>Cost</th>
           <th>Outcome</th>
           <th>Timestamp</th>
           <th>Recording</th>
@@ -24,12 +26,12 @@ const CallTable = ({ calls = [], loading = false, onOpen, onTranscript }) => (
       <tbody>
         {loading && (
           <tr>
-            <td colSpan={7} className="cw-call-table__empty">Loading calls…</td>
+            <td colSpan={8} className="cw-call-table__empty">Loading calls…</td>
           </tr>
         )}
         {!loading && calls.length === 0 && (
           <tr>
-            <td colSpan={7} className="cw-call-table__empty">No calls yet for this campaign.</td>
+            <td colSpan={8} className="cw-call-table__empty">No calls yet for this campaign.</td>
           </tr>
         )}
         {!loading &&
@@ -42,6 +44,7 @@ const CallTable = ({ calls = [], loading = false, onOpen, onTranscript }) => (
               <td>{call.leadName}</td>
               <td className="cw-call-table__mono">{call.leadPhone}</td>
               <td>{formatCallDuration(call.durationSeconds)}</td>
+              <td className="cw-call-table__muted">{formatCallCost(call.creditsCharged, { inProgress: call.inProgress })}</td>
               <td>
                 <Badge tone={outcomeTone(call.outcome)}>
                   {call.inProgress ? 'Live' : outcomeLabel(call.outcome)}

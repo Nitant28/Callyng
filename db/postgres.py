@@ -22,9 +22,6 @@ _STATS_CACHE_TTL_S = 10.0
 _outcome_stats_cache: dict[str, tuple[float, dict]] = {}
 _interested_counts_cache: dict[str, tuple[float, dict[str, int]]] = {}
 
-# Worst-case credits reserved per lead at dialer claim time (see dialer/cost_guard.py).
-RESERVE_CREDITS_PER_LEAD = Decimal("2.0")
-
 # Count assistant/user/bot turns — matches post_call_processor + frontend analytics.
 _TRANSCRIPT_TURNS_EXPR = """
 (SELECT COUNT(*)::int
@@ -399,6 +396,18 @@ def record_to_dict(record: asyncpg.Record | None) -> dict[str, Any] | None:
         elif isinstance(val, datetime):
             val = val.isoformat()
         out[key] = val
+    data = out.get("call_data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+            out["call_data"] = data
+        except json.JSONDecodeError:
+            data = None
+    if isinstance(data, dict):
+        if out.get("setup_charge") is None and data.get("setup_charge") is not None:
+            out["setup_charge"] = data["setup_charge"]
+        if out.get("duration_charge") is None and data.get("duration_charge") is not None:
+            out["duration_charge"] = data["duration_charge"]
     return out
 
 
@@ -529,15 +538,14 @@ async def create_bot_config(
     telephony_number: str,
     credits_per_minute: float,
     script_config_id: UUID | None = None,
+    fixed_start_credits: Decimal | float | None = None,
 ) -> UUID:
-    row = await pool.fetchrow(
-        """
-        INSERT INTO bot_configs (
-            client_id, name, route, script_id, telephony_number, credits_per_minute, script_config_id
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id
-        """,
+    columns = (
+        "client_id, name, route, script_id, telephony_number, "
+        "credits_per_minute, script_config_id"
+    )
+    values = "$1, $2, $3, $4, $5, $6, $7"
+    args: list[Any] = [
         client_id,
         name,
         route,
@@ -545,6 +553,18 @@ async def create_bot_config(
         telephony_number,
         Decimal(str(credits_per_minute)),
         script_config_id,
+    ]
+    if fixed_start_credits is not None:
+        columns += ", fixed_start_credits"
+        values += ", $8"
+        args.append(Decimal(str(fixed_start_credits)))
+    row = await pool.fetchrow(
+        f"""
+        INSERT INTO bot_configs ({columns})
+        VALUES ({values})
+        RETURNING id
+        """,
+        *args,
     )
     return row["id"]
 
@@ -1301,45 +1321,80 @@ async def reserve_campaign_budget(
     conn: asyncpg.Connection,
     campaign_id: UUID | str,
     client_id: UUID | str,
-    lead_count: int,
+    amount: Decimal | float,
 ) -> None:
-    if lead_count <= 0:
+    amt = Decimal(str(amount or 0))
+    if amt <= 0:
         return
-    await adjust_budget_used(
-        conn,
-        campaign_id,
-        client_id,
-        RESERVE_CREDITS_PER_LEAD * lead_count,
-    )
+    await adjust_budget_used(conn, campaign_id, client_id, amt)
 
 
 async def release_campaign_budget_reservation(
     conn: asyncpg.Connection,
     campaign_id: UUID | str,
     client_id: UUID | str,
-    lead_count: int = 1,
+    amount: Decimal | float,
 ) -> None:
-    if lead_count <= 0:
+    amt = Decimal(str(amount or 0))
+    if amt <= 0:
         return
-    await adjust_budget_used(
-        conn,
+    await adjust_budget_used(conn, campaign_id, client_id, -amt)
+
+
+async def campaign_reservation_credits(
+    pool_or_conn: asyncpg.Pool | asyncpg.Connection,
+    campaign_id: UUID | str,
+    client_id: UUID | str,
+) -> Decimal:
+    """Claim-time R for this campaign's bot (setup + rate × 2 minutes)."""
+    from billing import reservation_credits
+
+    row = await pool_or_conn.fetchrow(
+        """
+        SELECT b.credits_per_minute, b.fixed_start_credits
+        FROM campaigns c
+        JOIN bot_configs b ON b.id = c.bot_config_id
+        WHERE c.id = $1 AND c.client_id = $2
+        """,
         campaign_id,
         client_id,
-        -RESERVE_CREDITS_PER_LEAD * lead_count,
     )
+    if row is None:
+        raise ValueError(f"Campaign not found: {campaign_id}")
+    return reservation_credits(row["fixed_start_credits"], row["credits_per_minute"])
 
 
-def budget_reserved_from_call_data(call_data: Any) -> Decimal:
+def parse_call_data(call_data: Any) -> dict:
     if call_data is None:
-        return Decimal(0)
+        return {}
     if isinstance(call_data, str):
         try:
             call_data = json.loads(call_data)
         except json.JSONDecodeError:
-            return Decimal(0)
+            return {}
     if not isinstance(call_data, dict):
-        return Decimal(0)
-    return Decimal(str(call_data.get("budget_reserved_credits") or 0))
+        return {}
+    return call_data
+
+
+def budget_reserved_from_call_data(call_data: Any) -> Decimal:
+    data = parse_call_data(call_data)
+    return Decimal(str(data.get("budget_reserved_credits") or 0))
+
+
+def is_test_call_data(call_data: Any) -> bool:
+    return bool(parse_call_data(call_data).get("is_test_call"))
+
+
+def billing_rates_from_call_data(
+    call_data: Any,
+) -> tuple[Decimal | None, Decimal | None]:
+    data = parse_call_data(call_data)
+    rate_raw = data.get("credits_per_minute")
+    setup_raw = data.get("fixed_start_credits")
+    rate = Decimal(str(rate_raw)) if rate_raw is not None else None
+    setup = Decimal(str(setup_raw)) if setup_raw is not None else None
+    return rate, setup
 
 
 async def settle_call_budget(
@@ -1348,10 +1403,59 @@ async def settle_call_budget(
     client_id: UUID | str,
     credits_charged: Decimal | float,
     budget_reserved_credits: Decimal | float,
-) -> None:
+) -> bool:
+    """Apply charged − reserved. Returns True if budget_used exceeded budget.
+
+    ``credits_charged`` here is the 2 dp campaign/wallet amount.
+    """
     reserved = Decimal(str(budget_reserved_credits or 0))
-    delta = Decimal(str(credits_charged)) - reserved
+    charged = Decimal(str(credits_charged or 0))
+    delta = charged - reserved
     await adjust_budget_used(conn, campaign_id, client_id, delta)
+
+    row = await conn.fetchrow(
+        """
+        SELECT budget_credits, budget_used_credits
+        FROM campaigns
+        WHERE id = $1 AND client_id = $2
+        """,
+        campaign_id,
+        client_id,
+    )
+    if row is None:
+        return False
+    used = Decimal(str(row["budget_used_credits"]))
+    cap = Decimal(str(row["budget_credits"]))
+    if used <= cap:
+        return False
+
+    overflow = used - cap
+    bal_row = await conn.fetchrow(
+        """
+        SELECT balance_credits FROM clients
+        WHERE id = $1
+        FOR UPDATE
+        """,
+        client_id,
+    )
+    balance = Decimal(str(bal_row["balance_credits"] if bal_row else 0))
+    new_bal = max(Decimal("0"), balance - overflow)
+    taken = balance - new_bal
+    await conn.execute(
+        "UPDATE clients SET balance_credits = $1 WHERE id = $2",
+        new_bal,
+        client_id,
+    )
+    await conn.execute(
+        """
+        INSERT INTO credit_transactions (client_id, amount, note)
+        VALUES ($1, $2, $3)
+        """,
+        client_id,
+        -taken,
+        f"Campaign overspend {campaign_id}",
+    )
+    return True
 
 
 async def try_settle_campaign_budget(
@@ -1657,10 +1761,12 @@ async def claim_leads_for_dialer(
         async with conn.transaction():
             camp = await conn.fetchrow(
                 """
-                SELECT budget_credits, budget_used_credits
-                FROM campaigns
-                WHERE id = $1 AND client_id = $2
-                FOR UPDATE
+                SELECT c.budget_credits, c.budget_used_credits,
+                       b.credits_per_minute, b.fixed_start_credits
+                FROM campaigns c
+                JOIN bot_configs b ON b.id = c.bot_config_id
+                WHERE c.id = $1 AND c.client_id = $2
+                FOR UPDATE OF c
                 """,
                 campaign_id,
                 client_id,
@@ -1668,10 +1774,19 @@ async def claim_leads_for_dialer(
             if camp is None:
                 raise ValueError(f"Campaign not found: {campaign_id}")
 
+            from billing import reservation_credits
+
+            rate = Decimal(str(camp["credits_per_minute"]))
+            setup = Decimal(str(camp["fixed_start_credits"]))
+            r_reserve = reservation_credits(setup, rate)
+
             remaining = Decimal(str(camp["budget_credits"])) - Decimal(
                 str(camp["budget_used_credits"])
             )
-            budget_slots = int(remaining // RESERVE_CREDITS_PER_LEAD)
+            if r_reserve > 0:
+                budget_slots = int(remaining // r_reserve)
+            else:
+                budget_slots = slots
             effective_slots = min(slots, budget_slots)
             if effective_slots <= 0:
                 return []
@@ -1724,8 +1839,15 @@ async def claim_leads_for_dialer(
                     from_status=r["status"],
                     to_status="calling",
                 )
-            await reserve_campaign_budget(conn, campaign_id, client_id, len(rows))
-            return records_to_dicts(rows)
+            await reserve_campaign_budget(
+                conn, campaign_id, client_id, r_reserve * len(rows)
+            )
+            leads = records_to_dicts(rows)
+            for lead in leads:
+                lead["budget_reserved_credits"] = float(r_reserve)
+                lead["credits_per_minute"] = float(rate)
+                lead["fixed_start_credits"] = float(setup)
+            return leads
 
 
 async def release_stuck_calling_leads(
@@ -1942,8 +2064,11 @@ async def release_stuck_calling_leads(
                 )
             
             ids = [r["id"] for r in rows]
+            r_reserve = await campaign_reservation_credits(
+                conn, campaign_id, client_id
+            )
             await release_campaign_budget_reservation(
-                conn, campaign_id, client_id, len(ids)
+                conn, campaign_id, client_id, r_reserve * len(ids)
             )
             return len(rows)
 
@@ -2949,6 +3074,8 @@ async def insert_call_log_start(
     call_data: dict | None = None,
     is_test_call: bool = False,
     budget_reserved_credits: Decimal | float = 0,
+    credits_per_minute: Decimal | float | None = None,
+    fixed_start_credits: Decimal | float | None = None,
 ) -> UUID:
     grace = live_call_grace_minutes()
     wrap = post_call_wrap_grace_minutes()
@@ -2992,6 +3119,10 @@ async def insert_call_log_start(
         reserved = Decimal(str(budget_reserved_credits or 0))
         if reserved > 0:
             data["budget_reserved_credits"] = float(reserved)
+        if credits_per_minute is not None:
+            data["credits_per_minute"] = float(Decimal(str(credits_per_minute)))
+        if fixed_start_credits is not None:
+            data["fixed_start_credits"] = float(Decimal(str(fixed_start_credits)))
 
         row = await conn.fetchrow(
             """
@@ -3040,15 +3171,33 @@ async def patch_call_log_post_call_snapshot(
 async def mark_call_log_not_in_progress(
     pool: asyncpg.Pool,
     session_call_id: str,
+    *,
+    set_credits_charged_zero: bool = False,
 ) -> bool:
-    """Clear live flag as soon as the pipeline ends (before post-call extraction)."""
-    sql = """
-        UPDATE call_logs SET
-            in_progress = FALSE,
-            ended_at = COALESCE(ended_at, NOW())
-        WHERE session_call_id = $1 AND in_progress = TRUE
-        RETURNING id
-        """
+    """Clear live flag as soon as the pipeline ends (before post-call extraction).
+
+    When ``set_credits_charged_zero`` is True (Plivo never accepted the dial),
+    write credits_charged = 0 so later settle paths do not bill setup. The
+    caller still refunds the reservation via ``_release_lead_to_pending``.
+    """
+    if set_credits_charged_zero:
+        sql = """
+            UPDATE call_logs SET
+                in_progress = FALSE,
+                ended_at = COALESCE(ended_at, NOW()),
+                credits_charged = 0,
+                billed_minutes = 0
+            WHERE session_call_id = $1 AND in_progress = TRUE
+            RETURNING id
+            """
+    else:
+        sql = """
+            UPDATE call_logs SET
+                in_progress = FALSE,
+                ended_at = COALESCE(ended_at, NOW())
+            WHERE session_call_id = $1 AND in_progress = TRUE
+            RETURNING id
+            """
     row = await pool.fetchrow(sql, session_call_id)
     return row is not None
 
@@ -3268,11 +3417,14 @@ async def settle_unanswered_call(
     *,
     retry_delay_minutes: int,
     base_outcome: str,
+    charge_setup: bool = False,
 ) -> bool:
     """Settle budget and release lead for calls that were never answered.
 
     Handles BUSY, NO_ANSWER, REJECTED, and provider-error hangups.
-    The call is billed at 0 credits and the lead is scheduled for callback retry.
+    Setup is charged only when ``charge_setup`` is True (Plivo accepted the
+    dial). Orphaned no-call_sid paths leave this False so the reservation
+    is fully refunded.
     """
     session_call_id = call_log.get("session_call_id")
     lead_id = call_log.get("lead_id")
@@ -3281,7 +3433,24 @@ async def settle_unanswered_call(
     if not session_call_id or not lead_id or not campaign_id or not client_id:
         return False
 
-    reserved = budget_reserved_from_call_data(call_log.get("call_data"))
+    data = parse_call_data(call_log.get("call_data"))
+    reserved = budget_reserved_from_call_data(data)
+    is_test = bool(data.get("is_test_call"))
+    _, snap_setup = billing_rates_from_call_data(data)
+
+    if is_test or not charge_setup or snap_setup is None:
+        charged_4 = Decimal("0")
+        budget_amt = Decimal("0")
+        setup_charge = Decimal("0")
+        duration_charge = Decimal("0")
+    else:
+        from billing import compute_call_charge
+
+        result = compute_call_charge(0, Decimal("0"), snap_setup)
+        charged_4 = result["credits_charged"]
+        budget_amt = result["budget_amount"]
+        setup_charge = result["setup_charge"]
+        duration_charge = result["duration_charge"]
 
     async with pool.acquire() as conn, conn.transaction():
         lead_row = await conn.fetchrow(
@@ -3305,31 +3474,37 @@ async def settle_unanswered_call(
             base_outcome=base_outcome,
         )
 
-        # Mark call_log as done with 0 charge
+        # Mark call_log as done (setup only when Plivo accepted the dial)
+        charge_patch = json.dumps({
+            "setup_charge": float(setup_charge),
+            "duration_charge": float(duration_charge),
+        })
         result = await conn.execute(
             """
                 UPDATE call_logs
                 SET in_progress = FALSE,
                     ended_at = COALESCE(ended_at, NOW()),
-                    credits_charged = 0,
+                    credits_charged = $3,
                     billed_minutes = 0,
-                    outcome = COALESCE(NULLIF(TRIM(outcome), ''), $2)
+                    outcome = COALESCE(NULLIF(TRIM(outcome), ''), $2),
+                    call_data = COALESCE(call_data, '{}'::jsonb) || $4::jsonb
                 WHERE session_call_id = $1 AND in_progress = TRUE
                 """,
             session_call_id,
             outcome,
+            charged_4,
+            charge_patch,
         )
         if result.split()[-1] == "0":
             # Already finalized by another path
             return False
 
-        # Settle budget: release the reservation with 0 charge
-        if reserved > 0:
+        if reserved > 0 or budget_amt > 0:
             await settle_call_budget(
                 conn,
                 UUID(str(campaign_id)),
                 UUID(str(client_id)),
-                Decimal(0),
+                budget_amt,
                 reserved,
             )
 
@@ -3411,14 +3586,16 @@ async def finalize_call_log(
     duration_seconds: int,
     outcome: str,
     extraction_json: dict,
-    billed_minutes: int,
-    credits_charged: float,
+    billed_minutes: Decimal | float,
+    credits_charged: Decimal | float,
     usage: dict,
     *,
     transcript: list[dict] | None = None,
     extraction_model: str | None = None,
     extraction_error: str | None = None,
     qualified: bool | None = None,
+    setup_charge: Decimal | float | None = None,
+    duration_charge: Decimal | float | None = None,
 ) -> None:
     ext = extraction_json or {}
     qual = qualified if qualified is not None else (outcome == "Interested")
@@ -3438,11 +3615,17 @@ async def finalize_call_log(
             usage_total_tokens = $9,
             usage_tts_characters = $10,
             extraction_model = $11,
-            extraction_error = $12
+            extraction_error = $12,
+            call_data = COALESCE(call_data, '{}'::jsonb) || $13::jsonb
     """
+    charge_patch: dict[str, float] = {}
+    if setup_charge is not None:
+        charge_patch["setup_charge"] = float(Decimal(str(setup_charge)))
+    if duration_charge is not None:
+        charge_patch["duration_charge"] = float(Decimal(str(duration_charge)))
     args: list[Any] = [
         duration_seconds,
-        billed_minutes,
+        billed_minutes if isinstance(billed_minutes, Decimal) else Decimal(str(billed_minutes)),
         Decimal(str(credits_charged)),
         outcome,
         qual,
@@ -3453,12 +3636,13 @@ async def finalize_call_log(
         int(usage.get("tts_characters") or 0),
         extraction_model,
         extraction_error,
+        json.dumps(charge_patch),
     ]
     if transcript_json is not None:
-        sql += ", transcript = $13::jsonb WHERE session_call_id = $14"
+        sql += ", transcript = $14::jsonb WHERE session_call_id = $15"
         args.extend([transcript_json, session_call_id])
     else:
-        sql += " WHERE session_call_id = $13"
+        sql += " WHERE session_call_id = $14"
         args.append(session_call_id)
 
     if isinstance(pool_or_conn, asyncpg.Pool):
@@ -3553,6 +3737,8 @@ async def list_call_logs(
             cl.started_at, cl.ended_at, cl.created_at,
             cl.in_progress, cl.duration_seconds, cl.billed_minutes,
             cl.credits_charged, cl.outcome, cl.qualified,
+            (cl.call_data->>'setup_charge')::numeric AS setup_charge,
+            (cl.call_data->>'duration_charge')::numeric AS duration_charge,
             cl.usage_prompt_tokens, cl.usage_completion_tokens,
             cl.usage_total_tokens, cl.usage_tts_characters,
             cl.recording_url, cl.extraction_model, cl.extraction_error,

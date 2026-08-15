@@ -42,7 +42,8 @@ class CreateBotConfigBody(BaseModel):
     script_id: str
     script_config_id: UUID | None = None
     telephony_number: str
-    credits_per_minute: float
+    credits_per_minute: float = Field(ge=0, le=9999.99)
+    fixed_start_credits: float | None = Field(default=None, ge=0, le=999999.9999)
 
 
 class CreateCampaignBody(BaseModel):
@@ -89,7 +90,8 @@ class BotConfigPatchBody(BaseModel):
     script_id: str | None = None
     script_config_id: UUID | None = None
     telephony_number: str | None = None
-    credits_per_minute: float | None = None
+    credits_per_minute: float | None = Field(default=None, ge=0, le=9999.99)
+    fixed_start_credits: float | None = Field(default=None, ge=0, le=999999.9999)
     active: bool | None = None
 
 
@@ -252,6 +254,7 @@ async def create_bot_config(
         body.telephony_number,
         body.credits_per_minute,
         script_config_id=body.script_config_id,
+        fixed_start_credits=body.fixed_start_credits,
     )
     return {"id": str(bot_id)}
 
@@ -325,6 +328,10 @@ async def patch_bot_config(
     if body.credits_per_minute is not None:
         sets.append(f"credits_per_minute = ${idx}")
         args.append(body.credits_per_minute)
+        idx += 1
+    if body.fixed_start_credits is not None:
+        sets.append(f"fixed_start_credits = ${idx}")
+        args.append(body.fixed_start_credits)
         idx += 1
     if body.active is not None:
         sets.append(f"active = ${idx}")
@@ -652,10 +659,18 @@ async def get_stats(_: None = Depends(require_admin), pool=Depends(get_pool)):
     total_calls_today = await pool.fetchval("SELECT COUNT(*) FROM call_logs WHERE started_at >= CURRENT_DATE")
     active_campaigns = await pool.fetchval("SELECT COUNT(*) FROM campaigns WHERE status = 'running'")
     total_credits_used_today = await pool.fetchval("SELECT SUM(credits_charged) FROM call_logs WHERE started_at >= CURRENT_DATE")
+    telephony_credits_today = await pool.fetchval(
+        "SELECT SUM((call_data->>'setup_charge')::numeric) FROM call_logs WHERE started_at >= CURRENT_DATE"
+    )
+    bot_credits_today = await pool.fetchval(
+        "SELECT SUM((call_data->>'duration_charge')::numeric) FROM call_logs WHERE started_at >= CURRENT_DATE"
+    )
     return {
         "total_calls_today": total_calls_today or 0,
         "active_campaigns": active_campaigns or 0,
-        "total_credits_used_today": float(total_credits_used_today or 0)
+        "total_credits_used_today": float(total_credits_used_today or 0),
+        "telephony_credits_today": float(telephony_credits_today or 0),
+        "bot_credits_today": float(bot_credits_today or 0),
     }
 
 

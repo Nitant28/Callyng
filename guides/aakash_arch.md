@@ -60,7 +60,7 @@ One codebase, one database, one server. Isolation is application-layer via `clie
 Route is set per bot_config. The DB stores the route and script_id. The script file contains everything operational (prompts, VAD, models, extraction schema, lead schema).
 
 ### Credit model (key concept)
-Clients buy **credits**. At launch, 1 credit = ₹1. Later, packs can give better rates (e.g. 1000 credits for ₹800). The credit amount in the account is always credits — only the purchase conversion rate changes per pack. Billed in **ceiling minutes**: 61 seconds = 2 billed minutes. Each bot has a `credits_per_minute` cost set by us.
+Clients buy **credits**. At launch, 1 credit = ₹1. Later, packs can give better rates (e.g. 1000 credits for ₹800). The credit amount in the account is always credits — only the purchase conversion rate changes per pack. Talk time is billed **pro-rata per second** plus a per-dial setup fee. Each bot has `credits_per_minute` and `fixed_start_credits` set by us.
 
 ---
 
@@ -124,7 +124,7 @@ CREATE TABLE clients (
 -- Prevents path traversal. '../secrets' fails the regex.
 --
 -- credits_per_minute: set by us based on route + providers used.
--- Billed in ceiling minutes: ceil(duration_seconds / 60).
+-- Talk time billed pro-rata per second (duration_seconds / 60) plus setup fee.
 -- Clients never see this number — they see credits consumed.
 -- ============================================================
 CREATE TABLE bot_configs (
@@ -149,7 +149,7 @@ CREATE TABLE bot_configs (
 
     credits_per_minute   NUMERIC(6,2) NOT NULL,
     -- Credits charged per billed minute for calls using this bot.
-    -- Billed minute = ceil(duration_seconds / 60).
+    -- Talk time billed pro-rata per second. 15s at 4.00/min → 1.00 duration credits.
     -- 61 seconds → 2 billed minutes → 2 * credits_per_minute deducted.
     -- Example: 1.49 for cascaded Sarvam+Groq+Cartesia.
     -- Set by us. Reflects our provider costs + margin.
@@ -206,7 +206,7 @@ CREATE TABLE campaigns (
 
     budget_used_credits  NUMERIC(12,2) DEFAULT 0,
     -- Running total of credits consumed. Incremented per call:
-    -- += ceil(duration_seconds / 60) * bot_config.credits_per_minute
+    -- += setup + (duration_seconds / 60) * credits_per_minute  (2 dp HALF_UP)
     -- Atomic SQL increment — no race condition possible.
 
     -- ── DIALER THROTTLE ───────────────────────────────────────
@@ -414,9 +414,8 @@ CREATE TABLE call_logs (
     duration_seconds        INTEGER,
     -- Actual connected duration. Computed at call end.
 
-    billed_minutes          INTEGER,
-    -- ceil(duration_seconds / 60).
-    -- 61s → 2, 60s → 1, 1s → 1.
+    billed_minutes          NUMERIC(10,4),
+    -- duration_seconds / 60 (no ceiling). 15s → 0.2500.
     -- Stored explicitly for billing auditability.
 
     -- ── PIPELINE ──────────────────────────────────────────────
@@ -634,9 +633,9 @@ The row is inserted at call START, not end. This enables live transcript polling
 
 Minutes are a technical unit. Credits are a commercial unit. At launch, 1 credit = ₹1 — easy to understand. Later, volume packs can give better conversion rates (e.g. 1000 credits for ₹800) without changing the system. The client's balance is always in credits. The conversion from rupees to credits happens at purchase time, not at billing time.
 
-### Why ceiling billing
+### Why per-second billing
 
-Standard telecom billing practice. Billed minutes = `ceil(duration_seconds / 60)`. A 61-second call = 2 billed minutes. This is simpler to explain, simpler to audit, and standard industry practice. It also protects against micro-calls (1 second = 1 minute minimum) which can otherwise be exploited.
+Talk time is billed as `duration_seconds / 60` times the bot's ₹/min rate, plus a per-dial setup fee. A 15-second call at ₹4.00/min + ₹0.60 setup is ₹1.60. Busy/no-answer still pays setup if Plivo accepted the dial.
 
 ### Why pre-allocated campaign budgets eliminate race conditions
 
@@ -689,26 +688,20 @@ The master balance (`clients.balance_credits`) is only touched twice per campaig
    COMMIT
 ```
 
-### Ceiling billing calculation
+### Per-second billing calculation
 
 ```python
-import math
+from decimal import Decimal, ROUND_HALF_UP
 
-def calculate_billing(duration_seconds: int, credits_per_minute: float) -> dict:
-    billed_minutes = math.ceil(duration_seconds / 60)
-    # Examples:
-    #   1 second  → 1 billed minute (minimum)
-    #  60 seconds → 1 billed minute
-    #  61 seconds → 2 billed minutes
-    # 121 seconds → 3 billed minutes
-
-    credits_charged = billed_minutes * credits_per_minute
-
+def calculate_billing(duration_seconds: int, credits_per_minute: Decimal, fixed_start_credits: Decimal) -> dict:
+    billed_minutes = Decimal(duration_seconds) / Decimal(60)
+    credits_charged = (fixed_start_credits + billed_minutes * credits_per_minute).quantize(Decimal("0.0001"))
+    budget_amount = credits_charged.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return {
         "duration_seconds": duration_seconds,
         "billed_minutes": billed_minutes,
-        "credits_per_minute": credits_per_minute,
         "credits_charged": credits_charged,
+        "budget_amount": budget_amount,
     }
 ```
 
@@ -722,10 +715,8 @@ async def check_campaign_budget(campaign_id: str, client_id: str) -> bool:
         WHERE id = $1 AND client_id = $2
     """, campaign_id, client_id)
 
-    # Require at least 2 credits remaining.
-    # Prevents starting a call with 0.3 credits left (can't complete a 1-min call).
-    # 2 credits covers 1 billed minute at max bot cost (~1.49 credits/min).
-    return row["remaining"] >= 2.0
+    # Require remaining >= this campaign's reservation (setup + rate × 2 min).
+    return row["remaining"] >= reservation_credits(setup, rate)
 ```
 
 ### Future credit_packs table (not built yet)
@@ -1017,8 +1008,8 @@ TRAI compliance: 9am–9pm IST window enforced in `compliance.py` before every d
 async def process_post_call(lead, campaign, bot_config, duration_seconds):
 
     # 1. Calculate billing
-    billed_minutes = math.ceil(duration_seconds / 60)
-    credits_charged = billed_minutes * bot_config.credits_per_minute
+    billed_minutes = duration_seconds / 60
+    credits_charged = setup + billed_minutes * bot_config.credits_per_minute
 
     # 2. Get extraction schema (campaign override or script default)
     script = importlib.import_module(f"sts_scripts.{bot_config.script_id}")

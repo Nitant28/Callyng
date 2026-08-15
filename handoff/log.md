@@ -983,5 +983,88 @@ Implemented schema-driven Excel/CSV lead management, custom metadata export, uni
   - `_redial_e2e.py`
   - `_set_plivo_from.py`
 
+---
+
+## Addendum: Started-Minute Setup Billing + Admin Telephony/Bot Split (2026-08-15)
+
+Replaced flat per-dial setup with **Plivo-style setup per started minute**, and surfaced a **Total = Telephony + Bot** breakdown in admin.
+
+### Formula (locked)
+
+```
+started_minutes = max(1, ceil(seconds / 60))   # unanswered 0s → 1
+telephony       = started_minutes × fixed_start_credits
+bot             = (seconds / 60) × credits_per_minute
+total           = telephony + bot
+```
+
+Duration stays pro-rata (no `math.ceil` on talk time). Each component quantized HALF_UP to 4 dp from the unrounded product; campaign/wallet still 2 dp.
+
+Worked checks at ₹3.50/min + ₹0.60 setup:
+
+| Duration | Started mins | Telephony | Bot | Total |
+| --- | --- | --- | --- | --- |
+| 0s (busy / unanswered) | 1 | 0.6000 | 0 | **0.6000** |
+| 15s | 1 | 0.6000 | 0.8750 | **1.4750** |
+| 59s | 1 | 0.6000 | 3.4417 | **4.0417** |
+| 65s (1m5s) | 2 | 1.2000 | 3.7917 | **4.9917** |
+| 125s (2m5s) | 3 | 1.8000 | 7.2917 | **9.0917** |
+
+Reservation at claim: `R = (setup + rate) × BILLING_RESERVE_MINUTES` → ₹8.20 at ₹3.50/min (was ₹7.60 flat-setup model).
+
+Unchanged rules: never-Plivo / orphans / test calls = ₹0; rates snapshotted onto `call_data` at dial; mid-flight rate changes do not rewrite in-flight charges.
+
+### 1. Billing math — `billing.py`
+
+- `compute_call_charge` now returns `started_minutes`, `setup_charge` (telephony), `duration_charge` (bot), plus `billed_minutes` / `credits_charged` / `budget_amount`.
+- `reservation_credits(setup, rate)` = `2 × (setup + rate)` quantized to 0.01.
+
+### 2. Persist telephony/bot split — no new migration
+
+- `finalize_call_log` (`db/postgres.py`) merges `setup_charge` + `duration_charge` into `call_logs.call_data` JSONB.
+- `settle_unanswered_call` writes the same (`duration_charge = 0`).
+- `list_call_logs` selects `(call_data->>'setup_charge')::numeric` and `duration_charge` as top-level fields.
+- `record_to_dict` backfills those keys from `call_data` when present on detail fetches.
+- `post_call_processor` threads the split through `_finalize_call_log_and_settle_budget`.
+
+Old rows without the keys: UI shows Total from `credits_charged`; Telephony/Bot show **—**.
+
+### 3. Admin stats — `GET /internal/stats` + Overview KPIs
+
+- API adds `telephony_credits_today` and `bot_credits_today` (SUM of the JSONB keys for today).
+- `AdminOverview.jsx`: keeps **Credits Burned** as total; adds **Telephony** and **Bot** KPI cards.
+- KPI grid CSS uses `auto-fit` so five cards wrap cleanly.
+
+### 4. Admin call drawer — `AdminCalls.jsx`
+
+Drawer metadata tiles: **Duration**, **Total**, **Telephony**, **Bot** (list Cost column still the total).
+
+### 5. Labels & preview
+
+- `AdminBotConfigs.jsx` / `AdminScriptConfigs.jsx`: setup labeled **₹ / started min**; preview uses `max(1, ceil(s/60)) × setup + (s/60) × rate` (2 min @ ₹4 + ₹0.60 = ₹9.20, not ₹8.60).
+- `CampaignDetail.jsx`: “₹x.xx / started min” instead of “to connect”.
+- Helper copy: setup charged each started minute (0s and 60s = 1; 61s = 2).
+
+### 6. Tests & docs
+
+- `tests/test_billing.py` rewritten for 15s / 59s / 65s / 125s / 90s custom setup / busy / reservation (12 passed).
+- `tests/test_cost_guard_budget.py`: `_R` comment and remaining-budget fixture updated for ₹6.20 reservation at ₹2.50/min + ₹0.60.
+- `guides/credit.md` intro: “setup fee per started minute” (spec §2–3 already matched).
+
+### Files touched
+
+| Area | Path |
+| --- | --- |
+| Formula | `billing.py` |
+| Settle / list | `db/postgres.py`, `post_call_processor.py` |
+| Admin API | `api/routes/internal.py` |
+| Admin UI | `AdminOverview.jsx`, `AdminOverview.css`, `AdminCalls.jsx`, `AdminBotConfigs.jsx`, `AdminScriptConfigs.jsx` |
+| Client copy | `CampaignDetail.jsx` |
+| Tests / docs | `tests/test_billing.py`, `tests/test_cost_guard_budget.py`, `guides/credit.md` |
+
+### Operator note
+
+If `PATCH /internal/bot-configs/...` previously 500’d with `column "fixed_start_credits" does not exist`, run `alembic upgrade head` (migration `011_bot_fixed_start_credits`). That column is required for rates and the new charge path.
+
 
 

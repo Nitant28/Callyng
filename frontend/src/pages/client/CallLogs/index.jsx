@@ -105,13 +105,14 @@ const CallLogsPage = () => {
   };
 
   const handleExport = () => {
-    const header = ['Name', 'Phone', 'Campaign', 'Outcome', 'Duration', 'Time'];
+    const header = ['Name', 'Phone', 'Campaign', 'Outcome', 'Duration', 'Cost', 'Time'];
     const lines = filteredCalls.map((c) => [
       c.leadName,
       c.leadPhone,
       campaignMap[c.campaignId] || '',
       c.outcome || '',
       c.durationSeconds,
+      c.creditsCharged ?? '',
       c.createdAt || '',
     ]);
     const csv = [header, ...lines].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');

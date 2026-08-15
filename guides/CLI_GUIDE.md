@@ -257,7 +257,7 @@ Call Ends (pipeline finalize)
     │   │
     │   └─ Then: Is this a campaign call (pg_ctx exists)?
     │       ├─ YES → Run post_call_processor:
-    │       │        ├─ Compute billing (ceil minutes × credits_per_minute)
+    │       │        ├─ Compute billing (setup + seconds/60 × credits_per_minute)
     │       │        ├─ Update lead status (state machine)
     │       │        ├─ Update campaign counters
     │       │        └─ Fire webhook if terminal outcome

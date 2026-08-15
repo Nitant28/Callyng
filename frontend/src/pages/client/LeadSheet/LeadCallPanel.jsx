@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import clientApi from '../../../api/client';
+import { formatCallCost } from '../../../utils/callLogsHelpers';
 import { fmtDuration, friendlyOutcome } from './leadUtils';
 
 const parseJsonField = (val, fallback) => {
@@ -183,6 +184,9 @@ const LeadCallPanel = ({ lead }) => {
         <>
           <div className="ls-call-panel__meta">
             <span>{fmtDuration(callData.duration_seconds)}</span>
+            <span>
+              {formatCallCost(callData.credits_charged, { inProgress: callData.in_progress === true })}
+            </span>
             {callData.outcome && (
               <span>{friendlyOutcome(callData.outcome)}</span>
             )}

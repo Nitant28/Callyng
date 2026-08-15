@@ -16,7 +16,7 @@ from loguru import logger
 
 from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
-from dialer.cost_guard import MIN_REMAINING_CREDITS, check_campaign_budget
+from dialer.cost_guard import check_campaign_budget
 from telephony import build_hangup_url, make_plivo_call
 from script_prefetch import (
     build_lead_dict,
@@ -110,8 +110,14 @@ async def _release_lead_to_pending(
                 grace,
             )
             if not has_live_call:
+                if "budget_reserved_credits" in lead:
+                    reserved = Decimal(str(lead.get("budget_reserved_credits") or 0))
+                else:
+                    reserved = await pg_db.campaign_reservation_credits(
+                        conn, campaign_id, client_id
+                    )
                 await pg_db.release_campaign_budget_reservation(
-                    conn, campaign_id, client_id, 1
+                    conn, campaign_id, client_id, reserved
                 )
 
 
@@ -163,6 +169,9 @@ async def fire_call(
     budget_reserved_credits: Decimal | float = 0,
 ) -> str | None:
     """Place outbound call via Plivo. Returns session_call_id or None if skipped."""
+    if is_test_call:
+        lead["budget_reserved_credits"] = 0
+
     call_id = str(uuid.uuid4())
     phone = dial_phone or lead["phone"]
     cid = client_id or UUID(str(campaign["client_id"]))
@@ -301,6 +310,20 @@ async def fire_call(
             await _release_lead_to_pending(pool, lead, camp_id, cid)
         raise Exception("Plivo error (402): Insufficient balance")
 
+    reserved = Decimal("0")
+    snap_rate: Decimal | float | None = None
+    snap_setup: Decimal | float | None = None
+    if not is_test_call:
+        reserved = Decimal(
+            str(budget_reserved_credits or lead.get("budget_reserved_credits") or 0)
+        )
+        snap_rate = lead.get("credits_per_minute")
+        snap_setup = lead.get("fixed_start_credits")
+        if snap_rate is None:
+            snap_rate = bot_config.get("credits_per_minute")
+        if snap_setup is None:
+            snap_setup = bot_config.get("fixed_start_credits")
+
     try:
         await pg_db.insert_call_log_start(
             pool,
@@ -313,7 +336,9 @@ async def fire_call(
             started_at=started_at,
             call_data=call_data_for_insert,
             is_test_call=is_test_call,
-            budget_reserved_credits=budget_reserved_credits,
+            budget_reserved_credits=reserved,
+            credits_per_minute=snap_rate,
+            fixed_start_credits=snap_setup,
         )
     except Exception as exc:
         if prefetch_registered:
@@ -622,7 +647,10 @@ async def run_campaign_dialer(
                         pool=pool,
                         client_id=client_id,
                         campaign_id=campaign_id,
-                        budget_reserved_credits=MIN_REMAINING_CREDITS,
+                        budget_reserved_credits=lead.get(
+                            "budget_reserved_credits"
+                        )
+                        or 0,
                     )
                 )
             if tasks:

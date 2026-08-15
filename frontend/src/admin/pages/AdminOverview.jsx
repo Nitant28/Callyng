@@ -62,6 +62,8 @@ export default function AdminOverview() {
     total_calls_today: 0,
     active_campaigns: 0,
     credits_burned: 0,
+    telephony_credits: 0,
+    bot_credits: 0,
   });
 
   const [health, setHealth] = useState({
@@ -107,6 +109,8 @@ export default function AdminOverview() {
           total_calls_today: data.total_calls_today || 0,
           active_campaigns: data.active_campaigns || 0,
           credits_burned: data.total_credits_used_today || 0,
+          telephony_credits: data.telephony_credits_today || 0,
+          bot_credits: data.bot_credits_today || 0,
         });
       }
 
@@ -236,11 +240,31 @@ export default function AdminOverview() {
         />
         <KPI
           title="Credits Burned"
-          value={<>₹<AnimatedCounter targetValue={stats.credits_burned} decimals={0} /></>}
+          value={<>₹<AnimatedCounter targetValue={stats.credits_burned} decimals={2} /></>}
           icon="payments"
           footer={
             <span style={{ fontSize: 'var(--admin-text-xs)', color: 'var(--admin-text-muted)' }}>
               Charged today from call logs
+            </span>
+          }
+        />
+        <KPI
+          title="Telephony"
+          value={<>₹<AnimatedCounter targetValue={stats.telephony_credits} decimals={2} /></>}
+          icon="cell_tower"
+          footer={
+            <span style={{ fontSize: 'var(--admin-text-xs)', color: 'var(--admin-text-muted)' }}>
+              Setup / started minute (today)
+            </span>
+          }
+        />
+        <KPI
+          title="Bot"
+          value={<>₹<AnimatedCounter targetValue={stats.bot_credits} decimals={2} /></>}
+          icon="smart_toy"
+          footer={
+            <span style={{ fontSize: 'var(--admin-text-xs)', color: 'var(--admin-text-muted)' }}>
+              Talk time at bot rate (today)
             </span>
           }
         />
