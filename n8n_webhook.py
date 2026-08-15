@@ -108,7 +108,7 @@ async def fire_event_webhook(
     campaign: dict,
     extraction: dict,
     duration_seconds: int,
-    billed_minutes: int,
+    billed_minutes: float,
     credits_charged: float,
     route: str | None,
     recording_url: str | None = None,

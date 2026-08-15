@@ -43,6 +43,7 @@ INSERT INTO bot_configs (
     script_id,
     telephony_number,
     credits_per_minute,
+    fixed_start_credits,
     active
 ) VALUES (
     '00000000-0000-4000-8000-000000000002',
@@ -52,12 +53,14 @@ INSERT INTO bot_configs (
     'pyramid_hi',
     NULL,
     1.49,
+    0.6000,
     TRUE
 ) ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     route = EXCLUDED.route,
     script_id = EXCLUDED.script_id,
     credits_per_minute = EXCLUDED.credits_per_minute,
+    fixed_start_credits = EXCLUDED.fixed_start_credits,
     active = EXCLUDED.active;
 
 INSERT INTO campaigns (
@@ -97,6 +100,7 @@ INSERT INTO bot_configs (
     script_id,
     telephony_number,
     credits_per_minute,
+    fixed_start_credits,
     active
 ) VALUES (
     '00000000-0000-4000-8000-000000000004',
@@ -106,6 +110,7 @@ INSERT INTO bot_configs (
     'pyramid_hi',
     NULL,
     1.49,
+    0.6000,
     TRUE
 ), (
     '00000000-0000-4000-8000-000000000005',
@@ -115,12 +120,14 @@ INSERT INTO bot_configs (
     'prowave',
     NULL,
     1.49,
+    0.6000,
     TRUE
 ) ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     route = EXCLUDED.route,
     script_id = EXCLUDED.script_id,
     credits_per_minute = EXCLUDED.credits_per_minute,
+    fixed_start_credits = EXCLUDED.fixed_start_credits,
     active = EXCLUDED.active;
 
 INSERT INTO campaigns (

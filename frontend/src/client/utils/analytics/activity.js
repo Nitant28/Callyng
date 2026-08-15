@@ -33,7 +33,10 @@ const formatCallEvent = (call, campaignName) => {
     time: inProgress ? 'Live' : formatRelativeTime(timestamp),
     attemptNumber: call.attempt_number || call.attempts || null,
     duration: safeNumber(call.duration_seconds ?? call.duration) || null,
-    creditsUsed: safeNumber(call.credits_charged ?? call.credits_used),
+    creditsUsed:
+      call.credits_charged != null || call.credits_used != null
+        ? safeNumber(call.credits_charged ?? call.credits_used)
+        : null,
   };
 };
 

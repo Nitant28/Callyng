@@ -32,6 +32,7 @@ const CallsTab = () => {
         durationSeconds: row.duration_seconds ?? 0,
         createdAt: row.created_at,
         inProgress: row.in_progress === true,
+        creditsCharged: row.credits_charged ?? null,
       }));
       setCalls(rows);
       setTotal(res.data?.total_count ?? rows.length);

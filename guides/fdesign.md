@@ -63,7 +63,7 @@
 * **Data Displayed**: Table of all AI bots (Name, Route, Script ID, Phone Number, Credits/Minute).
 * **Interactions**: 
   * "Create Bot" Modal: Dropdown for `script_id` (fetched from `/internal/scripts`).
-  * "Edit Bot Price" Modal: Patch the `credits_per_minute`.
+  * "Edit Bot Price" Modal: Patch `credits_per_minute` and `fixed_start_credits`. Labels are ₹/min and setup ₹/call (not hourly).
 
 #### F. Global Calls & Emergency Overrides (`/admin/calls`)
 * **API**: `GET /internal/calls`, `GET /internal/campaigns/:id`, `PATCH /internal/campaigns/:id/stop`, `PATCH /internal/campaigns/:id/cancel`

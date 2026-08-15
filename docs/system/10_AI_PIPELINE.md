@@ -139,4 +139,4 @@ concurrent_dialer.fire_call
 
 - STS: `pricing_sts.compute_sts_cost_inr` from Gemini token usage (internal; stored
   `cost_usd` on call_log — **not shown to client**).
-- Client billing: `credits_charged` only (ceiling minutes × `credits_per_minute`).
+- Client billing: `credits_charged` only (setup + pro-rata minutes × `credits_per_minute`).

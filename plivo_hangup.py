@@ -94,7 +94,13 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
                 camp = await pg_db.get_campaign(pool, call_log["campaign_id"], call_log["client_id"])
                 if camp and camp.get("retry_delay_minutes") is not None:
                     delay = int(camp["retry_delay_minutes"])
-            settled = await pg_db.settle_unanswered_call(pool, call_log, retry_delay_minutes=delay, base_outcome=base_out)
+            settled = await pg_db.settle_unanswered_call(
+                pool,
+                call_log,
+                retry_delay_minutes=delay,
+                base_outcome=base_out,
+                charge_setup=True,
+            )
             if settled:
                 logger.info("plivo-hangup settled unanswered session={}", call_log.get("session_call_id"))
         else:

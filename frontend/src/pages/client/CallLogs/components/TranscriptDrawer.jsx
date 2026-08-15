@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import clientApi from '../../../../api/client';
 import {
+  formatCallCost,
   formatCallDuration,
   formatCallTime,
   parseCallDetail,
@@ -109,7 +110,11 @@ const TranscriptDrawer = ({ open, call, campaignName, onClose }) => {
               <StatusBadge outcome={detail?.outcome ?? call.outcome} inProgress={detail?.in_progress} />
             </div>
             <p className="cl-drawer__sub">
-              {campaignName} · {formatCallTime(call.createdAt)} · {formatCallDuration(call.durationSeconds)}
+              {campaignName} · {formatCallTime(call.createdAt)} · {formatCallDuration(detail?.duration_seconds ?? call.durationSeconds)}
+              {' · '}
+              {formatCallCost(detail?.credits_charged ?? call.creditsCharged, {
+                inProgress: detail?.in_progress === true || call.inProgress,
+              })}
             </p>
           </div>
           <button type="button" className="cl-drawer__close" onClick={onClose}>
