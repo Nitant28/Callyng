@@ -104,7 +104,7 @@ async def test_settle_unanswered_call_exhaustion():
 
 @pytest.mark.skipif(not os.getenv("DATABASE_URL"), reason="DATABASE_URL not set")
 @pytest.mark.asyncio
-async def test_settle_unanswered_call_charges_setup_from_snapshot():
+async def test_settle_unanswered_call_is_free_and_refunds_reservation():
     import json
     from decimal import Decimal
 
@@ -179,21 +179,27 @@ async def test_settle_unanswered_call_charges_setup_from_snapshot():
             call_log,
             retry_delay_minutes=10,
             base_outcome="Busy",
-            charge_setup=True,
+            charge_setup=True,  # ignored — unanswered is always free
         )
 
         async with pool.acquire() as conn:
             call_row = await conn.fetchrow(
-                "SELECT credits_charged, billed_minutes FROM call_logs WHERE session_call_id = $1",
+                "SELECT credits_charged, billed_minutes, call_data FROM call_logs WHERE session_call_id = $1",
                 str(call_id),
             )
-            assert Decimal(str(call_row["credits_charged"])) == Decimal("0.6000")
+            assert Decimal(str(call_row["credits_charged"])) == Decimal("0")
             assert Decimal(str(call_row["billed_minutes"] or 0)) == Decimal("0")
+            data = call_row["call_data"] or {}
+            if isinstance(data, str):
+                data = json.loads(data)
+            assert float(data.get("setup_charge") or 0) == 0.0
+            assert float(data.get("duration_charge") or 0) == 0.0
             used = await conn.fetchval(
                 "SELECT budget_used_credits FROM campaigns WHERE id = $1",
                 campaign_id,
             )
-            assert Decimal(str(used)) == Decimal("0.60")
+            # reserved 5.60 refunded → used back to 0
+            assert Decimal(str(used)) == Decimal("0")
     finally:
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM clients WHERE id = $1", client_id)

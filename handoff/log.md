@@ -1066,5 +1066,17 @@ Drawer metadata tiles: **Duration**, **Total**, **Telephony**, **Bot** (list Cos
 
 If `PATCH /internal/bot-configs/...` previously 500’d with `column "fixed_start_credits" does not exist`, run `alembic upgrade head` (migration `011_bot_fixed_start_credits`). That column is required for rates and the new charge path.
 
+---
+
+## Addendum: Unanswered dials are free (2026-08-15)
+
+**Policy change:** Busy / No_Answer / Rejected / Cancel / Failed (never picked up) charge **₹0**. Full claim reservation is refunded. Setup + talk rate apply only after the callee answers (post-call processor).
+
+### Code
+- `plivo_hangup.py`: `settle_unanswered_call(..., charge_setup=False)`.
+- `db/postgres.py` `settle_unanswered_call`: always writes `credits_charged = 0`, `setup_charge = 0`, `duration_charge = 0`; `charge_setup` ignored.
+- `tests/test_settle_unanswered_call.py`: asserts ₹0 + reservation refund to budget_used = 0.
+- Spec updates: `guides/credit.md`, `docs/system/09_CALL_LIFECYCLE.md`.
+
 
 

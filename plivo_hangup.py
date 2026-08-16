@@ -99,7 +99,7 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
                 call_log,
                 retry_delay_minutes=delay,
                 base_outcome=base_out,
-                charge_setup=True,
+                charge_setup=False,
             )
             if settled:
                 logger.info("plivo-hangup settled unanswered session={}", call_log.get("session_call_id"))
