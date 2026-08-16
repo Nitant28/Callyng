@@ -117,11 +117,11 @@ async def test_settle_unanswered_call_is_free_and_refunds_reservation():
     campaign_id = uuid.uuid4()
     lead_id = uuid.uuid4()
     call_id = uuid.uuid4()
-    call_data = json.dumps({
+    call_data = {
         "budget_reserved_credits": 5.6,
         "credits_per_minute": 2.5,
         "fixed_start_credits": 0.6,
-    })
+    }
 
     try:
         async with pool.acquire() as conn:
@@ -172,7 +172,7 @@ async def test_settle_unanswered_call_is_free_and_refunds_reservation():
             "lead_id": str(lead_id),
             "campaign_id": str(campaign_id),
             "client_id": str(client_id),
-            "call_data": json.loads(call_data),
+            "call_data": call_data,
         }
         await pg_db.settle_unanswered_call(
             pool,
@@ -192,6 +192,7 @@ async def test_settle_unanswered_call_is_free_and_refunds_reservation():
             data = call_row["call_data"] or {}
             if isinstance(data, str):
                 data = json.loads(data)
+            assert isinstance(data, dict)
             assert float(data.get("setup_charge") or 0) == 0.0
             assert float(data.get("duration_charge") or 0) == 0.0
             used = await conn.fetchval(

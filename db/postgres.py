@@ -3465,10 +3465,12 @@ async def settle_unanswered_call(
         )
 
         # Mark call_log as done — unanswered = ₹0 (reservation refunded below)
-        charge_patch = json.dumps({
+        # Pass a dict (not json.dumps): asyncpg encodes str as a JSON string
+        # scalar, and jsonb || on non-objects produces an array.
+        charge_patch = {
             "setup_charge": float(setup_charge),
             "duration_charge": float(duration_charge),
-        })
+        }
         result = await conn.execute(
             """
                 UPDATE call_logs
@@ -3477,7 +3479,11 @@ async def settle_unanswered_call(
                     credits_charged = $3,
                     billed_minutes = 0,
                     outcome = COALESCE(NULLIF(TRIM(outcome), ''), $2),
-                    call_data = COALESCE(call_data, '{}'::jsonb) || $4::jsonb
+                    call_data = CASE
+                        WHEN jsonb_typeof(COALESCE(call_data, '{}'::jsonb)) = 'object'
+                        THEN COALESCE(call_data, '{}'::jsonb) || $4::jsonb
+                        ELSE $4::jsonb
+                    END
                 WHERE session_call_id = $1 AND in_progress = TRUE
                 """,
             session_call_id,
@@ -3606,7 +3612,11 @@ async def finalize_call_log(
             usage_tts_characters = $10,
             extraction_model = $11,
             extraction_error = $12,
-            call_data = COALESCE(call_data, '{}'::jsonb) || $13::jsonb
+            call_data = CASE
+                WHEN jsonb_typeof(COALESCE(call_data, '{}'::jsonb)) = 'object'
+                THEN COALESCE(call_data, '{}'::jsonb) || $13::jsonb
+                ELSE $13::jsonb
+            END
     """
     charge_patch: dict[str, float] = {}
     if setup_charge is not None:
@@ -3626,7 +3636,7 @@ async def finalize_call_log(
         int(usage.get("tts_characters") or 0),
         extraction_model,
         extraction_error,
-        json.dumps(charge_patch),
+        charge_patch,
     ]
     if transcript_json is not None:
         sql += ", transcript = $14::jsonb WHERE session_call_id = $15"
