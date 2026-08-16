@@ -69,7 +69,7 @@ credits_charged = setup + billed_minutes * rate   (snapshot on call_data)
 budget_used adjustment = round_half_up(credits_charged, 2) - reservation
 ```
 
-Unanswered (Plivo accepted): setup fee only. Never-Plivo / test call: ₹0.
+Unanswered (busy / no-answer / reject / failed): **₹0**, reservation refunded. Charge only after the callee picks up (post-call). Never-Plivo / test call: ₹0.
 
 ---
 

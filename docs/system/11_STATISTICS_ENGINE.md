@@ -113,7 +113,7 @@ billed_minutes = duration_seconds / 60
 credits_charged = setup + billed_minutes * rate   # 4 dp on the call log
 budget_amount = round_half_up(credits_charged, 2) # campaign / wallet
 ```
-- Unanswered calls (Plivo accepted) charge **setup only**.
+- Unanswered calls (busy / no-answer / never picked up) settle at **0 credits**; reservation is fully refunded.
 - Never-Plivo / test calls settle at **0 credits** and the reservation is released.
 
 ### Remaining budget

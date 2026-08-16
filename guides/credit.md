@@ -35,8 +35,8 @@ These were ambiguous or wrong in the previous draft. Do not re-open them during 
 | Display vs storage | Store 4 decimal places on the call (`credits_charged NUMERIC(10,4)`). **Round HALF_UP to 2 decimal places** when applying to campaign/wallet (`NUMERIC(12,2)`). UI always shows ₹ with 2 decimals. |
 | Setup fee column | `fixed_start_credits NUMERIC(10,4) NOT NULL DEFAULT 0.6000`. **Not** `NUMERIC(6,4)` (that overflows at ₹100). |
 | Negative / huge rates | Reject. API validation: `credits_per_minute` ∈ [0, 9999.99], `fixed_start_credits` ∈ [0, 999999.9999]. Zero is allowed (free setup or free minutes). |
-| When the setup fee applies | Charged per started minute when **Plivo accepted the dial** (ringing, busy, no-answer, connected). **Not** charged if we never sent the dial (claim released, fire_call failed before Plivo, duplicate-skip). |
-| Unanswered / busy | Duration = 0 → charge **1 started minute setup fee only (₹0.60)**. |
+| When the setup fee applies | Charged per started minute only when the **callee picks up** (connected / answered). **Not** charged for busy, no-answer, reject, cancel, failed, never-Plivo, orphans, or test calls. |
+| Unanswered / busy | **₹0.** Full reservation refunded. Charge only after answer. |
 | Test calls (`is_test_call`) | **Free.** No reservation, no charge, no budget pause. |
 | Rate changes mid-flight | **Snapshot at dial.** In-flight calls bill at the rate stored on `call_logs.call_data`. New dials pick up the new rate. Admin copy must say this. |
 | Reservation amount | `(setup × 2) + (rate × 2 minutes)`, computed from the campaign’s bot **inside** `claim_leads_for_dialer`. |
@@ -75,7 +75,7 @@ Worked examples (setup ₹0.60 per started min unless noted):
 | ₹4.00/min | 45s | 1 | 1 × 0.60 = 0.6000 | 4.00 × 0.75 = 3.0000 | **3.6000** | **3.60** |
 | ₹3.50/min | 65s (1m5s) | 2 | 2 × 0.60 = 1.2000 | 3.50 × 1.0833 = 3.7917 | **4.9917** | **4.99** |
 | ₹6.00/min | 90s (1m30s) + ₹0.50 setup | 2 | 2 × 0.50 = 1.0000 | 6.00 × 1.50 = 9.0000 | **10.0000** | **10.00** |
-| ₹4.00/min | Busy, 0s connected | 1 | 1 × 0.60 = 0.6000 | 0 | **0.6000** | **0.60** |
+| ₹4.00/min | Busy / unanswered (never picked up) | — | 0 | 0 | **0** | **0** |
 | any | Test call | 0 | 0 | 0 | **0** | **0** |
 
 UI copy for a 15s call: **₹1.48** (setup ₹0.60 + talk ₹0.88). Do not show four decimals to people.
@@ -130,7 +130,7 @@ Existing `_release_lead_to_pending` / `set_credits_charged_zero` paths: settle w
 
 ### 4.5 Unanswered / busy (Plivo dialed, never connected)
 
-`settle_unanswered_call` today writes `credits_charged = 0` and refunds the reservation. Target: `credits_charged = snapshotted fixed_start_credits` (2 dp on the budget). Duration 0, `billed_minutes = 0`.
+`settle_unanswered_call` writes `credits_charged = 0` (and `setup_charge` / `duration_charge` = 0) and refunds the full reservation. **No charge unless the callee picks up.** Billing for answered calls goes through post-call only.
 
 ### 4.6 Connected call — post-call
 
@@ -278,7 +278,7 @@ CI is `ruff check .` then `alembic upgrade head` then `pytest -x` (`.github/work
 | File | What |
 | --- | --- |
 | `db/schema/001_initial.sql` | Comments; `fixed_start_credits` on `bot_configs`; `billed_minutes NUMERIC(10,4)`. |
-| `db/postgres.py` | Drop `RESERVE_CREDITS_PER_LEAD = 2.0`. `create_bot_config` writes `fixed_start_credits`. `reserve_campaign_budget` / `release_campaign_budget_reservation` take `amount: Decimal` (or `per_lead` from billing), not `2.0 * count`. `claim_leads_for_dialer` reads bot rates in the transaction. `insert_call_log_start` snapshots rate + setup. `settle_unanswered_call` charges setup from snapshot. `settle_call_budget` after delta: if used > budget, deduct overflow from wallet (floor 0), insert `credit_transactions`, return a flag so the dialer/processor can `pause_campaign`. `finalize_call_log` type hint `billed_minutes: Decimal \| float`. |
+| `db/postgres.py` | Drop `RESERVE_CREDITS_PER_LEAD = 2.0`. `create_bot_config` writes `fixed_start_credits`. `reserve_campaign_budget` / `release_campaign_budget_reservation` take `amount: Decimal` (or `per_lead` from billing), not `2.0 * count`. `claim_leads_for_dialer` reads bot rates in the transaction. `insert_call_log_start` snapshots rate + setup. `settle_unanswered_call` always ₹0 (refund reservation). `settle_call_budget` after delta: if used > budget, deduct overflow from wallet (floor 0), insert `credit_transactions`, return a flag so the dialer/processor can `pause_campaign`. `finalize_call_log` type hint `billed_minutes: Decimal \| float`. |
 | `dialer/cost_guard.py` | `MIN_REMAINING_CREDITS` cannot stay a module constant. `check_campaign_budget(pool, campaign_id, client_id, reserve_amount)` or look up the bot inside. |
 | `dialer/concurrent_dialer.py` | Pass **claim-time** `budget_reserved_credits` into `fire_call`, not `MIN_REMAINING_CREDITS`. Test-call path stays 0. |
 | `post_call_processor.py` | Remove `math.ceil`. Use snapshots + `billing.compute_call_charge`. `_finalize_call_log_and_settle_budget` billed_minutes type. After settle, pause on overspend. |
@@ -309,7 +309,7 @@ Client dashboard totals (`budget_used_credits`) keep working. Short calls will s
 | --- | --- |
 | `tests/test_billing.py` | **Add.** Formula + reservation. No `DATABASE_URL` needed. |
 | `tests/test_cost_guard_budget.py` | `credits_per_minute=2.5` + default setup 0.60 → `R = 5.60`, not `2.0`. `test_claim_leads_caps_by_remaining_budget` currently: remaining 2.0, expects 1 lead. After change remaining 2.0 < 5.60 → **0 leads**. Rewrite remaining/budget so `remaining // R == 1` and assert `used == previous + R`. Replace every `RESERVE_CREDITS_PER_LEAD` with `billing.reservation_credits(...)`. |
-| `tests/test_settle_unanswered_call.py` | After unanswered settle, assert `credits_charged == setup` when `call_data` has a snapshot; assert `0` when there was no Plivo snapshot / zero reserved (today’s empty `call_data`). Add a third test: snapshot setup 0.60, reserved 5.60, budget_used ends at 0.60. Raw `INSERT INTO bot_configs` still works (new column has DEFAULT). |
+| `tests/test_settle_unanswered_call.py` | After unanswered settle, assert `credits_charged == 0` and full reservation refund (even when `call_data` has a rate snapshot). Raw `INSERT INTO bot_configs` still works (new column has DEFAULT). |
 | `tests/test_phase2.py` | `budget_reserved_credits=2.0` fixtures: keep as explicit snapshots (old shape) **and** add one with rate+setup snapshots. `finalize_call_log(..., billed_minutes=1)` still valid (`1` → `1.0000`). |
 | `tests/test_e2e.py` | Many `create_bot_config(..., 2.0)` positional — **keep working**. Fixture `billed_minutes=2` / `credits_charged=2.5` are inserted values, not computed — still pass. Add one admin test: POST bot with `fixed_start_credits`, PATCH it, GET it back. |
 | `tests/test_pg_context_recovery.py` | `create_bot_config` kwargs only — no change unless signature becomes required. Keep `fixed_start_credits` optional. |

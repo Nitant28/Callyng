@@ -71,6 +71,10 @@ def test_ninety_seconds_custom_setup():
 
 
 def test_busy_zero_duration_setup_only():
+    """Pure formula: 0s still maps to 1 started minute of setup.
+
+    Unanswered dials never call this path for billing — they settle at ₹0.
+    """
     result = compute_call_charge(0, Decimal("4.00"), Decimal("0.60"))
     assert result["billed_minutes"] == Decimal("0.0000")
     assert result["started_minutes"] == Decimal("1")

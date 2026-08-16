@@ -3422,10 +3422,11 @@ async def settle_unanswered_call(
     """Settle budget and release lead for calls that were never answered.
 
     Handles BUSY, NO_ANSWER, REJECTED, and provider-error hangups.
-    Setup is charged only when ``charge_setup`` is True (Plivo accepted the
-    dial). Orphaned no-call_sid paths leave this False so the reservation
-    is fully refunded.
+    Never charges — only connected (picked-up) calls bill via post-call.
+    ``charge_setup`` is ignored and kept for call-site compatibility.
+    The claim reservation is fully refunded (delta settle to ₹0).
     """
+    del charge_setup  # unanswered dials are always free
     session_call_id = call_log.get("session_call_id")
     lead_id = call_log.get("lead_id")
     campaign_id = call_log.get("campaign_id")
@@ -3435,22 +3436,11 @@ async def settle_unanswered_call(
 
     data = parse_call_data(call_log.get("call_data"))
     reserved = budget_reserved_from_call_data(data)
-    is_test = bool(data.get("is_test_call"))
-    _, snap_setup = billing_rates_from_call_data(data)
 
-    if is_test or not charge_setup or snap_setup is None:
-        charged_4 = Decimal("0")
-        budget_amt = Decimal("0")
-        setup_charge = Decimal("0")
-        duration_charge = Decimal("0")
-    else:
-        from billing import compute_call_charge
-
-        result = compute_call_charge(0, Decimal("0"), snap_setup)
-        charged_4 = result["credits_charged"]
-        budget_amt = result["budget_amount"]
-        setup_charge = result["setup_charge"]
-        duration_charge = result["duration_charge"]
+    charged_4 = Decimal("0")
+    budget_amt = Decimal("0")
+    setup_charge = Decimal("0")
+    duration_charge = Decimal("0")
 
     async with pool.acquire() as conn, conn.transaction():
         lead_row = await conn.fetchrow(
@@ -3474,7 +3464,7 @@ async def settle_unanswered_call(
             base_outcome=base_outcome,
         )
 
-        # Mark call_log as done (setup only when Plivo accepted the dial)
+        # Mark call_log as done — unanswered = ₹0 (reservation refunded below)
         charge_patch = json.dumps({
             "setup_charge": float(setup_charge),
             "duration_charge": float(duration_charge),
