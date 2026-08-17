@@ -415,6 +415,26 @@ def records_to_dicts(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
     return [record_to_dict(r) for r in records if record_to_dict(r) is not None]
 
 
+_CALL_DATA_PUBLIC_KEYS = ("setup_charge", "duration_charge", "is_test_call")
+
+
+def public_call_detail(row: dict | None) -> dict | None:
+    """Strip telephony dumps and storage keys before sending a call to the UI.
+
+    Transcript / extraction stay — those are loaded only by drawer detail GETs.
+    """
+    if row is None:
+        return None
+    out = dict(row)
+    out.pop("plivo_hangup_json", None)
+    data = out.get("call_data")
+    if isinstance(data, dict):
+        out["call_data"] = {k: data[k] for k in _CALL_DATA_PUBLIC_KEYS if k in data}
+    recording_key = out.pop("recording_url", None)
+    out["has_recording"] = bool(recording_key)
+    return out
+
+
 # ── Clients ───────────────────────────────────────────────────────────────────
 
 
@@ -3698,8 +3718,9 @@ async def list_call_logs(
     """
     Return call list rows by recency without heavy JSONB blobs.
 
-    Excludes transcript, call_data, extraction_json, plivo_hangup_json —
-    fetch those via get_call_log / detail endpoints.
+    Excludes transcript, call_data, extraction_json, plivo_hangup_json,
+    recording URLs, and usage blobs — fetch those via get_call_log / detail
+    endpoints when a drawer opens.
     """
     base_query = "FROM call_logs cl LEFT JOIN leads l ON cl.lead_id = l.id"
     conditions = []
@@ -3733,16 +3754,12 @@ async def list_call_logs(
         f"""
         SELECT
             cl.id, cl.session_call_id, cl.client_id, cl.campaign_id,
-            cl.lead_id, cl.bot_config_id, cl.route, cl.call_sid,
+            cl.lead_id, cl.route,
             cl.started_at, cl.ended_at, cl.created_at,
-            cl.in_progress, cl.duration_seconds, cl.billed_minutes,
+            cl.in_progress, cl.duration_seconds,
             cl.credits_charged, cl.outcome, cl.qualified,
-            (cl.call_data->>'setup_charge')::numeric AS setup_charge,
-            (cl.call_data->>'duration_charge')::numeric AS duration_charge,
-            cl.usage_prompt_tokens, cl.usage_completion_tokens,
-            cl.usage_total_tokens, cl.usage_tts_characters,
-            cl.recording_url, cl.extraction_model, cl.extraction_error,
-            cl.cost_usd, cl.quality_score, cl.flagged_for_review,
+            cl.extraction_error,
+            (cl.recording_url IS NOT NULL) AS has_recording,
             {turns_expr} AS transcript_turns,
             CASE WHEN jsonb_typeof(transcript) = 'array' THEN jsonb_array_length(transcript) ELSE 0 END AS turns,
             l.name, l.phone

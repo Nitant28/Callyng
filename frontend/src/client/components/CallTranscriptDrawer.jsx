@@ -161,7 +161,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
   }, [isPolling, isOpen, sessionCallId, fetchCallDetails]);
 
   const fetchRecording = useCallback(async (id, inProgress) => {
-    if (!id) return;
+    if (!id || inProgress) return;
     setRecordingLoading(true);
     setRecordingError(null);
     try {
@@ -170,19 +170,17 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
       setRecordingUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
     } catch (err) {
       setRecordingUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
-      if (!inProgress) setRecordingError(err.response?.data?.detail || "No recording available");
+      setRecordingError(err.response?.data?.detail || "No recording available");
     } finally {
       setRecordingLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    if (!isOpen || !callData?.session_call_id) return;
-    fetchRecording(callData.session_call_id, callData.in_progress);
-  }, [isOpen, callData?.session_call_id, callData?.in_progress, fetchRecording]);
+  const pendingPlayRef = useRef(false);
 
   useEffect(() => {
     if (isOpen) return;
+    pendingPlayRef.current = false;
     setRecordingUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
     setRecordingError(null);
     setRecordingLoading(false);
@@ -190,8 +188,21 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
     setAudioProgress(0);
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!recordingUrl || !pendingPlayRef.current) return;
+    pendingPlayRef.current = false;
+    audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
+  }, [recordingUrl]);
+
   const togglePlay = () => {
     if (!audioRef.current) return;
+    if (callData?.in_progress) return;
+    if (!recordingUrl) {
+      if (!callData?.session_call_id || recordingLoading) return;
+      pendingPlayRef.current = true;
+      fetchRecording(callData.session_call_id, false);
+      return;
+    }
     if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); }
     else { audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {}); }
   };
@@ -528,6 +539,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
           <audio
             ref={audioRef}
             src={recordingUrl || undefined}
+            preload="none"
             onTimeUpdate={() => setAudioProgress(audioRef.current?.currentTime || 0)}
             onLoadedMetadata={() => setAudioDuration(audioRef.current?.duration || 0)}
             onEnded={() => setIsPlaying(false)}
@@ -593,13 +605,20 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                 </div>
               </div>
             </div>
-          ) : (
+          ) : recordingError || callData?.in_progress ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 20px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#475569", fontSize: 12 }}>
                 <span className="material-symbols-outlined" style={{ fontSize: 16, color: "#64748b" }}>mic_off</span>
-                <span>{recordingError || (callData?.in_progress ? "Recording available after call ends." : "No recording available.")}</span>
+                <span>{recordingError || "Recording available after call ends."}</span>
               </div>
               <button onClick={onClose} style={{ padding: "4px 12px", borderRadius: 6, background: "#1e293b", border: "none", color: "#64748b", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Close</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 20px" }}>
+              <span style={{ color: "#475569", fontSize: 12 }}>Play recording</span>
+              <button onClick={togglePlay} style={circleBtn(40, "#2563eb", { color: "#fff", boxShadow: "0 0 14px rgba(37,99,235,0.4)" })}>
+                <span className="material-symbols-outlined" style={{ fontSize: 22 }}>play_arrow</span>
+              </button>
             </div>
           )}
         </div>

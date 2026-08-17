@@ -10,12 +10,14 @@ const formatTime = (sec) => {
   return `${m}:${String(s).padStart(2, '0')}`;
 };
 
-const AudioPlayer = ({ src, loading, error, downloadName }) => {
+const AudioPlayer = ({ src, loading, error, downloadName, onRequestPlay }) => {
   const audioRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
   const [rate, setRate] = useState(1);
+
+  const requestedRef = useRef(false);
 
   useEffect(() => {
     setPlaying(false);
@@ -23,7 +25,18 @@ const AudioPlayer = ({ src, loading, error, downloadName }) => {
     setDuration(0);
   }, [src]);
 
+  useEffect(() => {
+    if (!src || !requestedRef.current) return;
+    requestedRef.current = false;
+    audioRef.current?.play().catch(() => {});
+  }, [src]);
+
   const toggle = () => {
+    if (!src && onRequestPlay) {
+      requestedRef.current = true;
+      onRequestPlay();
+      return;
+    }
     const el = audioRef.current;
     if (!el) return;
     if (playing) el.pause();
@@ -46,10 +59,31 @@ const AudioPlayer = ({ src, loading, error, downloadName }) => {
     );
   }
 
+  if (!src && error) {
+    return (
+      <div className="cl-audio cl-audio--empty">
+        {error}
+      </div>
+    );
+  }
+
+  if (!src && onRequestPlay) {
+    return (
+      <div className="cl-audio">
+        <button type="button" className="cl-audio__play" onClick={toggle} aria-label="Play">
+          <span className="material-symbols-outlined">play_arrow</span>
+        </button>
+        <div className="cl-audio__track">
+          <span className="cl-audio__empty-hint">Play to load recording</span>
+        </div>
+      </div>
+    );
+  }
+
   if (!src) {
     return (
       <div className="cl-audio cl-audio--empty">
-        {error || 'Recording will appear when the call completes.'}
+        Recording will appear when the call completes.
       </div>
     );
   }
@@ -61,6 +95,7 @@ const AudioPlayer = ({ src, loading, error, downloadName }) => {
       <audio
         ref={audioRef}
         src={src}
+        preload="none"
         onTimeUpdate={(e) => setCurrent(e.target.currentTime)}
         onLoadedMetadata={(e) => setDuration(e.target.duration)}
         onEnded={() => setPlaying(false)}

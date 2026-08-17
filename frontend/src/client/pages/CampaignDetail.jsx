@@ -151,17 +151,16 @@ const CampaignDetail = () => {
   const getDynamicLeadFields = useCallback(() => {
     const schema = campaign?.bot_config?.lead_schema;
     if (!schema) return [];
-    let fields = [];
-    if (schema.fields && Array.isArray(schema.fields)) {
-      fields = schema.fields;
-    } else {
-      fields = Object.entries(schema).map(([key, value]) => {
-        if (typeof value === 'object') {
-          return { key, ...value };
-        }
-        return null;
-      }).filter((f) => f !== null);
-    }
+    const fields = Array.isArray(schema.fields)
+      ? schema.fields
+      : Object.entries(schema)
+          .map(([key, value]) => {
+            if (typeof value === 'object') {
+              return { key, ...value };
+            }
+            return null;
+          })
+          .filter((f) => f !== null);
     return fields
       .filter((f) => f.key && !['lead_name', 'lead_phone', 'name', 'phone', 'lead_type'].includes(f.key))
       .map((f) => ({

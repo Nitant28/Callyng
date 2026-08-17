@@ -154,11 +154,11 @@ const LeadDrawer = ({ open, lead, onClose }) => {
   }, []);
 
   useEffect(() => {
-    if (!open || !lead) return;
+    if (!open || !lead?.id) return;
     setActiveTab('analytics');
     setTranscriptSearch('');
     fetchCallDetails(true);
-  }, [open, lead, fetchCallDetails]);
+  }, [open, lead?.id, sessionCallId, fetchCallDetails]);
 
   useEffect(() => {
     if (!open) {
@@ -181,9 +181,11 @@ const LeadDrawer = ({ open, lead, onClose }) => {
   }, [polling, open, fetchCallDetails]);
 
   useEffect(() => {
-    if (!open || !callData?.session_call_id) return;
-    fetchRecording(callData.session_call_id, callData.in_progress);
-  }, [open, callData?.session_call_id, callData?.in_progress, fetchRecording]);
+    if (!open || activeTab !== 'recording' || !callData?.session_call_id) return;
+    if (callData.in_progress) return;
+    if (recordingUrl || recordingLoading) return;
+    fetchRecording(callData.session_call_id, false);
+  }, [open, activeTab, callData?.session_call_id, callData?.in_progress, recordingUrl, recordingLoading, fetchRecording]);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
@@ -493,6 +495,7 @@ const LeadDrawer = ({ open, lead, onClose }) => {
                         ref={audioRef}
                         className="ls-drawer__audio"
                         src={recordingUrl || undefined}
+                        preload="none"
                         onTimeUpdate={() => setAudioProgress(audioRef.current?.currentTime || 0)}
                         onLoadedMetadata={() => setAudioDuration(audioRef.current?.duration || 0)}
                         onPlay={() => setIsPlaying(true)}
