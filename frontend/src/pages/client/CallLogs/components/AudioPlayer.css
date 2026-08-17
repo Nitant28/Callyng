@@ -87,3 +87,7 @@
   flex-shrink: 0;
 }
 .cl-audio__dl .material-symbols-outlined { font-size: 18px; }
+.cl-audio__empty-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}

@@ -129,23 +129,6 @@ const LeadCallPanel = ({ lead }) => {
     }
   }, []);
 
-  useEffect(() => {
-    if (!callData?.session_call_id) return undefined;
-    if (callData.in_progress) return undefined;
-    if (!callData.recording_url) return undefined;
-    fetchRecording(callData.session_call_id, false);
-    return undefined;
-  }, [callData?.session_call_id, callData?.recording_url, callData?.in_progress, fetchRecording]);
-
-  useEffect(() => {
-    if (!callData?.session_call_id || callData.in_progress) return undefined;
-    if (callData.recording_url) return undefined;
-    const timer = setTimeout(() => {
-      fetchRecording(callData.session_call_id, false);
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, [callData?.session_call_id, callData?.recording_url, callData?.in_progress, fetchRecording]);
-
   useEffect(() => () => {
     setRecordingUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -197,14 +180,22 @@ const LeadCallPanel = ({ lead }) => {
               <p className="ls-call-panel__muted">Loading audio…</p>
             )}
             {!recordingLoading && recordingUrl && (
-              <audio controls src={recordingUrl} className="ls-call-panel__player" controlsList="nodownload" />
+              <audio controls preload="none" src={recordingUrl} className="ls-call-panel__player" controlsList="nodownload" />
             )}
-            {!recordingLoading && !recordingUrl && (
-              <p className="ls-call-panel__muted">
-                {recordingError || (callData.in_progress
-                  ? 'Recording available after the call ends.'
-                  : 'No recording for this call.')}
-              </p>
+            {!recordingLoading && !recordingUrl && recordingError && (
+              <p className="ls-call-panel__muted">{recordingError}</p>
+            )}
+            {!recordingLoading && !recordingUrl && !recordingError && callData.in_progress && (
+              <p className="ls-call-panel__muted">Recording available after the call ends.</p>
+            )}
+            {!recordingLoading && !recordingUrl && !recordingError && !callData.in_progress && (
+              <button
+                type="button"
+                className="ls-call-panel__muted"
+                onClick={() => fetchRecording(callData.session_call_id, false)}
+              >
+                Play recording
+              </button>
             )}
           </div>
 

@@ -55,6 +55,7 @@ export default function AdminCalls() {
     setCallData(null);
     setRecordingUrl(null);
     setRecordingError(null);
+    setRecordingLoading(false);
     
     try {
       const response = await adminApi.get(`/internal/calls/${call.session_call_id}`);
@@ -66,11 +67,14 @@ export default function AdminCalls() {
     } finally {
       setCallLoading(false);
     }
+  };
 
-    // Fetch recording independently
+  const loadRecording = async (sessionCallId) => {
+    if (!sessionCallId || recordingUrl || recordingLoading) return;
     setRecordingLoading(true);
+    setRecordingError(null);
     try {
-      const recResp = await adminApi.get(`/internal/calls/${call.session_call_id}/recording`);
+      const recResp = await adminApi.get(`/internal/calls/${sessionCallId}/recording`);
       setRecordingUrl(recResp.data.url);
     } catch (err) {
       setRecordingError(err.response?.data?.detail || "No recording available");
@@ -324,7 +328,7 @@ export default function AdminCalls() {
                       </div>
                     ) : recordingUrl ? (
                       <div className="flex items-center gap-2">
-                        <audio controls src={recordingUrl} className="flex-1 h-10 outline-none" controlsList="nodownload" />
+                        <audio controls preload="none" src={recordingUrl} className="flex-1 h-10 outline-none" controlsList="nodownload" />
                         <a 
                           href={recordingUrl} 
                           download={`call_recording_${callData.session_call_id || 'lead'}.mp3`}
@@ -336,10 +340,18 @@ export default function AdminCalls() {
                           <span className="material-symbols-outlined text-lg group-hover:text-primary dark:group-hover:text-molten-primary transition-colors">download</span>
                         </a>
                       </div>
-                    ) : (
+                    ) : recordingError ? (
                       <div className="text-sm text-on-surface-variant dark:text-molten-text-muted italic bg-surface-container-lowest dark:bg-[#111] p-4 rounded-xl border border-outline-variant dark:border-[#2A345E]">
-                        {recordingError || "No recording available."}
+                        {recordingError}
                       </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => loadRecording(callData.session_call_id || selectedCall?.session_call_id)}
+                        className="text-sm px-4 py-2 rounded-lg border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text hover:bg-surface-container"
+                      >
+                        Load recording
+                      </button>
                     )}
                   </div>
 

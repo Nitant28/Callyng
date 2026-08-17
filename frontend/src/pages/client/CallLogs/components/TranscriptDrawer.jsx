@@ -41,7 +41,7 @@ const TranscriptDrawer = ({ open, call, campaignName, onClose }) => {
   }, [sessionId]);
 
   const fetchRecording = useCallback(async (id, inProgress) => {
-    if (!id) return;
+    if (!id || inProgress) return;
     setRecordingLoading(true);
     setRecordingError(null);
     try {
@@ -72,11 +72,6 @@ const TranscriptDrawer = ({ open, call, campaignName, onClose }) => {
       setPolling(false);
     };
   }, [open, sessionId, fetchDetail]);
-
-  useEffect(() => {
-    if (!detail?.session_call_id) return;
-    fetchRecording(detail.session_call_id, detail.in_progress);
-  }, [detail?.session_call_id, detail?.in_progress, fetchRecording]);
 
   useEffect(() => {
     if (!polling || !open) return undefined;
@@ -128,6 +123,11 @@ const TranscriptDrawer = ({ open, call, campaignName, onClose }) => {
             loading={recordingLoading}
             error={recordingError}
             downloadName={`call_${call.leadPhone || 'lead'}.mp3`}
+            onRequestPlay={
+              detail?.in_progress
+                ? undefined
+                : () => fetchRecording(detail?.session_call_id || sessionId, false)
+            }
           />
         </div>
 

@@ -611,7 +611,7 @@ async def get_call_admin(
     call = await pg_db.get_call_log_by_session(pool, session_call_id)
     if call is None:
         raise HTTPException(404, "Call not found")
-    return {"call": call}
+    return {"call": pg_db.public_call_detail(call)}
 
 
 @router.get("/calls/{session_call_id}/recording")
@@ -656,21 +656,24 @@ async def list_scripts(_: None = Depends(require_admin)):
 
 @router.get("/stats")
 async def get_stats(_: None = Depends(require_admin), pool=Depends(get_pool)):
-    total_calls_today = await pool.fetchval("SELECT COUNT(*) FROM call_logs WHERE started_at >= CURRENT_DATE")
+    today = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) AS total_calls_today,
+            COALESCE(SUM(credits_charged), 0) AS total_credits_used_today,
+            COALESCE(SUM((call_data->>'setup_charge')::numeric), 0) AS telephony_credits_today,
+            COALESCE(SUM((call_data->>'duration_charge')::numeric), 0) AS bot_credits_today
+        FROM call_logs
+        WHERE started_at >= CURRENT_DATE
+        """
+    )
     active_campaigns = await pool.fetchval("SELECT COUNT(*) FROM campaigns WHERE status = 'running'")
-    total_credits_used_today = await pool.fetchval("SELECT SUM(credits_charged) FROM call_logs WHERE started_at >= CURRENT_DATE")
-    telephony_credits_today = await pool.fetchval(
-        "SELECT SUM((call_data->>'setup_charge')::numeric) FROM call_logs WHERE started_at >= CURRENT_DATE"
-    )
-    bot_credits_today = await pool.fetchval(
-        "SELECT SUM((call_data->>'duration_charge')::numeric) FROM call_logs WHERE started_at >= CURRENT_DATE"
-    )
     return {
-        "total_calls_today": total_calls_today or 0,
+        "total_calls_today": int(today["total_calls_today"] or 0),
         "active_campaigns": active_campaigns or 0,
-        "total_credits_used_today": float(total_credits_used_today or 0),
-        "telephony_credits_today": float(telephony_credits_today or 0),
-        "bot_credits_today": float(bot_credits_today or 0),
+        "total_credits_used_today": float(today["total_credits_used_today"] or 0),
+        "telephony_credits_today": float(today["telephony_credits_today"] or 0),
+        "bot_credits_today": float(today["bot_credits_today"] or 0),
     }
 
 
