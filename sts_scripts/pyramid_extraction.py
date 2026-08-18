@@ -44,13 +44,13 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
             "key": "bhk_preference",
             "type": "string",
             "required": False,
-            "description": "e.g. 2BHK, 3BHK, or the literal NULL if not stated.",
+            "description": "e.g. 2BHK, 3BHK, or null if not stated.",
         },
         {
             "key": "location_preference",
             "type": "string",
             "required": False,
-            "description": "Area/city mentioned, or the literal NULL.",
+            "description": "Area/city mentioned, or null.",
         },
         {
             "key": "site_visit_agreed",
@@ -62,7 +62,7 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
             "key": "callback_time",
             "type": "string",
             "required": False,
-            "description": "Specific time/date if given, else the literal NULL.",
+            "description": "Specific time/date if given, else null.",
         },
         {
             "key": "language_used",
@@ -75,7 +75,7 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
             "key": "caller_notes",
             "type": "string",
             "required": False,
-            "description": "Other useful facts, or the literal NULL.",
+            "description": "Other useful facts, or null.",
         },
     ],
     "extraction_rules": PYRAMID_EXTRACTION_RULES,

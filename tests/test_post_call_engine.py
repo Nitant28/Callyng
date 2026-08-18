@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 
 from post_call_extract import (
+    _parse_model_json_object,
+    _repair_llm_json,
     apply_normalization_rules,
     build_extraction_system_prompt,
     filter_short_interrupted_turns,
@@ -201,3 +203,53 @@ def test_resolve_lead_retry_or_failed():
     assert status2 == "failed"
     assert next_at2 is None
     assert outcome2 == "Max_Attempts_Reached"
+
+
+def test_parse_model_json_repairs_unquoted_null_and_none():
+    raw = """{
+      "intent_status": "Interested",
+      "appointment_day": "Saturday morning",
+      "callback_time": NULL,
+      "whatsapp_details_sent": true,
+      "caller_notes": NULL,
+      "summary": "The caller expressed interest in the pampering-duo offer for Rakhi and booked an appointment."
+    }"""
+    obj, err = _parse_model_json_object(raw)
+    assert err is None
+    assert obj is not None
+    assert obj["intent_status"] == "Interested"
+    assert obj["appointment_day"] == "Saturday morning"
+    assert obj["callback_time"] is None
+    assert obj["whatsapp_details_sent"] is True
+    assert obj["caller_notes"] is None
+
+
+def test_parse_model_json_repairs_python_style_and_trailing_commas():
+    raw = """```json
+    {
+      "intent_status": "Busy",
+      "callback_time": None,
+      "site_visit_agreed": True,
+      "follow_up": False,
+      "notes": undefined,
+    }
+    ```"""
+    obj, err = _parse_model_json_object(raw)
+    assert err is None
+    assert obj is not None
+    assert obj["intent_status"] == "Busy"
+    assert obj["callback_time"] is None
+    assert obj["site_visit_agreed"] is True
+    assert obj["follow_up"] is False
+    assert obj["notes"] is None
+
+
+def test_repair_llm_json_preserves_strings_containing_keywords():
+    raw = '{"summary": "Caller said NULL and None to offer", "flag": NULL}'
+    repaired = _repair_llm_json(raw)
+    assert repaired == '{"summary": "Caller said NULL and None to offer", "flag": null}'
+    obj, err = _parse_model_json_object(raw)
+    assert err is None
+    assert obj["summary"] == "Caller said NULL and None to offer"
+    assert obj["flag"] is None
+
