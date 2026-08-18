@@ -213,7 +213,7 @@ This tells the post-call Groq LLM what structured data to extract from the call 
       "key": "caller_notes",
       "type": "string",
       "required": false,
-      "description": "Other useful facts mentioned by the caller, or the literal NULL."
+      "description": "Other useful facts mentioned by the caller, or null."
     }
   ],
   "extraction_rules": "Infer only what the transcript supports. Reply with ONE JSON object matching the field keys."
@@ -486,7 +486,7 @@ const ScriptingGuideModal = ({ isOpen, onClose }) => {
       "key": "caller_notes",
       "type": "string",
       "required": false,
-      "description": "Other useful facts, or the literal NULL."
+      "description": "Other useful facts, or null."
     }
   ],
   "extraction_rules": "Infer only what the transcript supports."

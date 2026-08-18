@@ -82,7 +82,7 @@ _DEFAULT_EXTRACTION_SCHEMA: dict[str, Any] = {
             "key": "caller_notes",
             "type": "string",
             "required": False,
-            "description": "Other useful facts, or the literal NULL.",
+            "description": "Other useful facts, or null.",
         },
     ],
     "extraction_rules": (
