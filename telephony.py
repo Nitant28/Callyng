@@ -69,6 +69,74 @@ def build_hangup_url(session_call_id: str, *, host: str = "") -> str:
     return f"{base}/plivo-hangup?session_call_id={q}"
 
 
+def build_transfer_xml_url(session_call_id: str, *, host: str = "") -> str:
+    """HTTPS URL Plivo fetches for Dial XML (destination is looked up in Redis)."""
+    base = public_telephony_base_url(host)
+    q = urllib.parse.quote(session_call_id or "")
+    return f"{base}/plivo-transfer-xml?session_call_id={q}"
+
+
+async def transfer_plivo_call(
+    session: aiohttp.ClientSession,
+    call_uuid: str,
+    to_number: str,
+    *,
+    aleg_url: str,
+) -> dict:
+    """Cold-transfer an in-progress Plivo call via aleg Dial XML."""
+    auth_id, auth_token = _plivo_auth()
+    uuid = (call_uuid or "").strip()
+    if not uuid:
+        raise RuntimeError("Plivo transfer requires call_uuid")
+    # Transfer is POST on the Call resource itself — there is no /Transfer/ suffix.
+    url = f"https://api.plivo.com/v1/Account/{auth_id}/Call/{uuid}/"
+    auth = aiohttp.BasicAuth(auth_id, auth_token)
+    payload = {
+        "legs": "aleg",
+        "aleg_url": aleg_url,
+        "aleg_method": "POST",
+    }
+    timeout = aiohttp.ClientTimeout(total=20)
+    logger.info("Plivo transfer uuid={} to={} aleg_url={}", uuid, to_number, aleg_url)
+    async with session.post(url, json=payload, auth=auth, timeout=timeout) as resp:
+        body = await resp.text()
+        logger.info("Plivo transfer response status={} body={}", resp.status, body[:500])
+        if resp.status not in (200, 202):
+            raise RuntimeError(f"Plivo transfer error ({resp.status}): {body}")
+        if resp.content_type and "json" in resp.content_type:
+            try:
+                return await resp.json()
+            except Exception:
+                pass
+        return {"status": resp.status, "body": body}
+
+
+async def stop_plivo_stream(
+    session: aiohttp.ClientSession,
+    call_uuid: str,
+    stream_id: str,
+) -> None:
+    """Stop audio streaming so Transfer XML (Dial) can execute."""
+    auth_id, auth_token = _plivo_auth()
+    uuid = (call_uuid or "").strip()
+    sid = (stream_id or "").strip()
+    if not uuid or not sid:
+        logger.warning("stop_plivo_stream skipped: missing call_uuid or stream_id")
+        return
+    url = f"https://api.plivo.com/v1/Account/{auth_id}/Call/{uuid}/Stream/{sid}/"
+    auth = aiohttp.BasicAuth(auth_id, auth_token)
+    timeout = aiohttp.ClientTimeout(total=10)
+    async with session.delete(url, auth=auth, timeout=timeout) as resp:
+        body = await resp.text()
+        logger.info(
+            "Plivo stop stream uuid={} stream={} status={} body={}",
+            uuid,
+            sid,
+            resp.status,
+            body[:300],
+        )
+
+
 def normalize_plivo_number(number: str) -> str:
     """Ensure E.164 with leading + (Plivo expects +countrycode...)."""
     n = (number or "").strip()

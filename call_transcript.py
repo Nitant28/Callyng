@@ -24,6 +24,7 @@ from post_call_extract import (
     post_call_missing_key_message,
     prepare_transcript_for_storage,
 )
+from pricing_cascade import compute_cascade_cost_usd
 from pricing_sts import compute_sts_cost_inr
 
 from db.redis_client import get_redis
@@ -421,6 +422,35 @@ def _transcript_for_webhook(
     return best, truncated
 
 
+def apply_transfer_outcome(
+    extraction: dict[str, Any] | None,
+    transfer_state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Force intent_status=Transferred when the cascade transfer tool ran."""
+    if not (transfer_state and transfer_state.get("transferred")):
+        return extraction
+    out = dict(extraction or {})
+    out["intent_status"] = "Transferred"
+    return out
+
+
+def _usage_view(summary: dict[str, Any] | None) -> dict[str, Any]:
+    """Compact usage dict for logs, SQLite blob consumers, and n8n."""
+    summary = summary or {}
+    return {
+        "llm_prompt_tokens": int(summary.get("llm_prompt_tokens") or 0),
+        "llm_completion_tokens": int(summary.get("llm_completion_tokens") or 0),
+        "llm_total_tokens": int(summary.get("llm_total_tokens") or 0),
+        "tts_characters": int(summary.get("tts_characters") or 0),
+        "stt_audio_seconds": float(summary.get("stt_audio_seconds") or 0),
+        "llm_input_audio_tokens": int(summary.get("llm_input_audio_tokens") or 0),
+        "llm_output_audio_tokens": int(summary.get("llm_output_audio_tokens") or 0),
+        "llm_cache_read_input_audio_tokens": int(
+            summary.get("llm_cache_read_input_audio_tokens") or 0
+        ),
+    }
+
+
 def _build_n8n_payload(
     *,
     row_id: int,
@@ -440,6 +470,10 @@ def _build_n8n_payload(
     extraction_error: str | None,
     extraction_model: str | None,
     post_call_extraction_skipped: bool,
+    usage_stt_audio_seconds: float = 0,
+    usage_input_audio_tokens: int = 0,
+    usage_output_audio_tokens: int = 0,
+    usage_cache_read_input_audio_tokens: int = 0,
 ) -> dict[str, Any]:
     tw, trunc = _transcript_for_webhook(transcript)
     return {
@@ -456,6 +490,10 @@ def _build_n8n_payload(
             "llm_completion_tokens": usage_completion_tokens,
             "llm_total_tokens": usage_total_tokens,
             "tts_characters": usage_tts_characters,
+            "stt_audio_seconds": usage_stt_audio_seconds,
+            "llm_input_audio_tokens": usage_input_audio_tokens,
+            "llm_output_audio_tokens": usage_output_audio_tokens,
+            "llm_cache_read_input_audio_tokens": usage_cache_read_input_audio_tokens,
         },
         "cost_inr": cost_inr,
         "transcript": tw,
@@ -480,6 +518,8 @@ def attach_pipeline_finalize(
     strip_bootstrap: bool = False,
     usage_accumulator: UsageMetricsAccumulator | None = None,
     extraction_schema: dict[str, Any],
+    providers: dict[str, str] | None = None,
+    transfer_state: dict[str, Any] | None = None,
 ) -> None:
     @task.event_handler("on_pipeline_finished")
     async def _on_pipeline_finished(task, frame):
@@ -501,12 +541,7 @@ def attach_pipeline_finalize(
             "turn_count": len(transcript),
         }
         if usage_summary is not None:
-            summary["usage"] = {
-                "llm_prompt_tokens": usage_summary.get("llm_prompt_tokens"),
-                "llm_completion_tokens": usage_summary.get("llm_completion_tokens"),
-                "llm_total_tokens": usage_summary.get("llm_total_tokens"),
-                "tts_characters": usage_summary.get("tts_characters"),
-            }
+            summary["usage"] = _usage_view(usage_summary)
         logger.info(
             "call_transcript_summary {}",
             json.dumps(summary, ensure_ascii=False),
@@ -526,20 +561,37 @@ def attach_pipeline_finalize(
                 preview,
             )
 
-        usage_metrics_blob: str | None = None
-        up, uc, ut, tts_c = 0, 0, 0, 0
-        if usage_summary is not None:
-            usage_metrics_blob = json.dumps(usage_summary, ensure_ascii=False)
-            up = int(usage_summary.get("llm_prompt_tokens") or 0)
-            uc = int(usage_summary.get("llm_completion_tokens") or 0)
-            ut = int(usage_summary.get("llm_total_tokens") or 0)
-            tts_c = int(usage_summary.get("tts_characters") or 0)
+        compact = _usage_view(usage_summary)
+        up = compact["llm_prompt_tokens"]
+        uc = compact["llm_completion_tokens"]
+        ut = compact["llm_total_tokens"]
+        tts_c = compact["tts_characters"]
+        duration_seconds = int(round(duration_ms / 1000))
 
         cost_inr = compute_sts_cost_inr(
             route,
             usage_prompt_tokens=up,
             usage_completion_tokens=uc,
         )
+
+        cost_usd = None
+        if providers:
+            cost_usd = compute_cascade_cost_usd(
+                duration_seconds=duration_seconds,
+                usage_prompt_tokens=up,
+                usage_completion_tokens=uc,
+                usage_tts_characters=tts_c,
+                stt_provider=providers.get("stt") or "",
+                llm_provider=providers.get("llm") or "",
+                tts_provider=providers.get("tts") or "",
+            )
+            compact["cost_usd"] = cost_usd
+            if usage_summary is not None and cost_usd is not None:
+                usage_summary["cost_usd"] = cost_usd
+
+        usage_metrics_blob: str | None = None
+        if usage_summary is not None:
+            usage_metrics_blob = json.dumps(usage_summary, ensure_ascii=False)
 
         try:
             row_id = await asyncio.to_thread(
@@ -582,13 +634,7 @@ def attach_pipeline_finalize(
                     session_call_id,
                     exc,
                 )
-        duration_seconds = int(round(duration_ms / 1000))
-        usage_dict = {
-            "llm_prompt_tokens": up,
-            "llm_completion_tokens": uc,
-            "llm_total_tokens": ut,
-            "tts_characters": tts_c,
-        }
+        usage_dict = compact
 
         if post_call_llm_configured():
 
@@ -654,7 +700,7 @@ def attach_pipeline_finalize(
                             extraction_json=None,
                             extraction_error=extraction_error,
                             extraction_model=os.getenv(
-                                "POST_CALL_MODEL", "llama-3.3-70b-versatile"
+                                "POST_CALL_MODEL", "openai/gpt-oss-120b"
                             ),
                         )
                     except Exception:
@@ -665,7 +711,7 @@ def attach_pipeline_finalize(
                     session_call_id=session_call_id,
                     duration_seconds=duration_seconds,
                     transcript=transcript,
-                    extraction=extraction,
+                    extraction=apply_transfer_outcome(extraction, transfer_state),
                     usage_dict=usage_dict,
                     extraction_model=extraction_model,
                     extraction_error=extraction_error,
@@ -686,6 +732,12 @@ def attach_pipeline_finalize(
                         usage_completion_tokens=uc,
                         usage_total_tokens=ut,
                         usage_tts_characters=tts_c,
+                        usage_stt_audio_seconds=compact["stt_audio_seconds"],
+                        usage_input_audio_tokens=compact["llm_input_audio_tokens"],
+                        usage_output_audio_tokens=compact["llm_output_audio_tokens"],
+                        usage_cache_read_input_audio_tokens=compact[
+                            "llm_cache_read_input_audio_tokens"
+                        ],
                         cost_inr=cost_inr,
                         extraction=extraction,
                         extraction_error=extraction_error,
@@ -704,7 +756,7 @@ def attach_pipeline_finalize(
                         session_call_id=session_call_id,
                         duration_seconds=duration_seconds,
                         transcript=transcript,
-                        extraction=None,
+                        extraction=apply_transfer_outcome(None, transfer_state),
                         usage_dict=usage_dict,
                     )
                 )
@@ -722,6 +774,12 @@ def attach_pipeline_finalize(
                     usage_completion_tokens=uc,
                     usage_total_tokens=ut,
                     usage_tts_characters=tts_c,
+                    usage_stt_audio_seconds=compact["stt_audio_seconds"],
+                    usage_input_audio_tokens=compact["llm_input_audio_tokens"],
+                    usage_output_audio_tokens=compact["llm_output_audio_tokens"],
+                    usage_cache_read_input_audio_tokens=compact[
+                        "llm_cache_read_input_audio_tokens"
+                    ],
                     cost_inr=cost_inr,
                     extraction=None,
                     extraction_error=None,

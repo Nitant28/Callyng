@@ -94,10 +94,12 @@ def test_public_call_detail_strips_hangup_and_storage_keys():
             "post_call_snapshot": {"system_instruction": "huge"},
         },
         "credits_charged": 1.8,
+        "cost_usd": 0.42,
     }
     out = pg_db.public_call_detail(row)
     assert "plivo_hangup_json" not in out
     assert "recording_url" not in out
+    assert "cost_usd" not in out
     assert out["has_recording"] is True
     assert out["call_data"] == {
         "setup_charge": 0.6,
@@ -106,5 +108,31 @@ def test_public_call_detail_strips_hangup_and_storage_keys():
     }
     assert out["transcript"][0]["content"] == "hi"
     assert out["extraction_json"]["intent"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_finalize_call_log_sql_includes_cost_usd():
+    from db import postgres as pg_db
+
+    pool = MagicMock()
+    pool.execute = AsyncMock()
+
+    await pg_db.finalize_call_log(
+        pool,
+        session_call_id="s1",
+        duration_seconds=10,
+        outcome="Interested",
+        extraction_json={},
+        billed_minutes=1,
+        credits_charged=0,
+        usage={"cost_usd": 0.123456},
+    )
+
+    sql = pool.execute.await_args.args[0]
+    args = pool.execute.await_args.args[1:]
+    assert "cost_usd" in sql
+    assert "COALESCE($14, cost_usd)" in sql
+    assert args[13] == 0.123456
+    assert args[14] == "s1"
 
 

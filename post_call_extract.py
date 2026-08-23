@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 import aiohttp
 from loguru import logger
 
-_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+_DEFAULT_MODEL = "openai/gpt-oss-120b"
 _DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 _DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 _DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
@@ -655,7 +655,7 @@ async def extract_post_call(
     """Call the configured post-call LLM; return (parsed, error, model_used)."""
     system_prompt = build_extraction_system_prompt(extraction_schema)
     provider = post_call_provider()
-    default_model = "llama-3.3-70b-versatile" if provider == "groq" else ("gpt-4o-mini" if provider == "openai" else _DEFAULT_MODEL)
+    default_model = "openai/gpt-oss-120b" if provider == "groq" else ("gpt-4o-mini" if provider == "openai" else _DEFAULT_MODEL)
     mdl = model or os.getenv("POST_CALL_MODEL", default_model)
     if provider not in _VALID_PROVIDERS:
 

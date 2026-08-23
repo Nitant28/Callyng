@@ -5,6 +5,13 @@ import AdminCustomerFilter from '../components/AdminCustomerFilter';
 import LeadSchemaBuilder, { toSchemaJson, parseSchema } from '../components/LeadSchemaBuilder';
 
 import ScriptingGuideModal from '../components/ScriptingGuideModal';
+import CascadeScriptingGuideModal from '../components/CascadeScriptingGuideModal';
+import CascadeModelsPanel from '../components/CascadeModelsPanel';
+import {
+  getRoleKeys,
+  isCascadeConfigValidForSave,
+  normalizeCascadeSettings,
+} from '../lib/cascadeCatalog';
 
 const parseConfigJSON = (str, fallback) => {
   try {
@@ -13,6 +20,23 @@ const parseConfigJSON = (str, fallback) => {
     return fallback;
   }
 };
+
+function looksLikePhone(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  return digits.length >= 10 && digits.length <= 15;
+}
+
+function liveToolsJsonInvalid(raw) {
+  try {
+    const parsed = JSON.parse(raw || '[]');
+    if (!Array.isArray(parsed) || parsed.length === 0) return true;
+    return parsed.some(
+      (tool) => !tool || typeof tool !== 'object' || !tool.name || !tool.description,
+    );
+  } catch {
+    return true;
+  }
+}
 
 /** Returns mapping validation state for save gating and inline warnings. */
 function getOutcomeMappingState(editingConfig) {
@@ -285,6 +309,10 @@ export default function AdminScriptConfigs() {
   const [testCallError, setTestCallError] = useState('');
   const [testCallSuccess, setTestCallSuccess] = useState('');
 
+  const [cascadeCatalog, setCascadeCatalog] = useState(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState('');
+
   const fetchClients = async () => {
     try {
       const res = await adminApi.get('/internal/clients');
@@ -316,9 +344,53 @@ export default function AdminScriptConfigs() {
     fetchConfigs();
   }, [clientFilter]);
 
+  useEffect(() => {
+    if (isEditorOpen && activeTab === 'models' && !cascadeCatalog && !catalogLoading) {
+      fetchCascadeCatalog();
+    }
+  }, [isEditorOpen, activeTab, cascadeCatalog, catalogLoading]);
+
   const getClientName = (clientId) => {
     const c = clients.find(c => c.id === clientId);
     return c ? c.name : 'Unknown Client';
+  };
+
+  const fetchCascadeCatalog = async (force = false) => {
+    if (!force && (cascadeCatalog || catalogLoading)) return cascadeCatalog;
+    setCatalogLoading(true);
+    setCatalogError('');
+    try {
+      const res = await adminApi.get('/internal/cascade-providers');
+      setCascadeCatalog(res.data);
+      return res.data;
+    } catch (error) {
+      console.error('Failed to fetch cascade catalog', error);
+      setCatalogError('Failed to load provider catalog.');
+      return null;
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
+
+  const prepareEditorConfig = (config) => {
+    const cascadeFields = normalizeCascadeSettings(config);
+    return {
+      ...config,
+      ...cascadeFields,
+      extraction_schema: JSON.stringify(config.extraction_schema || {}, null, 2),
+      lead_schema: JSON.stringify(config.lead_schema || { fields: [] }, null, 2),
+      bootstrap_messages_json: JSON.stringify(config.bootstrap_messages_json || [], null, 2),
+      goodbye_markers: JSON.stringify(config.goodbye_markers || [], null, 2),
+      cascade_live_tools: JSON.stringify(config.cascade_live_tools || [], null, 2),
+      transfer_enabled: Boolean(config.transfer_enabled),
+      transfer_number: config.transfer_number || '',
+      live_tools_enabled: Boolean(config.live_tools_enabled),
+      normalization_rules: JSON.stringify(config.normalization_rules || [], null, 2),
+      outcome_event_map: JSON.stringify(config.outcome_event_map || {}, null, 2),
+      outcome_terminal: JSON.stringify(config.outcome_terminal || [], null, 2),
+      outcome_retry: JSON.stringify(config.outcome_retry || [], null, 2),
+      outcome_callback: JSON.stringify(config.outcome_callback || [], null, 2),
+    };
   };
 
   // ----------------------------------------
@@ -348,24 +420,17 @@ export default function AdminScriptConfigs() {
       template.script_id = newScriptId;
       template.route = newRoute;
       
-      setEditingConfig({
+      setEditingConfig(prepareEditorConfig({
         ...template,
-        // Convert JSON objects to strings for the textareas
-        extraction_schema: JSON.stringify(template.extraction_schema || {}, null, 2),
-        lead_schema: JSON.stringify(template.lead_schema || {fields: []}, null, 2),
-        bootstrap_messages_json: JSON.stringify(template.bootstrap_messages_json || [], null, 2),
-        goodbye_markers: JSON.stringify(template.goodbye_markers || [], null, 2),
-        cascade_live_tools: JSON.stringify(template.cascade_live_tools || [], null, 2),
-        normalization_rules: JSON.stringify(template.normalization_rules || [], null, 2),
-        outcome_event_map: JSON.stringify(template.outcome_event_map || {}, null, 2),
-        outcome_terminal: JSON.stringify(template.outcome_terminal || [], null, 2),
-        outcome_retry: JSON.stringify(template.outcome_retry || [], null, 2),
-        outcome_callback: JSON.stringify(template.outcome_callback || [], null, 2)
-      });
+        client_id: newClientId,
+        script_id: newScriptId,
+        route: newRoute,
+      }));
       
       setIsCreatorOpen(false);
       setActiveTab('general');
       setIsEditorOpen(true);
+      fetchCascadeCatalog();
     } catch (error) {
       console.error(error);
       setCreateError('Failed to load template.');
@@ -376,26 +441,29 @@ export default function AdminScriptConfigs() {
   // Editor Flow
   // ----------------------------------------
   const openEditor = (config) => {
-    setEditingConfig({
-      ...config,
-      extraction_schema: JSON.stringify(config.extraction_schema || {}, null, 2),
-      lead_schema: JSON.stringify(config.lead_schema || {fields: []}, null, 2),
-      bootstrap_messages_json: JSON.stringify(config.bootstrap_messages_json || [], null, 2),
-      goodbye_markers: JSON.stringify(config.goodbye_markers || [], null, 2),
-      cascade_live_tools: JSON.stringify(config.cascade_live_tools || [], null, 2),
-      normalization_rules: JSON.stringify(config.normalization_rules || [], null, 2),
-      outcome_event_map: JSON.stringify(config.outcome_event_map || {}, null, 2),
-      outcome_terminal: JSON.stringify(config.outcome_terminal || [], null, 2),
-      outcome_retry: JSON.stringify(config.outcome_retry || [], null, 2),
-      outcome_callback: JSON.stringify(config.outcome_callback || [], null, 2)
-    });
+    setEditingConfig(prepareEditorConfig(config));
     setSaveError('');
     setActiveTab('general');
     setIsEditorOpen(true);
+    fetchCascadeCatalog();
   };
 
   const handleEditorChange = (key, value) => {
     setEditingConfig({ ...editingConfig, [key]: value });
+  };
+
+  const updateCascadeRole = (kind, patch) => {
+    const keys = getRoleKeys(kind);
+    setEditingConfig((prev) => {
+      const next = { ...prev };
+      if (patch.provider !== undefined) next[keys.provider] = patch.provider;
+      if (patch.model !== undefined) next[keys.model] = patch.model;
+      if (patch.settings !== undefined) next[keys.settings] = patch.settings;
+      if (kind === 'tts' && patch.voice !== undefined) {
+        next.cascade_tts_voice = patch.voice;
+      }
+      return next;
+    });
   };
 
   const saveConfig = async () => {
@@ -409,6 +477,33 @@ export default function AdminScriptConfigs() {
       setSaveError(`Map every intent_status value before saving (${parts.join('; ')})`);
       setActiveTab('post-call');
       return;
+    }
+
+    if (
+      editingConfig.route === 'cascaded'
+      && cascadeCatalog
+      && !isCascadeConfigValidForSave(cascadeCatalog, editingConfig)
+    ) {
+      setSaveError(
+        'One or more cascade providers/models are not in the current catalog. Update the Models tab before saving.',
+      );
+      setActiveTab('models');
+      return;
+    }
+
+    if (editingConfig.route === 'cascaded' && editingConfig.transfer_enabled) {
+      if (!looksLikePhone(editingConfig.transfer_number)) {
+        setSaveError('Transfer is on. Enter a valid phone number.');
+        setActiveTab('advanced');
+        return;
+      }
+    }
+    if (editingConfig.route === 'cascaded' && editingConfig.live_tools_enabled) {
+      if (liveToolsJsonInvalid(editingConfig.cascade_live_tools)) {
+        setSaveError('Live tools are on. Add a non-empty JSON list of tools with name and description.');
+        setActiveTab('advanced');
+        return;
+      }
     }
     
     // Parse JSON strings back to objects
@@ -601,6 +696,12 @@ export default function AdminScriptConfigs() {
     && !outcomeMappingState.isSummaryMode
     && outcomeMappingState.allOutcomes.length > 0
     && !outcomeMappingState.valid;
+  const saveBlockedByCallActions =
+    editingConfig?.route === 'cascaded'
+    && (
+      (editingConfig.transfer_enabled && !looksLikePhone(editingConfig.transfer_number))
+      || (editingConfig.live_tools_enabled && liveToolsJsonInvalid(editingConfig.cascade_live_tools))
+    );
 
   return (
     <>
@@ -770,7 +871,7 @@ export default function AdminScriptConfigs() {
                   className="flex items-center gap-1.5 px-3 py-1 bg-primary/10 text-primary dark:bg-molten-primary/10 dark:text-molten-primary rounded-full text-xs font-medium hover:bg-primary/20 dark:hover:bg-molten-primary/20 transition-colors"
                 >
                   <span className="material-symbols-outlined text-[16px]">menu_book</span>
-                  Guide
+                  {editingConfig.route === 'cascaded' ? 'Cascade Guide' : 'Guide'}
                 </button>
               </div>
               <div className="flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap justify-end">
@@ -783,7 +884,7 @@ export default function AdminScriptConfigs() {
                 )}
                 <button
                   onClick={saveConfig}
-                  disabled={saveBlockedByOutcomes}
+                  disabled={saveBlockedByOutcomes || saveBlockedByCallActions}
                   className="px-4 py-2 bg-primary dark:bg-molten-primary text-white dark:text-molten-bg rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save
@@ -846,70 +947,86 @@ export default function AdminScriptConfigs() {
 
               {activeTab === 'models' && (
                 <div className="space-y-6">
-                  {editingConfig.route === 'sts' ? (
-                    <div>
-                      <h4 className="font-bold text-on-surface dark:text-molten-text mb-3">Gemini Realtime (STS)</h4>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Model</label>
-                          <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.gemini_model || ''} onChange={e => handleEditorChange('gemini_model', e.target.value)} />
-                        </div>
-                        <div>
-                          <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Voice</label>
-                          <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.gemini_voice || ''} onChange={e => handleEditorChange('gemini_voice', e.target.value)} />
-                        </div>
-                        <div>
-                          <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Language</label>
-                          <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" placeholder="hi-IN" value={editingConfig.gemini_language || ''} onChange={e => handleEditorChange('gemini_language', e.target.value)} />
-                        </div>
-                        <div>
-                          <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Temperature</label>
-                          <input type="number" step="0.01" min="0" max="2" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.gemini_temperature !== undefined ? editingConfig.gemini_temperature : ''} onChange={e => handleEditorChange('gemini_temperature', parseFloat(e.target.value))} />
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      <h4 className="font-bold text-on-surface dark:text-molten-text mb-3">Cascade Pipeline</h4>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">STT Provider</label>
-                          <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.cascade_stt_provider || ''} onChange={e => handleEditorChange('cascade_stt_provider', e.target.value)} />
-                        </div>
-                        <div>
-                          <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">LLM Model</label>
-                          <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.cascade_llm_model || ''} onChange={e => handleEditorChange('cascade_llm_model', e.target.value)} />
+                  {editingConfig.route === 'sts' && (
+                    <>
+                      <div>
+                        <h4 className="font-bold text-on-surface dark:text-molten-text mb-3">Gemini Realtime (STS)</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Model</label>
+                            <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.gemini_model || ''} onChange={e => handleEditorChange('gemini_model', e.target.value)} />
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Voice</label>
+                            <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.gemini_voice || ''} onChange={e => handleEditorChange('gemini_voice', e.target.value)} />
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Language</label>
+                            <input type="text" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" placeholder="hi-IN" value={editingConfig.gemini_language || ''} onChange={e => handleEditorChange('gemini_language', e.target.value)} />
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Temperature</label>
+                            <input type="number" step="0.01" min="0" max="2" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.gemini_temperature !== undefined ? editingConfig.gemini_temperature : ''} onChange={e => handleEditorChange('gemini_temperature', parseFloat(e.target.value))} />
+                          </div>
                         </div>
                       </div>
-                    </div>
+                      <div>
+                        <h4 className="font-bold text-on-surface dark:text-molten-text mb-3">VAD Settings</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Silence Duration (ms)</label>
+                            <input type="number" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_silence_duration_ms || ''} onChange={e => handleEditorChange('vad_silence_duration_ms', parseInt(e.target.value))} />
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Prefix Padding (ms)</label>
+                            <input type="number" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_prefix_padding_ms || ''} onChange={e => handleEditorChange('vad_prefix_padding_ms', parseInt(e.target.value))} />
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Start Sensitivity</label>
+                            <select className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_start_sensitivity || 'HIGH'} onChange={e => handleEditorChange('vad_start_sensitivity', e.target.value)}>
+                              <option value="LOW">LOW</option>
+                              <option value="HIGH">HIGH</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">End Sensitivity</label>
+                            <select className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_end_sensitivity || 'LOW'} onChange={e => handleEditorChange('vad_end_sensitivity', e.target.value)}>
+                              <option value="LOW">LOW</option>
+                              <option value="HIGH">HIGH</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    </>
                   )}
-                  <div>
-                    <h4 className="font-bold text-on-surface dark:text-molten-text mb-3">VAD Settings</h4>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Silence Duration (ms)</label>
-                        <input type="number" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_silence_duration_ms || ''} onChange={e => handleEditorChange('vad_silence_duration_ms', parseInt(e.target.value))} />
-                      </div>
-                      <div>
-                        <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Prefix Padding (ms)</label>
-                        <input type="number" className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_prefix_padding_ms || ''} onChange={e => handleEditorChange('vad_prefix_padding_ms', parseInt(e.target.value))} />
-                      </div>
-                      <div>
-                        <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Start Sensitivity</label>
-                        <select className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_start_sensitivity || 'HIGH'} onChange={e => handleEditorChange('vad_start_sensitivity', e.target.value)}>
-                          <option value="LOW">LOW</option>
-                          <option value="HIGH">HIGH</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">End Sensitivity</label>
-                        <select className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.vad_end_sensitivity || 'LOW'} onChange={e => handleEditorChange('vad_end_sensitivity', e.target.value)}>
-                          <option value="LOW">LOW</option>
-                          <option value="HIGH">HIGH</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
+                  {editingConfig.route === 'cascaded' && (
+                    <>
+                      {catalogLoading && !cascadeCatalog && (
+                        <div className="text-sm text-on-surface-variant dark:text-molten-text-muted py-8 text-center">
+                          Loading provider catalog…
+                        </div>
+                      )}
+                      {catalogError && !cascadeCatalog && (
+                        <div className="cascade-legacy-banner mb-4 flex items-center justify-between gap-3">
+                          <span>{catalogError}</span>
+                          <button
+                            type="button"
+                            className="text-xs font-semibold underline shrink-0"
+                            onClick={() => fetchCascadeCatalog(true)}
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
+                      {cascadeCatalog && (
+                        <CascadeModelsPanel
+                          catalog={cascadeCatalog}
+                          editingConfig={editingConfig}
+                          onRoleUpdate={updateCascadeRole}
+                        />
+                      )}
+                    </>
+                  )}
                 </div>
               )}
 
@@ -948,10 +1065,60 @@ export default function AdminScriptConfigs() {
                     value={editingConfig.lead_schema || ''}
                     onChange={(json) => handleEditorChange('lead_schema', json)}
                   />
-                  <div>
-                    <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Cascade Live Tools (JSON)</label>
-                    <textarea rows="5" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.cascade_live_tools || ''} onChange={e => handleEditorChange('cascade_live_tools', e.target.value)}></textarea>
-                  </div>
+                  {editingConfig.route === 'cascaded' && (
+                    <div className="space-y-4 p-4 rounded-lg border border-outline-variant dark:border-[#2A345E]">
+                      <h3 className="font-headline-sm text-on-surface dark:text-molten-text">Call actions</h3>
+                      <label className="flex items-center gap-2 text-sm text-on-surface dark:text-molten-text">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(editingConfig.transfer_enabled)}
+                          onChange={(e) => handleEditorChange('transfer_enabled', e.target.checked)}
+                        />
+                        Transfer calling
+                      </label>
+                      {editingConfig.transfer_enabled && (
+                        <>
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Transfer number</label>
+                            <input
+                              type="tel"
+                              className="w-full bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text"
+                              value={editingConfig.transfer_number || ''}
+                              onChange={(e) => handleEditorChange('transfer_number', e.target.value)}
+                              placeholder="+9198XXXXXXXX"
+                            />
+                          </div>
+                          <p className="call-actions-warning text-xs text-on-surface-variant dark:text-molten-text-muted">
+                            Transfer is on. Enter a valid number and tell the agent in the system instruction when to call <code>transfer_call</code> — for example, when the caller asks for a human. The model does not choose the destination; it always dials this number.
+                          </p>
+                        </>
+                      )}
+                      <label className="flex items-center gap-2 text-sm text-on-surface dark:text-molten-text">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(editingConfig.live_tools_enabled)}
+                          onChange={(e) => handleEditorChange('live_tools_enabled', e.target.checked)}
+                        />
+                        Live tools
+                      </label>
+                      {editingConfig.live_tools_enabled && (
+                        <>
+                          <div>
+                            <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Cascade live tools (JSON)</label>
+                            <textarea
+                              rows="5"
+                              className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text"
+                              value={editingConfig.cascade_live_tools || ''}
+                              onChange={(e) => handleEditorChange('cascade_live_tools', e.target.value)}
+                            />
+                          </div>
+                          <p className="call-actions-warning text-xs text-on-surface-variant dark:text-molten-text-muted">
+                            Live tools are on. Define each tool here and name them in the system instruction, including when the agent must call them. <code>end_call</code> is always available.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Goodbye Markers (JSON)</label>
                     <textarea rows="3" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.goodbye_markers || ''} onChange={e => handleEditorChange('goodbye_markers', e.target.value)}></textarea>
@@ -1050,8 +1217,11 @@ export default function AdminScriptConfigs() {
         </div>
       )}
 
-      {/* Scripting Guide Modal */}
-      <ScriptingGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
+      {editingConfig?.route === 'cascaded' ? (
+        <CascadeScriptingGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
+      ) : (
+        <ScriptingGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
+      )}
     </>
   );
 }

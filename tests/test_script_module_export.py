@@ -29,6 +29,8 @@ def test_export_cascade_prowave_valid_and_has_tools():
     payload = export_cascade_module("prowave")
     assert payload["route"] == "cascaded"
     assert payload["cascade_live_tools"]
+    assert payload["transfer_enabled"] is False
+    assert payload["live_tools_enabled"] is True
     validate_script_config_payload(payload, partial=False)
 
 

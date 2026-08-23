@@ -22,6 +22,7 @@ from post_call_extract import (
     post_call_llm_configured,
     post_call_missing_key_message,
 )
+from providers.catalog import catalog_as_json
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -43,12 +44,19 @@ class CreateScriptConfigBody(BaseModel):
     bootstrap_messages_json: list[Any] = Field(default_factory=list)
     goodbye_markers: list[Any] = Field(default_factory=list)
     cascade_stt_provider: str = "sarvam"
-    cascade_stt_model: str = "saarika:v2.5"
+    cascade_stt_model: str = "saaras:v3"
     cascade_llm_provider: str = "groq"
-    cascade_llm_model: str = "llama-3.3-70b-versatile"
+    cascade_llm_model: str = "openai/gpt-oss-120b"
     cascade_tts_provider: str = "cartesia"
-    cascade_tts_voice: str = "sonic-3"
+    cascade_tts_voice: str = ""
+    cascade_tts_model: str = "sonic-3.5"
+    cascade_stt_settings: dict[str, Any] = Field(default_factory=dict)
+    cascade_llm_settings: dict[str, Any] = Field(default_factory=dict)
+    cascade_tts_settings: dict[str, Any] = Field(default_factory=dict)
     cascade_live_tools: list[Any] = Field(default_factory=list)
+    transfer_enabled: bool = False
+    transfer_number: str | None = None
+    live_tools_enabled: bool = False
     lead_schema: dict[str, Any] = Field(default_factory=lambda: {"fields": []})
     normalization_rules: list[Any] = Field(default_factory=list)
     outcome_event_map: dict[str, str] = Field(default_factory=dict)
@@ -85,7 +93,14 @@ class PatchScriptConfigBody(BaseModel):
     cascade_llm_model: str | None = None
     cascade_tts_provider: str | None = None
     cascade_tts_voice: str | None = None
+    cascade_tts_model: str | None = None
+    cascade_stt_settings: dict[str, Any] | None = None
+    cascade_llm_settings: dict[str, Any] | None = None
+    cascade_tts_settings: dict[str, Any] | None = None
     cascade_live_tools: list[Any] | None = None
+    transfer_enabled: bool | None = None
+    transfer_number: str | None = None
+    live_tools_enabled: bool | None = None
     lead_schema: dict[str, Any] | None = None
     normalization_rules: list[Any] | None = None
     outcome_event_map: dict[str, str] | None = None
@@ -137,6 +152,11 @@ async def get_script_config_template(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return {"template": template, "route": route}
+
+
+@router.get("/cascade-providers")
+async def get_cascade_providers(_: None = Depends(require_admin)):
+    return catalog_as_json()
 
 
 @router.get("/script-configs")

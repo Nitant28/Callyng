@@ -5,6 +5,14 @@ from __future__ import annotations
 import os
 
 
+def usd_inr_rate() -> float:
+    """Return ``USD_INR`` (default ``85``). Invalid values fall back to ``85``."""
+    try:
+        return float(os.getenv("USD_INR", "85").strip() or "85")
+    except ValueError:
+        return 85.0
+
+
 def compute_sts_cost_inr(
     route: str,
     *,
@@ -29,10 +37,7 @@ def compute_sts_cost_inr(
         rout = float(rout_raw)
     except ValueError:
         return None
-    try:
-        usd_inr = float(os.getenv("USD_INR", "85").strip() or "85")
-    except ValueError:
-        usd_inr = 85.0
+    usd_inr = usd_inr_rate()
     cost_usd = (usage_prompt_tokens / 1_000_000.0) * rin + (
         usage_completion_tokens / 1_000_000.0
     ) * rout
