@@ -1,58 +1,9 @@
 ﻿import { useState, useEffect, useRef, useCallback } from "react";
 import clientApi from "../../api/client";
-import { formatCallCost } from "../../utils/callLogsHelpers";
-
-const HIDDEN_LEAD_DETAIL_KEYS = new Set([
-  'id', 'client_id', 'campaign_id', 'lead_id', 'bot_config_id', 'session_call_id',
-  'created_at', 'updated_at', 'last_attempted_at', 'next_attempt_at',
-]);
-
-const formatLeadDetailLabel = (key) =>
-  key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-
-const parseLeadMetadata = (raw) => {
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-};
-
-const getLeadDetailEntries = (leadData) => {
-  if (!leadData) return [];
-  const entries = [];
-  const seen = new Set();
-
-  const pushEntry = (key, value) => {
-    const lower = String(key || '').toLowerCase();
-    if (!key || seen.has(lower)) return;
-    if (HIDDEN_LEAD_DETAIL_KEYS.has(lower)) return;
-    if (lower.endsWith('_id') || lower.endsWith('_at')) return;
-    if (value == null || value === '') return;
-    seen.add(lower);
-    entries.push([key, value]);
-  };
-
-  pushEntry('Name', leadData.name);
-  pushEntry('Phone', leadData.phone);
-  pushEntry('Lead Type', leadData.lead_type);
-
-  Object.entries(parseLeadMetadata(leadData.metadata)).forEach(([key, value]) => {
-    pushEntry(formatLeadDetailLabel(key), value);
-  });
-
-  return entries;
-};
 
 const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadData }) => {
   const [activeTab, setActiveTab] = useState("analytics");
   const [callData, setCallData] = useState(null);
-  const [enrichedLead, setEnrichedLead] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isPolling, setIsPolling] = useState(false);
   const [transcriptSearch, setTranscriptSearch] = useState("");
@@ -115,44 +66,12 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
     if (isOpen && sessionCallId) {
       setActiveTab("analytics");
       setTranscriptSearch("");
-      setEnrichedLead(null);
       fetchCallDetails(true);
     } else {
       setCallData(null);
-      setEnrichedLead(null);
       setIsPolling(false);
     }
   }, [isOpen, sessionCallId, fetchCallDetails]);
-
-  // Enrich Lead Details from campaign lead endpoint when metadata is missing
-  useEffect(() => {
-    if (!isOpen) return;
-    const hasMeta = leadData?.metadata
-      && (typeof leadData.metadata === 'object'
-        ? Object.keys(leadData.metadata).length > 0
-        : String(leadData.metadata).length > 2);
-    if (hasMeta) {
-      setEnrichedLead(leadData);
-      return;
-    }
-    const campaignId = leadData?.campaign_id || callData?.campaign_id;
-    const leadId = leadData?.id || leadData?.lead_id || callData?.lead_id;
-    if (!campaignId || !leadId) {
-      setEnrichedLead(leadData || null);
-      return;
-    }
-    let cancelled = false;
-    clientApi
-      .get(`/api/campaigns/${campaignId}/leads/${leadId}`)
-      .then((res) => {
-        if (cancelled) return;
-        setEnrichedLead(res.data?.lead || res.data || leadData);
-      })
-      .catch(() => {
-        if (!cancelled) setEnrichedLead(leadData || null);
-      });
-    return () => { cancelled = true; };
-  }, [isOpen, leadData, callData?.campaign_id, callData?.lead_id]);
 
   useEffect(() => {
     if (!isPolling || !isOpen || !sessionCallId) return;
@@ -161,7 +80,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
   }, [isPolling, isOpen, sessionCallId, fetchCallDetails]);
 
   const fetchRecording = useCallback(async (id, inProgress) => {
-    if (!id || inProgress) return;
+    if (!id) return;
     setRecordingLoading(true);
     setRecordingError(null);
     try {
@@ -170,17 +89,19 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
       setRecordingUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
     } catch (err) {
       setRecordingUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
-      setRecordingError(err.response?.data?.detail || "No recording available");
+      if (!inProgress) setRecordingError(err.response?.data?.detail || "No recording available");
     } finally {
       setRecordingLoading(false);
     }
   }, []);
 
-  const pendingPlayRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen || !callData?.session_call_id) return;
+    fetchRecording(callData.session_call_id, callData.in_progress);
+  }, [isOpen, callData?.session_call_id, callData?.in_progress, fetchRecording]);
 
   useEffect(() => {
     if (isOpen) return;
-    pendingPlayRef.current = false;
     setRecordingUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
     setRecordingError(null);
     setRecordingLoading(false);
@@ -188,21 +109,8 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
     setAudioProgress(0);
   }, [isOpen]);
 
-  useEffect(() => {
-    if (!recordingUrl || !pendingPlayRef.current) return;
-    pendingPlayRef.current = false;
-    audioRef.current?.play().then(() => setIsPlaying(true)).catch(() => {});
-  }, [recordingUrl]);
-
   const togglePlay = () => {
     if (!audioRef.current) return;
-    if (callData?.in_progress) return;
-    if (!recordingUrl) {
-      if (!callData?.session_call_id || recordingLoading) return;
-      pendingPlayRef.current = true;
-      fetchRecording(callData.session_call_id, false);
-      return;
-    }
     if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); }
     else { audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {}); }
   };
@@ -218,18 +126,13 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
 
   const computeAnalytics = () => {
     if (!callData?.transcript || !Array.isArray(callData.transcript)) {
-      const fromMeta = Number(callData?.transcript_turns);
-      if (Number.isFinite(fromMeta) && fromMeta > 0) {
-        return { aiRatio: 0, custRatio: 0, turns: fromMeta, aiTurns: 0, custTurns: 0, avgResponse: 0 };
-      }
       return { aiRatio: 0, custRatio: 0, turns: 0, aiTurns: 0, custTurns: 0, avgResponse: 0 };
     }
     let aiWords = 0, custWords = 0, aiTurns = 0, custTurns = 0;
     callData.transcript.forEach(t => {
-      const role = t.role;
       const w = (t.content || "").split(/\s+/).filter(Boolean).length;
-      if (role === "assistant" || role === "bot") { aiWords += w; aiTurns++; }
-      else if (role === "user") { custWords += w; custTurns++; }
+      if (t.role === "assistant" || t.role === "bot") { aiWords += w; aiTurns++; }
+      else { custWords += w; custTurns++; }
     });
     const totalWords = aiWords + custWords || 1;
     const totalTurns = aiTurns + custTurns;
@@ -246,7 +149,6 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
   const phone = callData?.phone || leadData?.phone || "";
   const outStyle = outcomeStyle(outcome);
   const extractionEntries = callData?.extraction_json ? Object.entries(callData.extraction_json) : [];
-  const leadDetailEntries = getLeadDetailEntries(enrichedLead || leadData);
   const filteredTranscript = (callData?.transcript || []).filter(t =>
     !transcriptSearch || (t.content || "").toLowerCase().includes(transcriptSearch.toLowerCase())
   );
@@ -328,7 +230,6 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
             {[
               { id: "analytics", label: "Analytics" },
               { id: "extracted", label: "Extracted Info" },
-              { id: "details", label: "Lead Details" },
               { id: "transcript", label: "Transcript" },
             ].map(tab => (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
@@ -381,7 +282,6 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                   <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e8ecf2", overflow: "hidden" }}>
                     {[
                       { icon: "timer", label: "Duration", value: fmt(callData.duration_seconds) },
-                      { icon: "payments", label: "Cost", value: formatCallCost(callData.credits_charged, { inProgress: callData.in_progress === true }) },
                       { icon: "swap_horiz", label: "Turns", value: stats.turns },
                       { icon: "smart_toy", label: "AI Turns", value: `${stats.aiTurns} (${stats.aiRatio}%)` },
                       { icon: "person", label: "Customer Turns", value: `${stats.custTurns} (${stats.custRatio}%)` },
@@ -429,36 +329,6 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                   ) : (
                     <div style={{ textAlign: "center", color: "#94a3b8", fontSize: 13, padding: "48px 0" }}>
                       No extracted data available for this call.
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* LEAD DETAILS TAB */}
-              {activeTab === "details" && (
-                <div style={{ padding: "18px 20px" }}>
-                  {leadDetailEntries.length > 0 ? (
-                    <>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                        <span className="material-symbols-outlined" style={{ fontSize: 16, color: "#2563eb" }}>contact_page</span>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.07em" }}>Lead Details</span>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
-                        {leadDetailEntries.map(([label, val]) => (
-                          <div key={label} style={{ background: "#fff", border: "1px solid #e8ecf2", borderRadius: 10, padding: "12px 14px", minWidth: 0 }}>
-                            <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
-                              {label}
-                            </div>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a", wordBreak: "break-word" }}>
-                              {String(val)}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ textAlign: "center", color: "#94a3b8", fontSize: 13, padding: "48px 0" }}>
-                      No imported lead metadata available.
                     </div>
                   )}
                 </div>
@@ -539,7 +409,6 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
           <audio
             ref={audioRef}
             src={recordingUrl || undefined}
-            preload="none"
             onTimeUpdate={() => setAudioProgress(audioRef.current?.currentTime || 0)}
             onLoadedMetadata={() => setAudioDuration(audioRef.current?.duration || 0)}
             onEnded={() => setIsPlaying(false)}
@@ -605,20 +474,13 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                 </div>
               </div>
             </div>
-          ) : recordingError || callData?.in_progress ? (
+          ) : (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 20px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#475569", fontSize: 12 }}>
                 <span className="material-symbols-outlined" style={{ fontSize: 16, color: "#64748b" }}>mic_off</span>
-                <span>{recordingError || "Recording available after call ends."}</span>
+                <span>{recordingError || (callData?.in_progress ? "Recording available after call ends." : "No recording available.")}</span>
               </div>
               <button onClick={onClose} style={{ padding: "4px 12px", borderRadius: 6, background: "#1e293b", border: "none", color: "#64748b", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Close</button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 20px" }}>
-              <span style={{ color: "#475569", fontSize: 12 }}>Play recording</span>
-              <button onClick={togglePlay} style={circleBtn(40, "#2563eb", { color: "#fff", boxShadow: "0 0 14px rgba(37,99,235,0.4)" })}>
-                <span className="material-symbols-outlined" style={{ fontSize: 22 }}>play_arrow</span>
-              </button>
             </div>
           )}
         </div>

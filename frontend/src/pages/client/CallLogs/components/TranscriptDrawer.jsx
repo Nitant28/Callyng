@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import clientApi from '../../../../api/client';
 import {
-  formatCallCost,
   formatCallDuration,
   formatCallTime,
   parseCallDetail,
@@ -41,7 +40,7 @@ const TranscriptDrawer = ({ open, call, campaignName, onClose }) => {
   }, [sessionId]);
 
   const fetchRecording = useCallback(async (id, inProgress) => {
-    if (!id || inProgress) return;
+    if (!id) return;
     setRecordingLoading(true);
     setRecordingError(null);
     try {
@@ -72,6 +71,11 @@ const TranscriptDrawer = ({ open, call, campaignName, onClose }) => {
       setPolling(false);
     };
   }, [open, sessionId, fetchDetail]);
+
+  useEffect(() => {
+    if (!detail?.session_call_id) return;
+    fetchRecording(detail.session_call_id, detail.in_progress);
+  }, [detail?.session_call_id, detail?.in_progress, fetchRecording]);
 
   useEffect(() => {
     if (!polling || !open) return undefined;
@@ -105,11 +109,7 @@ const TranscriptDrawer = ({ open, call, campaignName, onClose }) => {
               <StatusBadge outcome={detail?.outcome ?? call.outcome} inProgress={detail?.in_progress} />
             </div>
             <p className="cl-drawer__sub">
-              {campaignName} · {formatCallTime(call.createdAt)} · {formatCallDuration(detail?.duration_seconds ?? call.durationSeconds)}
-              {' · '}
-              {formatCallCost(detail?.credits_charged ?? call.creditsCharged, {
-                inProgress: detail?.in_progress === true || call.inProgress,
-              })}
+              {campaignName} · {formatCallTime(call.createdAt)} · {formatCallDuration(call.durationSeconds)}
             </p>
           </div>
           <button type="button" className="cl-drawer__close" onClick={onClose}>
@@ -123,11 +123,6 @@ const TranscriptDrawer = ({ open, call, campaignName, onClose }) => {
             loading={recordingLoading}
             error={recordingError}
             downloadName={`call_${call.leadPhone || 'lead'}.mp3`}
-            onRequestPlay={
-              detail?.in_progress
-                ? undefined
-                : () => fetchRecording(detail?.session_call_id || sessionId, false)
-            }
           />
         </div>
 

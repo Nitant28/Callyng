@@ -1,5 +1,3 @@
-import { formatCallCost } from '../../../utils/callLogsHelpers';
-
 const STATUS_STYLES = {
   live:    { bg: '#EFF6FF', color: '#2563EB', label: 'Live' },
   success: { bg: '#ECFDF5', color: '#16A34A', label: 'Interested' },
@@ -63,7 +61,6 @@ const DashboardActivity = ({ activityEvents, liveCalls = 0 }) => {
             <span>Lead</span>
             <span>Status</span>
             <span>Duration</span>
-            <span>Cost</span>
           </div>
           <div className="cl-activity-table__body">
             {items.map((event) => (
@@ -88,9 +85,6 @@ const DashboardActivity = ({ activityEvents, liveCalls = 0 }) => {
                 </div>
                 <span className="cl-activity-table__duration">
                   {event.duration != null ? formatDuration(event.duration) : '—'}
-                </span>
-                <span className="cl-activity-table__cost">
-                  {formatCallCost(event.creditsUsed, { inProgress: event.isLive })}
                 </span>
               </div>
             ))}

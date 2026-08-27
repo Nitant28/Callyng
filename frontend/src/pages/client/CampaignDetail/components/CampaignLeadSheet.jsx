@@ -23,6 +23,7 @@ const FILTER_OPTIONS = [
   { id: 'failed', label: 'Failed', status: 'failed' },
   { id: 'completed', label: 'Completed', status: 'completed' },
   { id: 'callbacks', label: 'Callbacks', status: 'callback_scheduled' },
+  { id: 'bot_follow_up', label: 'Bot Follow Up', status: 'bot_follow_up' },
 ];
 
 const mapLead = (row, campaignId, campaignName) => ({

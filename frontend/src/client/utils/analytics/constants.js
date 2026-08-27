@@ -25,7 +25,7 @@ export const ANSWERED_STATUSES = new Set([
 export const FAILED_STATUSES = new Set(['failed', 'carrier_failed', 'rejected']);
 export const BUSY_STATUSES = new Set(['busy']);
 export const NO_ANSWER_STATUSES = new Set(['no_answer', 'voicemail']);
-export const SCHEDULED_STATUSES = new Set(['callback', 'callback_scheduled', 'callback_requested']);
+export const SCHEDULED_STATUSES = new Set(['callback', 'callback_scheduled', 'callback_requested','bot_follow_up']);
 
 export const STATUS_PRIORITY = {
   in_progress: 0,
@@ -36,6 +36,7 @@ export const STATUS_PRIORITY = {
   retrying: 5,
   callback: 6,
   callback_scheduled: 6,
+  bot_follow_up: 6,
   pending: 7,
   interested: 8,
   answered: 9,

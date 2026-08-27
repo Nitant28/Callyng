@@ -23,6 +23,7 @@ _JSON_LIST_FIELDS = (
     "outcome_terminal",
     "outcome_retry",
     "outcome_callback",
+    "outcome_bot_follow_up",
 )
 
 _SNAPSHOT_COLUMNS = (
@@ -49,10 +50,10 @@ _SNAPSHOT_COLUMNS = (
     "extraction_schema",
     "lead_schema",
     "normalization_rules",
-    "outcome_event_map",
     "outcome_terminal",
     "outcome_retry",
     "outcome_callback",
+    "outcome_bot_follow_up",
     "active",
     "version",
 )
@@ -82,7 +83,7 @@ _DEFAULT_EXTRACTION_SCHEMA: dict[str, Any] = {
             "key": "caller_notes",
             "type": "string",
             "required": False,
-            "description": "Other useful facts, or null.",
+            "description": "Other useful facts, or the literal NULL.",
         },
     ],
     "extraction_rules": (
@@ -221,6 +222,7 @@ def validate_outcome_mapping(
     outcome_terminal: list[Any],
     outcome_retry: list[Any],
     outcome_callback: list[Any],
+    outcome_bot_follow_up: list[Any],
 ) -> None:
     """Ensure intent_status enum values map exactly once across outcome buckets."""
     if extraction_schema.get("mode") == "summary":
@@ -230,11 +232,13 @@ def validate_outcome_mapping(
     terminal = [str(v) for v in (outcome_terminal or [])]
     retry = [str(v) for v in (outcome_retry or [])]
     callback = [str(v) for v in (outcome_callback or [])]
+    bot_follow_up = [str(v) for v in (outcome_bot_follow_up or [])]
 
     for label, bucket in (
         ("outcome_terminal", terminal),
         ("outcome_retry", retry),
         ("outcome_callback", callback),
+        ("outcome_bot_follow_up", bot_follow_up),
     ):
         if len(bucket) != len(set(bucket)):
             raise ValueError(f"{label} contains duplicate values")
@@ -242,13 +246,22 @@ def validate_outcome_mapping(
     terminal_set = set(terminal)
     retry_set = set(retry)
     callback_set = set(callback)
+    bot_follow_up_set = set(bot_follow_up)
 
-    if terminal_set & retry_set or terminal_set & callback_set or retry_set & callback_set:
+    if (
+        terminal_set & retry_set
+        or terminal_set & callback_set
+        or terminal_set & bot_follow_up_set
+        or retry_set & callback_set
+        or retry_set & bot_follow_up_set
+        or callback_set & bot_follow_up_set
+    ):
         raise ValueError(
-            "outcome_terminal, outcome_retry, and outcome_callback must not overlap"
+            "outcome_terminal, outcome_retry, outcome_callback, and "
+            "outcome_bot_follow_up must not overlap"
         )
 
-    bucket_union = terminal_set | retry_set | callback_set
+    bucket_union = terminal_set | retry_set | callback_set | bot_follow_up_set
     intent_set = set(intent_values)
 
     missing = intent_set - bucket_union
@@ -268,6 +281,7 @@ def validate_outcome_mapping(
             (1 if value in terminal_set else 0)
             + (1 if value in retry_set else 0)
             + (1 if value in callback_set else 0)
+            + (1 if value in bot_follow_up_set else 0)
         )
         if count != 1:
             raise ValueError(
@@ -294,6 +308,7 @@ def validate_script_config_payload(data: dict[str, Any], *, partial: bool = Fals
             data.get("outcome_terminal") or _DEFAULT_OUTCOME_TERMINAL,
             data.get("outcome_retry") or _DEFAULT_OUTCOME_RETRY,
             data.get("outcome_callback") or _DEFAULT_OUTCOME_CALLBACK,
+            data.get("outcome_bot_follow_up") or [],
         )
     elif not partial:
         raise ValueError("extraction_schema is required")
@@ -358,6 +373,7 @@ def default_template(route: str) -> dict[str, Any]:
         "outcome_terminal": list(_DEFAULT_OUTCOME_TERMINAL),
         "outcome_retry": list(_DEFAULT_OUTCOME_RETRY),
         "outcome_callback": list(_DEFAULT_OUTCOME_CALLBACK),
+        "outcome_bot_follow_up": list(_DEFAULT_OUTCOME_BOT_FOLLOW_UP),
         "active": True,
     }
 

@@ -61,6 +61,7 @@ class CreateScriptConfigBody(BaseModel):
     outcome_callback: list[str] = Field(
         default_factory=lambda: ["Callback_Requested"]
     )
+    outcome_bot_follow_up: list[str] = Field(default_factory=list)
     active: bool = True
 
 
@@ -92,6 +93,7 @@ class PatchScriptConfigBody(BaseModel):
     outcome_terminal: list[str] | None = None
     outcome_retry: list[str] | None = None
     outcome_callback: list[str] | None = None
+    outcome_bot_follow_up: list[str] | None = None
     active: bool | None = None
 
 

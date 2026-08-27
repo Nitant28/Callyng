@@ -2,7 +2,7 @@ import MetricCard from '../shared/MetricCard';
 
 const DashboardKPIs = ({
   interestedLeads,
-  totalLeads,
+  answeredLeads,
   runningCampaigns,
   liveCalls,
   creditsUsed,
@@ -27,9 +27,9 @@ const DashboardKPIs = ({
       />
 
       <MetricCard
-        label="Total Leads"
-        value={Number(totalLeads || 0).toLocaleString()}
-        icon="groups"
+        label="Answered Calls"
+        value={Number(answeredLeads || 0).toLocaleString()}
+        icon="call_received"
         iconClass="icon-teal"
       />
 

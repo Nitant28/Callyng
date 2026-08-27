@@ -368,6 +368,198 @@ async def recover_abandoned_session(
         return False
 
 
+
+async def process_event_post_call(
+    pool: asyncpg.Pool,
+    session_call_id: str,
+    lead_id: UUID,
+    event_id: UUID,
+    client_id: UUID,
+    bot_config_id: UUID,
+    duration_seconds: int,
+    transcript: list[dict],
+    extraction_json: dict,
+    *,
+    usage: dict | None = None,
+    extraction_model: str | None = None,
+    extraction_error: str | None = None,
+) -> None:
+    """
+    Post-call processing for Event leads.
+
+    Event calls do not belong to a Campaign. Their next bot is determined
+    by event_outcome_bot_mappings. If no mapping exists for the outcome,
+    the lead becomes terminal.
+    """
+    usage = usage or {}
+
+    event = await pg_db.get_event(pool, event_id, client_id)
+    bot_config = await pg_db.get_bot_config(pool, bot_config_id, client_id)
+    lead = await pg_db.get_event_lead(pool, event_id, lead_id)
+
+    if not event or not bot_config or not lead:
+        logger.error(
+            "event post_call missing event/bot/lead: event={} lead={}",
+            event_id,
+            lead_id,
+        )
+        return
+
+    call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
+
+    call_data = (call_log or {}).get("call_data")
+
+    if pg_db.is_test_call_data(call_data):
+        billed_minutes = Decimal("0")
+        credits_charged = Decimal("0")
+        setup_charge = Decimal("0")
+        duration_charge = Decimal("0")
+        skip_settle = True
+    else:
+        rate, setup = pg_db.billing_rates_from_call_data(call_data)
+
+        if rate is None:
+            rate = Decimal(str(bot_config["credits_per_minute"]))
+
+        if setup is None:
+            setup = Decimal(str(bot_config["fixed_start_credits"]))
+
+        charge = compute_call_charge(
+            duration_seconds,
+            rate,
+            setup,
+        )
+
+        billed_minutes = charge["billed_minutes"]
+        credits_charged = charge["credits_charged"]
+        setup_charge = charge["setup_charge"]
+        duration_charge = charge["duration_charge"]
+        skip_settle = False
+
+    outcome = (extraction_json or {}).get(
+        "intent_status",
+        "Unknown",
+    )
+
+    outcome = validate_interested_outcome(
+        outcome,
+        transcript,
+    )
+
+    extraction_json = dict(extraction_json or {})
+    extraction_json["intent_status"] = outcome
+
+    mapping = await pg_db.get_event_bot_for_outcome(
+        pool,
+        event_id,
+        outcome,
+        client_id,
+    )
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            active = await pg_db.fetch_active_event_lead_for_post_call(
+                conn,
+                lead_id,
+                event_id,
+                client_id,
+            )
+
+            if active is None:
+                logger.debug(
+                    "Event post_call skipped inactive lead={} call={}",
+                    lead_id,
+                    session_call_id,
+                )
+
+                await pg_db.finalize_event_call_log(
+                    conn,
+                    session_call_id=session_call_id,
+                    duration_seconds=duration_seconds,
+                    outcome=outcome,
+                    extraction_json=extraction_json,
+                    billed_minutes=billed_minutes,
+                    credits_charged=credits_charged,
+                    usage=usage,
+                    transcript=transcript,
+                    extraction_model=extraction_model,
+                    extraction_error=extraction_error,
+                    skip_settle=skip_settle,
+                    setup_charge=setup_charge,
+                    duration_charge=duration_charge,
+                    client_id=client_id,
+                    event_id=event_id,
+                )
+                return
+
+            if mapping is None:
+                new_status = "completed"
+                next_at = None
+                scheduled_callback_at = None
+
+                logger.info(
+                    "Event lead {} terminalized after outcome '{}' "
+                    "(no bot mapping)",
+                    lead_id,
+                    outcome,
+                )
+            else:
+                new_status = "bot_follow_up"
+                next_at = datetime.now(timezone.utc)
+                scheduled_callback_at = None
+
+                logger.info(
+                    "Event lead {} outcome '{}' mapped to bot {}",
+                    lead_id,
+                    outcome,
+                    mapping["bot_config_id"],
+                )
+
+            updated = await pg_db.update_event_lead_post_call(
+                conn,
+                lead_id,
+                event_id,
+                client_id,
+                active["status"],
+                new_status,
+                outcome,
+                extraction_json,
+                int(active.get("attempts") or 0),
+                next_at,
+                scheduled_callback_at,
+            )
+
+            if not updated:
+                logger.warning(
+                    "Event lead post-call update lost race: lead={} call={}",
+                    lead_id,
+                    session_call_id,
+                )
+                return
+
+            await pg_db.finalize_event_call_log(
+                conn,
+                session_call_id=session_call_id,
+                duration_seconds=duration_seconds,
+                outcome=outcome,
+                extraction_json=extraction_json,
+                billed_minutes=billed_minutes,
+                credits_charged=credits_charged,
+                usage=usage,
+                transcript=transcript,
+                extraction_model=extraction_model,
+                extraction_error=extraction_error,
+                skip_settle=skip_settle,
+                setup_charge=setup_charge,
+                duration_charge=duration_charge,
+                client_id=client_id,
+                event_id=event_id,
+            )
+
+
+            
+
+
 async def process_post_call(
     pool: asyncpg.Pool,
     session_call_id: str,
