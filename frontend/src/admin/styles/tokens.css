@@ -68,7 +68,7 @@
   --admin-sidebar-w:  220px;
   --admin-topbar-h:   0px;   /* no topbar in image; content fills width */
   --admin-page-pad:   32px;
-  --admin-gap:        16px;
+  --admin-gap:        20px;
 
   /* Backward-compat aliases for legacy classes */
   --space-8:  var(--admin-sp-2);

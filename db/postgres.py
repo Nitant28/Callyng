@@ -751,7 +751,7 @@ async def create_script_config(
                         transfer_enabled, transfer_number, live_tools_enabled,
                         extraction_schema, lead_schema,
                         normalization_rules, outcome_event_map,
-                        outcome_terminal, outcome_retry, outcome_callback,
+                        outcome_terminal, outcome_retry, outcome_callback,outcome_bot_follow_up,
                         active, version
                     )
                     VALUES (
@@ -813,6 +813,9 @@ async def create_script_config(
                 _script_config_json(
                     data.get("outcome_callback") or ["Callback_Requested"]
                 ),
+                _script_config_json(
+                    data.get("outcome_bot_follow_up") or []
+                ),
                 bool(data.get("active", True)),
                 version,
             )
@@ -868,6 +871,7 @@ _SCRIPT_CONFIG_PATCHABLE = frozenset(
         "outcome_terminal",
         "outcome_retry",
         "outcome_callback",
+        "outcome_bot_follow_up",
         "active",
     }
 )
@@ -887,6 +891,7 @@ _SCRIPT_CONFIG_JSONB = frozenset(
         "outcome_terminal",
         "outcome_retry",
         "outcome_callback",
+        "outcome_bot_follow_up",
     }
 )
 
@@ -1733,6 +1738,711 @@ async def pause_campaign_budget_exhausted(
     )
 
 
+# ── Events ────────────────────────────────────────────────────────────────────
+
+
+async def create_event(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    name: str,
+    description: str | None,
+    source_types: list[str] | None,
+    lead_handling: str | None,
+    primary_bot_config_id: UUID,
+    max_concurrent_calls: int | None = 5,
+    calls_per_minute: int | None = 10,
+    max_attempts: int | None = 3,
+    attempt_0_schedule_minutes: int | None = None,
+    attempt_1_schedule_minutes: int | None = None,
+    attempt_2_schedule_minutes: int | None = None,
+) -> dict:
+    """Create an event and return the inserted row."""
+
+    row = await pool.fetchrow(
+        """
+        INSERT INTO events (
+            client_id,
+            name,
+            description,
+            source_types,
+            lead_handling,
+            primary_bot_config_id,
+            max_concurrent_calls,
+            calls_per_minute,
+            max_attempts,
+            attempt_0_schedule_minutes,
+            attempt_1_schedule_minutes,
+            attempt_2_schedule_minutes
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+        )
+        RETURNING *
+        """,
+        client_id,
+        name,
+        description,
+        source_types,
+        lead_handling,
+        primary_bot_config_id,
+        max_concurrent_calls,
+        calls_per_minute,
+        max_attempts,
+        attempt_0_schedule_minutes,
+        attempt_1_schedule_minutes,
+        attempt_2_schedule_minutes,
+    )
+
+    return record_to_dict(row)
+
+
+
+async def get_event(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    client_id: UUID,
+) -> dict | None:
+    """Return one event belonging to the client."""
+    row = await pool.fetchrow(
+        """
+        SELECT *
+        FROM events
+        WHERE id = $1 AND client_id = $2
+        """,
+        event_id,
+        client_id,
+    )
+    return record_to_dict(row)
+
+async def get_event_admin(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+) -> dict | None:
+    """Return an event by ID for admin operations."""
+    row = await pool.fetchrow(
+        """
+        SELECT *
+        FROM events
+        WHERE id = $1
+        """,
+        event_id,
+    )
+    return record_to_dict(row)
+
+async def list_events(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """Return paginated events for a client."""
+
+    total = await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM events
+        WHERE client_id = $1
+        """,
+        client_id,
+    )
+
+    rows = await pool.fetch(
+        """
+        SELECT
+            e.*,
+            COUNT(l.id)::int AS total_leads
+        FROM events e
+        LEFT JOIN leads l
+            ON l.event_id = e.id
+        WHERE e.client_id = $1
+        GROUP BY e.id
+        ORDER BY e.created_at DESC
+        LIMIT $2 OFFSET $3
+        """,
+        client_id,
+        limit,
+        offset,
+    )
+
+    return records_to_dicts(rows), int(total or 0)
+
+async def update_event(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    client_id: UUID,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    source_types: list[str] | None = None,
+    lead_handling: str | None = None,
+    status: str | None = None,
+    primary_bot_config_id: UUID | None = None,
+    max_concurrent_calls: int | None = None,
+    calls_per_minute: int | None = None,
+    max_attempts: int | None = None,
+    attempt_0_schedule_minutes: int | None = None,
+    attempt_1_schedule_minutes: int | None = None,
+    attempt_2_schedule_minutes: int | None = None,
+) -> dict | None:
+    """Update editable event fields and return the updated event."""
+
+    sets: list[str] = []
+    args: list[Any] = []
+    idx = 1
+
+    if name is not None:
+        sets.append(f"name = ${idx}")
+        args.append(name)
+        idx += 1
+
+    if description is not None:
+        sets.append(f"description = ${idx}")
+        args.append(description)
+        idx += 1
+
+    if source_types is not None:
+        sets.append(f"source_types = ${idx}")
+        args.append(source_types)
+        idx += 1
+    
+    if lead_handling is not None:
+        sets.append(f"lead_handling = ${idx}")
+        args.append(lead_handling)
+        idx += 1
+
+    if status is not None:
+        sets.append(f"status = ${idx}")
+        args.append(status)
+        idx += 1
+
+    if primary_bot_config_id is not None:
+        sets.append(f"primary_bot_config_id = ${idx}")
+        args.append(primary_bot_config_id)
+        idx += 1
+
+    if max_concurrent_calls is not None:
+        sets.append(f"max_concurrent_calls = ${idx}")
+        args.append(max_concurrent_calls)
+        idx += 1
+
+    if calls_per_minute is not None:
+        sets.append(f"calls_per_minute = ${idx}")
+        args.append(calls_per_minute)
+        idx += 1
+
+    if max_attempts is not None:
+        sets.append(f"max_attempts = ${idx}")
+        args.append(max_attempts)
+        idx += 1
+
+    if attempt_0_schedule_minutes is not None:
+        sets.append(f"attempt_0_schedule_minutes = ${idx}")
+        args.append(attempt_0_schedule_minutes)
+        idx += 1
+
+    if attempt_1_schedule_minutes is not None:
+        sets.append(f"attempt_1_schedule_minutes = ${idx}")
+        args.append(attempt_1_schedule_minutes)
+        idx += 1
+
+    if attempt_2_schedule_minutes is not None:
+        sets.append(f"attempt_2_schedule_minutes = ${idx}")
+        args.append(attempt_2_schedule_minutes)
+        idx += 1
+
+    if not sets:
+        return await get_event(pool, event_id, client_id)
+
+    args.extend([event_id, client_id])
+
+    row = await pool.fetchrow(
+        f"""
+        UPDATE events
+        SET {", ".join(sets)}
+        WHERE id = ${idx}
+          AND client_id = ${idx + 1}
+        RETURNING *
+        """,
+        *args,
+    )
+
+    return record_to_dict(row)
+
+
+async def delete_event(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    client_id: UUID,
+) -> bool:
+    """Delete an event and its leads while preserving call history."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Preserve call logs by removing their event reference.
+            await conn.execute(
+                """
+                UPDATE call_logs
+                SET event_id = NULL
+                WHERE event_id = $1
+                  AND client_id = $2
+                """,
+                event_id,
+                client_id,
+            )
+
+            # Preserve call logs by removing their lead reference.
+            await conn.execute(
+                """
+                UPDATE call_logs
+                SET lead_id = NULL
+                WHERE lead_id IN (
+                    SELECT id
+                    FROM leads
+                    WHERE event_id = $1
+                      AND client_id = $2
+                )
+                  AND client_id = $2
+                """,
+                event_id,
+                client_id,
+            )
+
+            # Delete the event's leads.
+            await conn.execute(
+                """
+                DELETE FROM leads
+                WHERE event_id = $1
+                  AND client_id = $2
+                """,
+                event_id,
+                client_id,
+            )
+
+            # Finally delete the event.
+            result = await conn.execute(
+                """
+                DELETE FROM events
+                WHERE id = $1
+                  AND client_id = $2
+                """,
+                event_id,
+                client_id,
+            )
+
+            return result.split()[-1] != "0"
+
+
+# ── Event Outcome → Bot Mappings ─────────────────────────────────────────────
+
+
+async def create_event_outcome_bot_mapping(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    outcome: str,
+    bot_config_id: UUID,
+) -> dict:
+    """Create an outcome → bot mapping for an event."""
+
+    row = await pool.fetchrow(
+        """
+        INSERT INTO event_outcome_bot_mappings (
+            event_id,
+            outcome,
+            bot_config_id
+        )
+        VALUES ($1, $2, $3)
+        RETURNING *
+        """,
+        event_id,
+        outcome,
+        bot_config_id,
+    )
+
+    return record_to_dict(row)
+
+
+async def get_event_outcome_bot_mapping(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    outcome: str,
+) -> dict | None:
+    """Get the bot mapping for a specific event outcome."""
+
+    row = await pool.fetchrow(
+        """
+        SELECT *
+        FROM event_outcome_bot_mappings
+        WHERE event_id = $1
+          AND outcome = $2
+        """,
+        event_id,
+        outcome,
+    )
+
+    return record_to_dict(row)
+
+
+async def list_event_outcome_bot_mappings(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+) -> list[dict]:
+    """List all outcome → bot mappings for an event."""
+
+    rows = await pool.fetch(
+        """
+        SELECT *
+        FROM event_outcome_bot_mappings
+        WHERE event_id = $1
+        ORDER BY created_at ASC
+        """,
+        event_id,
+    )
+
+    return records_to_dicts(rows)
+
+
+async def update_event_outcome_bot_mapping(
+    pool: asyncpg.Pool,
+    mapping_id: UUID,
+    event_id: UUID,
+    *,
+    outcome: str | None = None,
+    bot_config_id: UUID | None = None,
+) -> dict | None:
+    """Update an event outcome → bot mapping."""
+
+    sets: list[str] = []
+    args: list[Any] = []
+    idx = 1
+
+    if outcome is not None:
+        sets.append(f"outcome = ${idx}")
+        args.append(outcome)
+        idx += 1
+
+    if bot_config_id is not None:
+        sets.append(f"bot_config_id = ${idx}")
+        args.append(bot_config_id)
+        idx += 1
+
+    if not sets:
+        row = await pool.fetchrow(
+            """
+            SELECT *
+            FROM event_outcome_bot_mappings
+            WHERE id = $1
+              AND event_id = $2
+            """,
+            mapping_id,
+            event_id,
+        )
+        return record_to_dict(row)
+
+    args.extend([mapping_id, event_id])
+
+    row = await pool.fetchrow(
+        f"""
+        UPDATE event_outcome_bot_mappings
+        SET {", ".join(sets)},
+            updated_at = NOW()
+        WHERE id = ${idx}
+          AND event_id = ${idx + 1}
+        RETURNING *
+        """,
+        *args,
+    )
+
+    return record_to_dict(row)
+
+
+async def delete_event_outcome_bot_mapping(
+    pool: asyncpg.Pool,
+    mapping_id: UUID,
+    event_id: UUID,
+) -> bool:
+    """Delete an outcome → bot mapping from an event."""
+
+    result = await pool.execute(
+        """
+        DELETE FROM event_outcome_bot_mappings
+        WHERE id = $1
+          AND event_id = $2
+        """,
+        mapping_id,
+        event_id,
+    )
+
+    return result.split()[-1] != "0"
+
+
+# ── Event Leads ───────────────────────────────────────────────────────────────
+async def create_event_lead(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    event_id: UUID,
+    phone: str,
+    *,
+    name: str | None = None,
+    email: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Create a lead belonging to an event with the event's initial delay."""
+
+    lead_metadata = dict(metadata or {})
+
+    if email is not None:
+        lead_metadata["email"] = email
+
+    row = await pool.fetchrow(
+        """
+        INSERT INTO leads (
+            client_id,
+            event_id,
+            campaign_id,
+            phone,
+            name,
+            metadata,
+            next_attempt_at
+        )
+        SELECT
+            $1,
+            $2,
+            NULL,
+            $3,
+            $4,
+            $5,
+            NOW() + (
+                COALESCE(attempt_0_schedule_minutes, 0)
+                * INTERVAL '1 minute'
+            )
+        FROM events
+        WHERE id = $2
+          AND client_id = $1
+          AND status = 'active'
+        RETURNING *
+        """,
+        client_id,
+        event_id,
+        phone,
+        name,
+        json.dumps(lead_metadata),
+    )
+
+    if row is None:
+        raise ValueError("Event not found or inactive")
+
+    return record_to_dict(row)
+
+async def update_event_lead(
+    pool: asyncpg.Pool,
+    lead_id: UUID,
+    event_id: UUID,
+    client_id: UUID,
+    *,
+    name: str | None = None,
+    phone: str | None = None,
+    status: str | None = None,
+) -> bool:
+    result = await pool.execute(
+        """
+        UPDATE leads
+        SET
+            name = COALESCE($1, name),
+            phone = COALESCE($2, phone),
+            status = COALESCE($3, status)
+        WHERE id = $4
+          AND event_id = $5
+          AND client_id = $6
+        """,
+        name,
+        phone,
+        status,
+        lead_id,
+        event_id,
+        client_id,
+    )
+
+    return result == "UPDATE 1"
+
+async def get_event_lead(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    lead_id: UUID,
+) -> dict | None:
+    """Get a single lead belonging to an event."""
+
+    row = await pool.fetchrow(
+        """
+        SELECT *
+        FROM leads
+        WHERE id = $1
+          AND event_id = $2
+        """,
+        lead_id,
+        event_id,
+    )
+
+    return record_to_dict(row)
+
+
+async def list_event_leads(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """Return paginated leads belonging to an event."""
+
+    total = await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM leads
+        WHERE event_id = $1
+        """,
+        event_id,
+    )
+
+    rows = await pool.fetch(
+        """
+        SELECT *
+        FROM leads
+        WHERE event_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2 OFFSET $3
+        """,
+        event_id,
+        limit,
+        offset,
+    )
+
+    return records_to_dicts(rows), int(total or 0)
+
+
+async def delete_event_lead(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    lead_id: UUID,
+) -> bool:
+    """Delete a lead belonging to an event while preserving call history."""
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Make sure the lead belongs to this event.
+            lead_exists = await conn.fetchval(
+                """
+                SELECT 1
+                FROM leads
+                WHERE id = $1
+                  AND event_id = $2
+                """,
+                lead_id,
+                event_id,
+            )
+
+            if not lead_exists:
+                return False
+
+            # Preserve historical call logs by removing their FK reference
+            # to the lead before deleting the lead itself.
+            await conn.execute(
+                """
+                UPDATE call_logs
+                SET lead_id = NULL
+                WHERE lead_id = $1
+                """,
+                lead_id,
+            )
+
+            # Now the lead can be safely deleted.
+            result = await conn.execute(
+                """
+                DELETE FROM leads
+                WHERE id = $1
+                  AND event_id = $2
+                """,
+                lead_id,
+                event_id,
+            )
+
+            return result.split()[-1] != "0"
+
+async def count_event_leads(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+) -> dict:
+    """Return lead counts for an event."""
+
+    row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) AS total_leads,
+            COUNT(*) FILTER (
+                WHERE status = 'pending'
+            ) AS pending_leads,
+            COUNT(*) FILTER (
+                WHERE status = 'calling'
+            ) AS calling_leads,
+            COUNT(*) FILTER (
+                WHERE status = 'callback_scheduled'
+            ) AS callback_leads,
+            COUNT(*) FILTER (
+                WHERE status IN (
+                    'completed',
+                    'interested',
+                    'not_interested'
+                )
+            ) AS completed_leads,
+            COUNT(*) FILTER (
+                WHERE status = 'failed'
+            ) AS failed_leads
+        FROM leads
+        WHERE event_id = $1
+        """,
+        event_id,
+    )
+
+    return record_to_dict(row) or {
+        "total_leads": 0,
+        "pending_leads": 0,
+        "calling_leads": 0,
+        "callback_leads": 0,
+        "completed_leads": 0,
+        "failed_leads": 0,
+    }
+
+
+async def terminalize_event_lead(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    lead_id: UUID,
+    client_id: UUID,
+    *,
+    outcome: str,
+) -> bool:
+    """Mark an Event lead as terminal after its final outcome."""
+
+    result = await pool.execute(
+        """
+        UPDATE leads
+        SET
+            status = 'completed',
+            outcome = $4,
+            next_attempt_at = NULL,
+            scheduled_callback_at = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+          AND event_id = $2
+          AND client_id = $3
+          AND status IN ('calling', 'callback_scheduled')
+        """,
+        lead_id,
+        event_id,
+        client_id,
+        outcome,
+    )
+
+    return result.split()[-1] == "1"
+
 # ── Leads ─────────────────────────────────────────────────────────────────────
 
 
@@ -1893,6 +2603,110 @@ async def claim_leads_for_dialer(
                 lead["credits_per_minute"] = float(rate)
                 lead["fixed_start_credits"] = float(setup)
             return leads
+
+
+
+async def claim_event_leads_for_dialer(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    client_id: UUID,
+    slots: int,
+) -> list[dict]:
+    """Claim pending Event leads for dialing."""
+
+    if slots <= 0:
+        return []
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            event = await conn.fetchrow(
+                """
+                SELECT max_attempts
+                FROM events
+                WHERE id = $1
+                  AND client_id = $2
+                  AND status = 'active'
+                FOR UPDATE
+                """,
+                event_id,
+                client_id,
+            )
+
+            if event is None:
+                return []
+
+            max_attempts = int(event["max_attempts"] or 3)
+
+            rows = await conn.fetch(
+                """
+                SELECT
+                    id,
+                    phone,
+                    name,
+                    metadata,
+                    lead_type,
+                    attempts,
+                    max_attempts,
+                    status,
+                    outcome,
+                    event_id
+                FROM leads
+                WHERE event_id = $1
+                  AND client_id = $2
+                  AND status IN ('pending', 'callback_scheduled', 'bot_follow_up')
+                  AND attempts < $3
+                  AND next_attempt_at <= NOW()
+
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM call_logs c
+                      WHERE c.lead_id = leads.id
+                        AND c.in_progress = TRUE
+                        AND c.started_at > NOW() - ($4 * INTERVAL '1 minute')
+                  )
+
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM call_logs c
+                      WHERE c.lead_id = leads.id
+                        AND c.ended_at IS NOT NULL
+                        AND c.ended_at > NOW() - ($5 * INTERVAL '1 minute')
+                  )
+
+                ORDER BY next_attempt_at ASC
+                LIMIT $6
+                FOR UPDATE SKIP LOCKED
+                """,
+                event_id,
+                client_id,
+                max_attempts,
+                live_call_grace_minutes(),
+                post_call_wrap_grace_minutes(),
+                slots,
+            )
+
+            if not rows:
+                return []
+
+            ids = [r["id"] for r in rows]
+
+            await conn.execute(
+                """
+                UPDATE leads
+                SET
+                    status = 'calling',
+                    last_attempted_at = NOW(),
+                    attempts = attempts + 1
+                WHERE id = ANY($1::uuid[])
+                  AND client_id = $2
+                  AND event_id = $3
+                """,
+                ids,
+                client_id,
+                event_id,
+            )
+
+            return records_to_dicts(rows)
 
 
 async def release_stuck_calling_leads(
@@ -2379,6 +3193,202 @@ async def update_lead_post_call(
     return result.split()[-1] == "1"
 
 
+async def fetch_active_event_lead_for_post_call(
+    conn: asyncpg.Connection,
+    lead_id: UUID,
+    event_id: UUID,
+    client_id: UUID,
+) -> dict | None:
+    """Lock an Event lead for post-call processing if it is still active."""
+
+    row = await conn.fetchrow(
+        """
+        SELECT
+            status,
+            attempts,
+            next_attempt_at,
+            scheduled_callback_at
+        FROM leads
+        WHERE id = $1
+          AND event_id = $2
+          AND client_id = $3
+          AND status IN ('calling', 'callback_scheduled')
+        FOR UPDATE
+        """,
+        lead_id,
+        event_id,
+        client_id,
+    )
+
+    return record_to_dict(row) if row else None
+
+
+async def update_event_lead_post_call(
+    conn: asyncpg.Connection,
+    lead_id: UUID,
+    event_id: UUID,
+    client_id: UUID,
+    from_status: str,
+    new_status: str,
+    outcome: str,
+    extraction: dict,
+    attempts: int,
+    next_attempt_at: datetime | None,
+    scheduled_callback_at: datetime | None,
+) -> bool:
+    """Update an Event lead after post-call processing."""
+
+    sql = """
+        UPDATE leads
+        SET
+            status = $1,
+            outcome = $2,
+            extraction = $3::jsonb,
+            attempts = $4,
+            next_attempt_at = COALESCE($5, next_attempt_at),
+            scheduled_callback_at = $6,
+            last_attempted_at = NOW()
+        WHERE id = $7
+          AND event_id = $8
+          AND client_id = $9
+          AND status = $10
+    """
+
+    result = await conn.execute(
+        sql,
+        new_status,
+        outcome,
+        extraction or {},
+        attempts,
+        next_attempt_at,
+        scheduled_callback_at,
+        lead_id,
+        event_id,
+        client_id,
+        from_status,
+    )
+
+    return result.split()[-1] == "1"
+
+
+async def finalize_event_call_log(
+    conn: asyncpg.Connection,
+    session_call_id: str,
+    duration_seconds: int,
+    outcome: str,
+    extraction_json: dict,
+    billed_minutes: Decimal | float,
+    credits_charged: Decimal | float,
+    usage: dict,
+    *,
+    transcript: list[dict] | None = None,
+    extraction_model: str | None = None,
+    extraction_error: str | None = None,
+    skip_settle: bool = False,
+    setup_charge: Decimal | float | None = None,
+    duration_charge: Decimal | float | None = None,
+    client_id: UUID,
+    event_id: UUID,
+) -> None:
+    """Finalize an Event call log after post-call processing."""
+
+    ext = extraction_json or {}
+    qualified = outcome == "Interested"
+
+    charge_patch: dict[str, float] = {}
+
+    if setup_charge is not None:
+        charge_patch["setup_charge"] = float(
+            Decimal(str(setup_charge))
+        )
+
+    if duration_charge is not None:
+        charge_patch["duration_charge"] = float(
+            Decimal(str(duration_charge))
+        )
+
+    # Keep Event calls isolated from campaign budget settlement.
+    # Event calls currently do not reserve campaign credits.
+    sql = """
+        UPDATE call_logs
+        SET
+            in_progress = FALSE,
+            ended_at = NOW(),
+            duration_seconds = $1,
+            billed_minutes = $2,
+            credits_charged = $3,
+            outcome = $4,
+            qualified = $5,
+            extraction_json = $6::jsonb,
+            usage_prompt_tokens = $7,
+            usage_completion_tokens = $8,
+            usage_total_tokens = $9,
+            usage_tts_characters = $10,
+            extraction_model = $11,
+            extraction_error = $12,
+            call_data = CASE
+                WHEN jsonb_typeof(
+                    COALESCE(call_data, '{}'::jsonb)
+                ) = 'object'
+                THEN COALESCE(call_data, '{}'::jsonb) || $13::jsonb
+                ELSE $13::jsonb
+            END
+    """
+
+    args: list[Any] = [
+        duration_seconds,
+        (
+            billed_minutes
+            if isinstance(billed_minutes, Decimal)
+            else Decimal(str(billed_minutes))
+        ),
+        Decimal(str(credits_charged)),
+        outcome,
+        qualified,
+        ext,
+        int(usage.get("llm_prompt_tokens") or 0),
+        int(usage.get("llm_completion_tokens") or 0),
+        int(usage.get("llm_total_tokens") or 0),
+        int(usage.get("tts_characters") or 0),
+        extraction_model,
+        extraction_error,
+        charge_patch,
+    ]
+
+    if transcript is not None:
+        sql += """
+            , transcript = $14::jsonb
+            WHERE session_call_id = $15
+              AND client_id = $16
+              AND event_id = $17
+        """
+
+        args.extend(
+            [
+                transcript,
+                session_call_id,
+                client_id,
+                event_id,
+            ]
+        )
+    else:
+        sql += """
+            WHERE session_call_id = $14
+              AND client_id = $15
+              AND event_id = $16
+        """
+
+        args.extend(
+            [
+                session_call_id,
+                client_id,
+                event_id,
+            ]
+        )
+
+    await conn.execute(sql, *args)
+
+
 async def terminalize_campaign_leads(
     conn: asyncpg.Connection,
     campaign_id: UUID | str,
@@ -2650,6 +3660,38 @@ async def list_campaign_leads_for_export(
         outcome=outcome,
     )
     return rows
+
+
+async def get_event_bot_for_outcome(
+    pool: asyncpg.Pool,
+    event_id: UUID,
+    outcome: str,
+    client_id: UUID,
+) -> dict | None:
+    """Return the mapped bot for an Event outcome, if configured."""
+
+    row = await pool.fetchrow(
+        """
+        SELECT
+            m.id,
+            m.event_id,
+            m.outcome,
+            m.bot_config_id
+        FROM event_outcome_bot_mappings m
+        JOIN events e
+          ON e.id = m.event_id
+        WHERE m.event_id = $1
+          AND e.client_id = $2
+          AND LOWER(TRIM(m.outcome)) = LOWER(TRIM($3))
+        LIMIT 1
+        """,
+        event_id,
+        client_id,
+        outcome,
+    )
+
+    return record_to_dict(row) if row else None
+
 
 async def list_campaign_outcomes(
     pool: asyncpg.Pool,
@@ -3112,6 +4154,7 @@ async def insert_call_log_start(
     session_call_id: str,
     client_id: UUID,
     campaign_id: UUID | None,
+    event_id: UUID | None,
     lead_id: UUID | None,
     bot_config_id: UUID | None,
     route: str,
@@ -3171,17 +4214,18 @@ async def insert_call_log_start(
 
         row = await conn.fetchrow(
             """
-                INSERT INTO call_logs (
-                    session_call_id, client_id, campaign_id, lead_id,
-                    bot_config_id, route, started_at, in_progress, transcript,
-                    call_data
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, '[]'::jsonb, $8::jsonb)
-                RETURNING id
-                """,
+            INSERT INTO call_logs (
+                session_call_id, client_id, campaign_id, event_id, lead_id,
+                bot_config_id, route, started_at, in_progress, transcript,
+                call_data
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE, '[]'::jsonb, $9::jsonb)
+            RETURNING id
+            """,
             session_call_id,
             client_id,
             campaign_id,
+            event_id,
             lead_id,
             bot_config_id,
             route,
@@ -3397,9 +4441,8 @@ async def apply_callee_hangup_callback(
         return False
 
     lead_id = call_log.get("lead_id")
-    campaign_id = call_log.get("campaign_id")
     client_id = call_log.get("client_id")
-    if not lead_id or not campaign_id or not client_id:
+    if not lead_id or not client_id:
         return False
 
     existing = call_log.get("plivo_hangup_json") or {}
@@ -3495,7 +4538,7 @@ async def settle_unanswered_call(
     lead_id = call_log.get("lead_id")
     campaign_id = call_log.get("campaign_id")
     client_id = call_log.get("client_id")
-    if not session_call_id or not lead_id or not campaign_id or not client_id:
+    if not session_call_id or not lead_id or not client_id:
         return False
 
     data = parse_call_data(call_log.get("call_data"))
@@ -3559,7 +4602,7 @@ async def settle_unanswered_call(
             # Already finalized by another path
             return False
 
-        if reserved > 0 or budget_amt > 0:
+        if campaign_id and (reserved > 0 or budget_amt > 0):
             await settle_call_budget(
                 conn,
                 UUID(str(campaign_id)),
@@ -3586,12 +4629,13 @@ async def settle_unanswered_call(
             outcome,
             sched_cb,
         )
-        await increment_campaign_counters(
-            conn,
-            UUID(str(campaign_id)),
-            from_status="calling",
-            to_status=new_status,
-        )
+        if campaign_id:
+            await increment_campaign_counters(
+                conn,
+                UUID(str(campaign_id)),
+                from_status="calling",
+                to_status=new_status,
+            )
 
     logger.info(
         "Settled unanswered call session={} lead={} campaign={} reserved={}",
@@ -3770,9 +4814,8 @@ async def list_call_logs(
     """
     Return call list rows by recency without heavy JSONB blobs.
 
-    Excludes transcript, call_data, extraction_json, plivo_hangup_json,
-    recording URLs, and usage blobs — fetch those via get_call_log / detail
-    endpoints when a drawer opens.
+    Excludes transcript, call_data, extraction_json, plivo_hangup_json —
+    fetch those via get_call_log / detail endpoints.
     """
     base_query = "FROM call_logs cl LEFT JOIN leads l ON cl.lead_id = l.id"
     conditions = []
@@ -3806,12 +4849,16 @@ async def list_call_logs(
         f"""
         SELECT
             cl.id, cl.session_call_id, cl.client_id, cl.campaign_id,
-            cl.lead_id, cl.route,
+            cl.lead_id, cl.bot_config_id, cl.route, cl.call_sid,
             cl.started_at, cl.ended_at, cl.created_at,
-            cl.in_progress, cl.duration_seconds,
+            cl.in_progress, cl.duration_seconds, cl.billed_minutes,
             cl.credits_charged, cl.outcome, cl.qualified,
-            cl.extraction_error,
-            (cl.recording_url IS NOT NULL) AS has_recording,
+            (cl.call_data->>'setup_charge')::numeric AS setup_charge,
+            (cl.call_data->>'duration_charge')::numeric AS duration_charge,
+            cl.usage_prompt_tokens, cl.usage_completion_tokens,
+            cl.usage_total_tokens, cl.usage_tts_characters,
+            cl.recording_url, cl.extraction_model, cl.extraction_error,
+            cl.cost_usd, cl.quality_score, cl.flagged_for_review,
             {turns_expr} AS transcript_turns,
             CASE WHEN jsonb_typeof(transcript) = 'array' THEN jsonb_array_length(transcript) ELSE 0 END AS turns,
             l.name, l.phone

@@ -2,9 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import adminApi from '../../shared/api/admin';
 import { useAdminData } from '../contexts/AdminDataContext';
 
-const formatInr = (n) =>
-  `₹${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
 
 export default function AdminCalls() {
   const { clientsMap } = useAdminData();
@@ -55,7 +52,6 @@ export default function AdminCalls() {
     setCallData(null);
     setRecordingUrl(null);
     setRecordingError(null);
-    setRecordingLoading(false);
     
     try {
       const response = await adminApi.get(`/internal/calls/${call.session_call_id}`);
@@ -67,14 +63,11 @@ export default function AdminCalls() {
     } finally {
       setCallLoading(false);
     }
-  };
 
-  const loadRecording = async (sessionCallId) => {
-    if (!sessionCallId || recordingUrl || recordingLoading) return;
+    // Fetch recording independently
     setRecordingLoading(true);
-    setRecordingError(null);
     try {
-      const recResp = await adminApi.get(`/internal/calls/${sessionCallId}/recording`);
+      const recResp = await adminApi.get(`/internal/calls/${call.session_call_id}/recording`);
       setRecordingUrl(recResp.data.url);
     } catch (err) {
       setRecordingError(err.response?.data?.detail || "No recording available");
@@ -170,7 +163,7 @@ export default function AdminCalls() {
                 <th className="p-3 font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tracking-wider">Client</th>
                 <th className="p-3 font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tracking-wider">Route</th>
                 <th className="p-3 font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tracking-wider text-right">Duration</th>
-                <th className="p-3 font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tracking-wider text-right">Cost</th>
+                <th className="p-3 font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tracking-wider text-right">Credits</th>
                 <th className="p-3 font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tracking-wider">Started</th>
                 <th className="p-3 font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tracking-wider">Status</th>
                 <th className="p-3 pr-4 font-label-sm text-label-sm text-on-surface-variant dark:text-molten-text-muted tracking-wider text-right">Actions</th>
@@ -192,7 +185,7 @@ export default function AdminCalls() {
                     {formatDuration(call.duration_seconds)}
                   </td>
                   <td className="p-3 tabular-nums text-right text-arctic-text-muted dark:text-molten-text-muted">
-                    {call.credits_charged != null ? formatInr(call.credits_charged) : (call.in_progress ? '—' : formatInr(0))}
+                    {call.credits_charged ? call.credits_charged.toFixed(2) : '-'}
                   </td>
                   <td className="p-3 text-arctic-text-muted dark:text-molten-text-muted" title={call.started_at}>
                     {formatRelativeTime(call.started_at)}
@@ -290,24 +283,12 @@ export default function AdminCalls() {
                       <div className="font-medium text-sm text-on-surface dark:text-molten-text">{formatDuration(callData.duration_seconds)}</div>
                     </div>
                     <div className="p-3 bg-surface-container dark:bg-[#1A1C24] rounded-lg">
-                      <div className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-1">Total</div>
-                      <div className="font-medium text-sm text-on-surface dark:text-molten-text">{formatInr(callData.credits_charged)}</div>
+                      <div className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-1">Billed Mins</div>
+                      <div className="font-medium text-sm text-on-surface dark:text-molten-text">{callData.billed_minutes || 0}</div>
                     </div>
                     <div className="p-3 bg-surface-container dark:bg-[#1A1C24] rounded-lg">
-                      <div className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-1">Telephony</div>
-                      <div className="font-medium text-sm text-on-surface dark:text-molten-text">
-                        {callData.setup_charge != null || callData.call_data?.setup_charge != null
-                          ? formatInr(callData.setup_charge ?? callData.call_data.setup_charge)
-                          : '—'}
-                      </div>
-                    </div>
-                    <div className="p-3 bg-surface-container dark:bg-[#1A1C24] rounded-lg">
-                      <div className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-1">Bot</div>
-                      <div className="font-medium text-sm text-on-surface dark:text-molten-text">
-                        {callData.duration_charge != null || callData.call_data?.duration_charge != null
-                          ? formatInr(callData.duration_charge ?? callData.call_data.duration_charge)
-                          : '—'}
-                      </div>
+                      <div className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-1">Credits</div>
+                      <div className="font-medium text-sm text-on-surface dark:text-molten-text">{callData.credits_charged?.toFixed(2) || '0.00'}</div>
                     </div>
                   </div>
 
@@ -328,7 +309,7 @@ export default function AdminCalls() {
                       </div>
                     ) : recordingUrl ? (
                       <div className="flex items-center gap-2">
-                        <audio controls preload="none" src={recordingUrl} className="flex-1 h-10 outline-none" controlsList="nodownload" />
+                        <audio controls src={recordingUrl} className="flex-1 h-10 outline-none" controlsList="nodownload" />
                         <a 
                           href={recordingUrl} 
                           download={`call_recording_${callData.session_call_id || 'lead'}.mp3`}
@@ -340,18 +321,10 @@ export default function AdminCalls() {
                           <span className="material-symbols-outlined text-lg group-hover:text-primary dark:group-hover:text-molten-primary transition-colors">download</span>
                         </a>
                       </div>
-                    ) : recordingError ? (
-                      <div className="text-sm text-on-surface-variant dark:text-molten-text-muted italic bg-surface-container-lowest dark:bg-[#111] p-4 rounded-xl border border-outline-variant dark:border-[#2A345E]">
-                        {recordingError}
-                      </div>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => loadRecording(callData.session_call_id || selectedCall?.session_call_id)}
-                        className="text-sm px-4 py-2 rounded-lg border border-outline-variant dark:border-[#2A345E] text-on-surface dark:text-molten-text hover:bg-surface-container"
-                      >
-                        Load recording
-                      </button>
+                      <div className="text-sm text-on-surface-variant dark:text-molten-text-muted italic bg-surface-container-lowest dark:bg-[#111] p-4 rounded-xl border border-outline-variant dark:border-[#2A345E]">
+                        {recordingError || "No recording available."}
+                      </div>
                     )}
                   </div>
 

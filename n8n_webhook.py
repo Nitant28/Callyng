@@ -134,6 +134,7 @@ async def fire_event_webhook(
             "recording_url": recording_url,
         },
         "lead": {
+            "id": str(lead.get("id")) if lead.get("id") else None,
             "phone": lead.get("phone"),
             "name": lead.get("name"),
             "lead_type": lead.get("lead_type"),

@@ -78,6 +78,10 @@ const StatusBadge = ({ lead }) => {
   } else if (lead.status === 'pending') {
     line1 = 'Awaiting first call';
     line2 = 'Queued';
+  } else if (lead.status === 'bot_follow_up') {
+    tone = 'info';
+    line1 = 'Bot Follow Up';
+    line2 = 'Bot scheduled';
   }
 
   return (

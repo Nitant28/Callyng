@@ -35,6 +35,7 @@ _PG_WRITE_TIMEOUT_S = 5.0
 _PG_WRITE_LIVE_TIMEOUT_S = 2.0
 _TRANSCRIPT_DEBOUNCE_S = 2.0
 _CAMPAIGN_PG_FIELDS = ("client_id", "campaign_id", "lead_id", "bot_config_id")
+_EVENT_PG_FIELDS = ("client_id", "event_id", "lead_id", "bot_config_id")
 
 
 def _pgctx_key(session_call_id: str) -> str:
@@ -74,8 +75,11 @@ async def pop_pg_context(session_call_id: str | None) -> dict[str, Any] | None:
 def _pg_context_has_campaign_fields(ctx: dict[str, Any] | None) -> bool:
     if not ctx:
         return False
-    return all(ctx.get(k) for k in _CAMPAIGN_PG_FIELDS)
 
+    has_campaign = all(ctx.get(k) for k in _CAMPAIGN_PG_FIELDS)
+    has_event = all(ctx.get(k) for k in _EVENT_PG_FIELDS)
+
+    return has_campaign or has_event
 
 def _pg_context_from_call_log(row: dict[str, Any]) -> dict[str, Any] | None:
     if not row.get("client_id"):
@@ -83,29 +87,62 @@ def _pg_context_from_call_log(row: dict[str, Any]) -> dict[str, Any] | None:
 
     is_test_call = False
     call_data = row.get("call_data")
+
     if call_data and isinstance(call_data, dict):
-        if call_data.get("is_test_call"):
-            is_test_call = True
+        is_test_call = bool(call_data.get("is_test_call"))
     elif call_data and isinstance(call_data, str):
         try:
             parsed = json.loads(call_data)
-            if isinstance(parsed, dict) and parsed.get("is_test_call"):
-                is_test_call = True
+            if isinstance(parsed, dict):
+                is_test_call = bool(parsed.get("is_test_call"))
         except json.JSONDecodeError:
             pass
 
+    # Event call
+    if row.get("event_id"):
+        if not is_test_call:
+            if not all(row.get(k) for k in _EVENT_PG_FIELDS):
+                return None
+
+        ctx: dict[str, Any] = {
+            "client_id": str(row["client_id"]),
+            "event_id": str(row["event_id"]),
+            "lead_id": str(row["lead_id"]) if row.get("lead_id") else "",
+            "bot_config_id": (
+                str(row["bot_config_id"])
+                if row.get("bot_config_id")
+                else ""
+            ),
+        }
+
+        if row.get("route"):
+            ctx["route"] = row["route"]
+
+        return ctx
+
+    # Campaign call
     if not is_test_call:
         if not all(row.get(k) for k in _CAMPAIGN_PG_FIELDS):
             return None
-            
-    ctx: dict[str, Any] = {
+
+    ctx = {
         "client_id": str(row["client_id"]),
-        "campaign_id": str(row["campaign_id"]) if row.get("campaign_id") else "",
+        "campaign_id": (
+            str(row["campaign_id"])
+            if row.get("campaign_id")
+            else ""
+        ),
         "lead_id": str(row["lead_id"]) if row.get("lead_id") else "",
-        "bot_config_id": str(row.get("bot_config_id")) if row.get("bot_config_id") else "",
+        "bot_config_id": (
+            str(row["bot_config_id"])
+            if row.get("bot_config_id")
+            else ""
+        ),
     }
+
     if row.get("route"):
         ctx["route"] = row["route"]
+
     return ctx
 
 
@@ -115,18 +152,26 @@ async def resolve_pg_context(
     redis_ctx: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if redis_ctx and redis_ctx.get("client_id"):
+        # Event context
+        if all(redis_ctx.get(k) for k in _EVENT_PG_FIELDS):
+            return redis_ctx
+
+        # Campaign context
         if _pg_context_has_campaign_fields(redis_ctx):
             return redis_ctx
-        if not redis_ctx.get("campaign_id") and not redis_ctx.get("lead_id"):
+
+        if not redis_ctx.get("campaign_id") and not redis_ctx.get("event_id"):
             return redis_ctx
 
     if not pool or not session_call_id:
         return None
+
     row = await pg_db.get_call_log_by_session(pool, session_call_id)
+
     if not row:
         return None
-    return _pg_context_from_call_log(row)
 
+    return _pg_context_from_call_log(row)
 
 async def _run_campaign_post_call(
     *,
@@ -142,74 +187,89 @@ async def _run_campaign_post_call(
 ) -> None:
     if not session_call_id:
         return
-    if not _pg_context_has_campaign_fields(resolved_ctx):
-        if resolved_ctx is None:
-            logger.warning(
-                "post_call skipped: no campaign context for session={}",
-                session_call_id,
-            )
-        else:
-            # If it has a client_id but lacks campaign fields, it is a test call
-            if resolved_ctx.get("client_id"):
-                pool = _pg_pool()
-                if pool:
-                    try:
-                        test_outcome = (extraction or {}).get("intent_status", "Test Call")
-                        await pg_db.finalize_call_log(
-                            pool,
-                            session_call_id,
-                            duration_seconds,
-                            test_outcome,
-                            extraction or {},
-                            0,
-                            0.0,
-                            usage_dict,
-                            transcript=transcript,
-                            extraction_model=extraction_model,
-                            extraction_error=extraction_error,
-                            qualified=False,
-                        )
-                        logger.info("Finalized test call log in Postgres for session={}", session_call_id)
-                    except Exception as exc:
-                        logger.exception("Failed to finalize test call log for session={}: {}", session_call_id, exc)
-            else:
-                logger.error(
-                    "call_log missing campaign fields for post_call session={} ctx={}",
-                    session_call_id,
-                    resolved_ctx,
-                )
+
+    if resolved_ctx is None:
+        logger.warning(
+            "post_call skipped: no context for session={}",
+            session_call_id,
+        )
         return
+
     try:
-        from post_call_processor import process_post_call
         from uuid import UUID
 
         pool = _pg_pool()
         if pool is None:
             return
-        if resolved_ctx is None:
-            logger.error(
-                "post_call_processor skipped: resolved_ctx is None for session={}",
-                session_call_id,
-            )
-            return
-        await process_post_call(
-            pool,
-            session_call_id,
-            UUID(resolved_ctx["lead_id"]),
-            UUID(resolved_ctx["campaign_id"]),
-            UUID(resolved_ctx["client_id"]),
-            UUID(resolved_ctx["bot_config_id"]),
-            duration_seconds,
-            transcript,
-            extraction or {},
-            usage=usage_dict,
-            extraction_model=extraction_model,
-            extraction_error=extraction_error,
-            post_call_snapshot=post_call_snapshot,
-        )
-    except Exception as exc:
-        logger.exception("post_call_processor failed: {}", exc)
 
+        client_id = resolved_ctx.get("client_id")
+        lead_id = resolved_ctx.get("lead_id")
+        bot_config_id = resolved_ctx.get("bot_config_id")
+        campaign_id = resolved_ctx.get("campaign_id")
+        event_id = resolved_ctx.get("event_id")
+
+        # ---------------------------------------------------------
+        # EVENT POST-CALL
+        # ---------------------------------------------------------
+        if event_id:
+            from post_call_processor import process_event_post_call
+
+            await process_event_post_call(
+                pool,
+                session_call_id,
+                UUID(lead_id),
+                UUID(event_id),
+                UUID(client_id),
+                UUID(bot_config_id),
+                duration_seconds,
+                transcript,
+                extraction or {},
+                usage=usage_dict,
+                extraction_model=extraction_model,
+                extraction_error=extraction_error,
+            )
+
+            return
+
+        # ---------------------------------------------------------
+        # CAMPAIGN POST-CALL
+        # ---------------------------------------------------------
+        if campaign_id:
+            from post_call_processor import process_post_call
+
+            await process_post_call(
+                pool,
+                session_call_id,
+                UUID(lead_id),
+                UUID(campaign_id),
+                UUID(client_id),
+                UUID(bot_config_id),
+                duration_seconds,
+                transcript,
+                extraction or {},
+                usage=usage_dict,
+                extraction_model=extraction_model,
+                extraction_error=extraction_error,
+                post_call_snapshot=post_call_snapshot,
+            )
+
+            return
+
+        # ---------------------------------------------------------
+        # NO CAMPAIGN / EVENT
+        # ---------------------------------------------------------
+        logger.warning(
+            "post_call skipped: context has neither campaign_id nor event_id "
+            "for session={} ctx={}",
+            session_call_id,
+            resolved_ctx,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "post_call_processor failed: {}",
+            exc,
+        )
 
 def _pg_pool():
     try:

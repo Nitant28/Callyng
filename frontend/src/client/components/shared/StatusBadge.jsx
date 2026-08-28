@@ -27,6 +27,9 @@ const StatusBadge = ({ status, label }) => {
   } else if (normalized === 'pending' || normalized === 'queued' || normalized === 'draft') {
     className = 'cl-badge cl-badge--failed'; // fallback to standard slate/grey badge style
     displayLabel = label || status;
+  } else if (normalized === 'bot_follow_up') {
+    className = 'cl-badge cl-badge--callback';
+    displayLabel = label || 'Bot Follow Up';
   }
   
   return <span className={className}>{displayLabel}</span>;

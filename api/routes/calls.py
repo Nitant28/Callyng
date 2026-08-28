@@ -57,7 +57,7 @@ async def get_call(
     row = await _resolve_call_log(pool, session_call_id, cid)
     if row is None:
         raise HTTPException(404, "Call not found")
-    return pg_db.public_call_detail(dict(row))
+    return dict(row)
 
 
 @router.get("/{session_call_id}/recording")

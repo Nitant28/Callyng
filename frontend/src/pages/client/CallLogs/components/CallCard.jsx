@@ -1,4 +1,4 @@
-import { formatCallCost, formatCallDuration, formatCallTime, getInitials } from '../../../../utils/callLogsHelpers';
+import { formatCallDuration, formatCallTime, getInitials } from '../../../../utils/callLogsHelpers';
 import StatusBadge from './StatusBadge';
 import './CallCard.css';
 
@@ -19,10 +19,6 @@ const CallCard = ({ call, campaignName, selected, onClick }) => (
         <span className="cl-card__duration">
           <span className="material-symbols-outlined">schedule</span>
           {formatCallDuration(call.durationSeconds)}
-        </span>
-        <span className="cl-card__cost">
-          <span className="material-symbols-outlined">payments</span>
-          {formatCallCost(call.creditsCharged ?? call.credits_charged, { inProgress: call.inProgress })}
         </span>
         <StatusBadge outcome={call.outcome} inProgress={call.inProgress} />
       </div>

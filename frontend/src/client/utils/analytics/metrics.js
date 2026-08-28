@@ -13,7 +13,9 @@ const countCalls = (calls, predicate) =>
 export const buildKpiMetrics = ({ campaigns = [], calls = [], balance = {} }) => {
   const interestedLeads = sumCampaignField(campaigns, 'interested_leads');
 
-  const totalLeads = sumCampaignField(campaigns, 'total_leads');
+  const answeredFromCampaigns = sumCampaignField(campaigns, 'answered_leads');
+  const answeredFromCalls = countCalls(calls, isAnsweredOutcome);
+  const answeredLeads = answeredFromCampaigns > 0 ? answeredFromCampaigns : answeredFromCalls;
 
   const inProgressCount = countCalls(calls, isCallInProgress);
   const callingFromCampaigns = sumCampaignField(campaigns, 'calling_leads');
@@ -30,7 +32,7 @@ export const buildKpiMetrics = ({ campaigns = [], calls = [], balance = {} }) =>
   return {
     runningCampaigns: campaigns.filter((c) => c.status === 'running').length,
     interestedLeads,
-    totalLeads,
+    answeredLeads,
     creditsUsed,
     totalCredits,
     remainingCredits,

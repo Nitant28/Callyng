@@ -108,7 +108,7 @@ EXTRACTION_SCHEMA = {
             "key": "caller_notes",
             "type": "string",
             "required": False,
-            "description": "Other useful facts, or null.",
+            "description": "Other useful facts, or the literal NULL.",
         },
     ],
     "extraction_rules": (

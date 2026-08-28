@@ -176,6 +176,7 @@ async def fire_call(
     phone = dial_phone or lead["phone"]
     cid = client_id or UUID(str(campaign["client_id"]))
     camp_id = campaign_id or (UUID(str(campaign["id"])) if campaign.get("id") else None)
+    event_id = campaign.get("event_id")
     lead_uuid = UUID(str(lead["id"])) if lead.get("id") else None
     bot_config_id = UUID(str(bot_config["id"])) if bot_config.get("id") else None
     
@@ -237,6 +238,7 @@ async def fire_call(
         "_pg": {
             "client_id": str(cid),
             "campaign_id": str(camp_id) if camp_id else "",
+            "event_id": str(event_id) if event_id else "",
             "lead_id": str(lead_uuid) if lead_uuid else "",
             "bot_config_id": str(bot_config_id) if bot_config_id else "",
             "route": bot_config["route"],
@@ -330,6 +332,7 @@ async def fire_call(
             session_call_id=call_id,
             client_id=cid,
             campaign_id=camp_id,
+            event_id=event_id,
             lead_id=lead_uuid,
             bot_config_id=bot_config_id,
             route=bot_config["route"],
@@ -680,6 +683,250 @@ async def run_campaign_dialer(
         await release_dialer_lock(campaign_id, lock_token)
 
 
+async def _release_event_lead_to_pending(
+    pool,
+    lead: dict,
+    event_id: UUID,
+    client_id: UUID,
+    *,
+    defer_until: datetime | None = None,
+) -> None:
+    """Return an Event lead to pending when compliance blocks dialing."""
+
+    lead_id = UUID(str(lead["id"]))
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                SELECT status
+                FROM leads
+                WHERE id = $1
+                  AND client_id = $2
+                  AND event_id = $3
+                FOR UPDATE
+                """,
+                lead_id,
+                client_id,
+                event_id,
+            )
+
+            if not row or row["status"] != "calling":
+                return
+
+            await conn.execute(
+                """
+                UPDATE leads
+                SET status = 'pending',
+                    next_attempt_at = $2
+                WHERE id = $1
+                  AND client_id = $3
+                  AND event_id = $4
+                """,
+                lead_id,
+                defer_until or datetime.now(timezone.utc),
+                client_id,
+                event_id,
+            )
+
+
+async def run_event_dialer(
+    pool,
+    event_id: UUID,
+    client_id: UUID,
+    *,
+    session: aiohttp.ClientSession,
+    host: str = "localhost:7860",
+    lock_token: str,
+) -> None:
+    """Main dialer loop for an Event."""
+
+    logger.info("Event dialer started for event {}", event_id)
+
+    try:
+        while True:
+            if not await refresh_dialer_lock(event_id, lock_token):
+                logger.warning(
+                    "Event dialer lock lost for event {}; stopping",
+                    event_id,
+                )
+                break
+
+            event = await pg_db.get_event(pool, event_id, client_id)
+            if event is None:
+                logger.warning("Event {} not found; stopping dialer", event_id)
+                break
+
+            # Events are always active.
+            if event.get("status") != "active":
+                logger.warning(
+                    "Event {} status={} — stopping dialer",
+                    event_id,
+                    event.get("status"),
+                )
+                break
+
+            max_concurrent = int(
+                event.get("max_concurrent_calls") or 5
+            )
+
+            calling = await pool.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM leads
+                WHERE event_id = $1
+                  AND client_id = $2
+                  AND status = 'calling'
+                """,
+                event_id,
+                client_id,
+            )
+
+            slots = max_concurrent - int(calling or 0)
+
+            if slots <= 0:
+                await asyncio.sleep(5)
+                continue
+
+            leads = await pg_db.claim_event_leads_for_dialer(
+                pool,
+                event_id,
+                client_id,
+                slots,
+            )
+
+            if not leads:
+                logger.info(
+                    "Event {} has no claimable leads; waiting for scheduled leads",
+                    event_id,
+                )
+                await asyncio.sleep(5)
+                continue
+
+            tasks = []
+
+            for lead in leads:
+                allowed, reason = is_call_allowed()
+
+                if not allowed:
+                    logger.warning(
+                        "Skipping Event lead {} ({}): {}",
+                        lead.get("id"),
+                        lead.get("phone"),
+                        reason,
+                    )
+
+                    defer_until = None
+
+                    if "outside 9am-9pm" in reason:
+                        defer_until = next_compliant_time()
+
+                    await _release_event_lead_to_pending(
+                        pool,
+                        lead,
+                        event_id,
+                        client_id,
+                        defer_until=defer_until,
+                    )
+                    continue
+
+                # Resolve bot for this Event lead.
+                lead_outcome = lead.get("outcome")
+
+                if lead_outcome:
+                    mapping = await pg_db.get_event_bot_for_outcome(
+                        pool,
+                        event_id,
+                        lead_outcome,
+                        client_id,
+                    )
+
+                    if mapping is None:
+                        logger.info(
+                            "Event lead {} has terminal outcome '{}' with no bot mapping; skipping",
+                            lead.get("id"),
+                            lead_outcome,
+                        )
+
+                        await _terminalize_event_lead(
+                            pool,
+                            lead,
+                            event_id,
+                            client_id,
+                        )
+                        continue
+
+                    bot_config_id = mapping["bot_config_id"]
+
+                else:
+                    bot_config_id = event["primary_bot_config_id"]
+
+                bot_config = await pg_db.get_bot_config(
+                    pool,
+                    UUID(str(bot_config_id)),
+                    client_id,
+                )
+
+                if bot_config is None:
+                    logger.error(
+                        "Bot config {} missing for Event {} lead {}",
+                        bot_config_id,
+                        event_id,
+                        lead.get("id"),
+                    )
+
+                    await _terminalize_event_lead(
+                        pool,
+                        lead,
+                        event_id,
+                        client_id,
+                    )
+                    continue
+
+                tasks.append(
+                    fire_call(
+                        session,
+                        lead,
+                        {
+                            "id": None,
+                            "client_id": client_id,
+                            "event_id": event_id,
+                            "max_call_minutes": None,
+                            "extraction_schema_override": None,
+                        },
+                        bot_config,
+                        host=host,
+                        pool=pool,
+                        client_id=client_id,
+                        campaign_id=None,
+                        budget_reserved_credits=0,
+                    )
+                )
+
+            if tasks:
+                await asyncio.gather(
+                    *tasks,
+                    return_exceptions=True,
+                )
+
+            cpm = max(
+                int(event.get("calls_per_minute") or 10),
+                1,
+            )
+
+            await asyncio.sleep(60 / cpm)
+
+    except asyncio.CancelledError:
+        logger.info(
+            "Event dialer cancelled for event {}",
+            event_id,
+        )
+        raise
+
+    finally:
+        await release_dialer_lock(event_id, lock_token)
+
+
 async def start_dialer(
     app,
     campaign_id: UUID,
@@ -725,6 +972,65 @@ async def start_dialer(
                 app.state.dialer_tasks.pop(key, None)
 
     task = asyncio.create_task(_runner())
+    _active_tasks[key] = task
+    app.state.dialer_tasks[key] = task
+
+
+async def start_event_dialer(
+    app,
+    event_id: UUID,
+    client_id: UUID,
+    *,
+    host: str | None = None,
+) -> None:
+    pool = app.state.pool
+
+    if pool is None:
+        raise RuntimeError("PostgreSQL pool not available")
+
+    key = f"event:{client_id}:{event_id}"
+
+    existing = _active_tasks.get(key)
+    if existing and not existing.done():
+        logger.warning(
+            "Event dialer already running locally for event {} (key={})",
+            event_id,
+            key,
+        )
+        return
+
+    lock_token = await acquire_dialer_lock(event_id)
+
+    if lock_token is None:
+        logger.warning(
+            "Event dialer lock not acquired for event {} — another worker is active",
+            event_id,
+        )
+        return
+
+    h = host or os.getenv(
+        "DIALER_CALLBACK_HOST",
+        "localhost:7860",
+    )
+
+    async def _runner() -> None:
+        try:
+            await run_event_dialer(
+                pool,
+                event_id,
+                client_id,
+                session=app.state.session,
+                host=h,
+                lock_token=lock_token,
+            )
+        finally:
+            if app.state.dialer_tasks.get(key) is task:
+                app.state.dialer_tasks.pop(key, None)
+
+            _active_tasks.pop(key, None)
+
+    task = asyncio.create_task(_runner())
+
     _active_tasks[key] = task
     app.state.dialer_tasks[key] = task
 
