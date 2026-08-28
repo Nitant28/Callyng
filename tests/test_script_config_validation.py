@@ -75,6 +75,28 @@ def test_default_template_sts():
     assert tpl["route"] == "sts"
     assert tpl["extraction_schema"]["mode"] == "both"
     assert "intent_status" in str(tpl["extraction_schema"])
+    assert tpl["cascade_stt_settings"] == {}
+    assert tpl["cascade_tts_voice"] == ""
+
+
+def test_default_template_cascaded_has_optimized_settings():
+    tpl = default_template("cascaded")
+    assert tpl["route"] == "cascaded"
+    assert tpl["cascade_stt_settings"]["language"] == "hi-IN"
+    assert tpl["cascade_stt_settings"]["mode"] == "transcribe"
+    assert tpl["cascade_llm_settings"]["temperature"] == 0.2
+    assert tpl["cascade_llm_settings"]["max_tokens"] == 512
+    assert tpl["cascade_tts_settings"]["language"] == "hi"
+    assert tpl["cascade_tts_voice"] == tpl["cascade_tts_settings"]["voice"]
+    assert tpl["cascade_tts_voice"]
+    assert tpl["script_id"] == "cascade_outbound"
+    assert tpl["live_tools_enabled"] is True
+    assert tpl["transfer_enabled"] is False
+    assert any(t.get("name") == "push_lead_data" for t in tpl["cascade_live_tools"])
+    assert "transfer_call" in tpl["system_instruction_template"]
+    assert "end_call" in tpl["system_instruction_template"]
+    assert "push_lead_data" in tpl["system_instruction_template"]
+    validate_script_config_payload(tpl, partial=False)
 
 
 def test_build_config_snapshot_omits_id():

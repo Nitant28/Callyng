@@ -415,6 +415,28 @@ def records_to_dicts(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
     return [record_to_dict(r) for r in records if record_to_dict(r) is not None]
 
 
+_CALL_DATA_PUBLIC_KEYS = ("setup_charge", "duration_charge", "is_test_call")
+
+
+def public_call_detail(row: dict | None) -> dict | None:
+    """Strip telephony dumps, storage keys, and internal COGS before the UI.
+
+    Transcript / extraction stay — those are loaded only by drawer detail GETs.
+    ``cost_usd`` is provider COGS and is never returned to clients.
+    """
+    if row is None:
+        return None
+    out = dict(row)
+    out.pop("plivo_hangup_json", None)
+    out.pop("cost_usd", None)
+    data = out.get("call_data")
+    if isinstance(data, dict):
+        out["call_data"] = {k: data[k] for k in _CALL_DATA_PUBLIC_KEYS if k in data}
+    recording_key = out.pop("recording_url", None)
+    out["has_recording"] = bool(recording_key)
+    return out
+
+
 # ── Clients ───────────────────────────────────────────────────────────────────
 
 
@@ -723,7 +745,10 @@ async def create_script_config(
                         goodbye_markers,
                         cascade_stt_provider, cascade_stt_model,
                         cascade_llm_provider, cascade_llm_model,
-                        cascade_tts_provider, cascade_tts_voice, cascade_live_tools,
+                        cascade_tts_provider, cascade_tts_voice, cascade_tts_model,
+                        cascade_stt_settings, cascade_llm_settings, cascade_tts_settings,
+                        cascade_live_tools,
+                        transfer_enabled, transfer_number, live_tools_enabled,
                         extraction_schema, lead_schema,
                         normalization_rules, outcome_event_map,
                         outcome_terminal, outcome_retry, outcome_callback,outcome_bot_follow_up,
@@ -734,11 +759,14 @@ async def create_script_config(
                         $4, $5, $6, $7,
                         $8, $9, $10, $11,
                         $12, $13::jsonb, $14::jsonb,
-                        $15, $16, $17, $18, $19, $20, $21::jsonb,
-                        $22::jsonb, $23::jsonb,
-                        $24::jsonb, $25::jsonb,
-                        $26::jsonb, $27::jsonb, $28::jsonb, $29::jsonb,
-                        $30, $31
+                        $15, $16, $17, $18, $19, $20, $21,
+                        $22::jsonb, $23::jsonb, $24::jsonb,
+                        $25::jsonb,
+                        $26, $27, $28,
+                        $29::jsonb, $30::jsonb,
+                        $31::jsonb, $32::jsonb,
+                        $33::jsonb, $34::jsonb, $35::jsonb,
+                        $36, $37
                     )
                     RETURNING *
                     """,
@@ -757,12 +785,19 @@ async def create_script_config(
                 _script_config_json(data.get("bootstrap_messages_json") or []),
                 _script_config_json(data.get("goodbye_markers") or []),
                 data.get("cascade_stt_provider", "sarvam"),
-                data.get("cascade_stt_model", "saarika:v2.5"),
+                data.get("cascade_stt_model", "saaras:v3"),
                 data.get("cascade_llm_provider", "groq"),
-                data.get("cascade_llm_model", "llama-3.3-70b-versatile"),
+                data.get("cascade_llm_model", "openai/gpt-oss-120b"),
                 data.get("cascade_tts_provider", "cartesia"),
-                data.get("cascade_tts_voice", "sonic-3"),
+                data.get("cascade_tts_voice") or None,
+                data.get("cascade_tts_model", "sonic-3.5"),
+                _script_config_json(data.get("cascade_stt_settings") or {}),
+                _script_config_json(data.get("cascade_llm_settings") or {}),
+                _script_config_json(data.get("cascade_tts_settings") or {}),
                 _script_config_json(data.get("cascade_live_tools") or []),
+                bool(data.get("transfer_enabled", False)),
+                (str(data.get("transfer_number") or "").strip() or None),
+                bool(data.get("live_tools_enabled", False)),
                 _script_config_json(data["extraction_schema"]),
                 _script_config_json(data.get("lead_schema") or {"fields": []}),
                 _script_config_json(data.get("normalization_rules") or []),
@@ -821,7 +856,14 @@ _SCRIPT_CONFIG_PATCHABLE = frozenset(
         "cascade_llm_model",
         "cascade_tts_provider",
         "cascade_tts_voice",
+        "cascade_tts_model",
+        "cascade_stt_settings",
+        "cascade_llm_settings",
+        "cascade_tts_settings",
         "cascade_live_tools",
+        "transfer_enabled",
+        "transfer_number",
+        "live_tools_enabled",
         "extraction_schema",
         "lead_schema",
         "normalization_rules",
@@ -838,6 +880,9 @@ _SCRIPT_CONFIG_JSONB = frozenset(
     {
         "bootstrap_messages_json",
         "goodbye_markers",
+        "cascade_stt_settings",
+        "cascade_llm_settings",
+        "cascade_tts_settings",
         "cascade_live_tools",
         "extraction_schema",
         "lead_schema",
@@ -4212,6 +4257,25 @@ async def patch_call_log_post_call_snapshot(
     return row is not None
 
 
+async def mark_call_transferred(pool: asyncpg.Pool, session_call_id: str) -> None:
+    """Flag call_data.transferred so hangup can skip callee-callback scheduling."""
+    sid = (session_call_id or "").strip()
+    if not sid:
+        return
+    await pool.execute(
+        """
+        UPDATE call_logs
+        SET call_data = CASE
+            WHEN jsonb_typeof(COALESCE(call_data, '{}'::jsonb)) = 'object'
+            THEN COALESCE(call_data, '{}'::jsonb) || '{"transferred": true}'::jsonb
+            ELSE '{"transferred": true}'::jsonb
+        END
+        WHERE session_call_id = $1
+        """,
+        sid,
+    )
+
+
 async def mark_call_log_not_in_progress(
     pool: asyncpg.Pool,
     session_call_id: str,
@@ -4637,6 +4701,12 @@ async def finalize_call_log(
     setup_charge: Decimal | float | None = None,
     duration_charge: Decimal | float | None = None,
 ) -> None:
+    """Write terminal call_log fields.
+
+    Recovered sessions may leave ``cost_usd`` NULL. When ``usage`` includes
+    ``cost_usd``, it is written with COALESCE so an empty later usage dict
+    cannot wipe a value already stored.
+    """
     ext = extraction_json or {}
     qual = qualified if qualified is not None else (outcome == "Interested")
     transcript_json = transcript
@@ -4660,7 +4730,8 @@ async def finalize_call_log(
                 WHEN jsonb_typeof(COALESCE(call_data, '{}'::jsonb)) = 'object'
                 THEN COALESCE(call_data, '{}'::jsonb) || $13::jsonb
                 ELSE $13::jsonb
-            END
+            END,
+            cost_usd = COALESCE($14, cost_usd)
     """
     charge_patch: dict[str, float] = {}
     if setup_charge is not None:
@@ -4681,12 +4752,13 @@ async def finalize_call_log(
         extraction_model,
         extraction_error,
         charge_patch,
+        usage["cost_usd"] if "cost_usd" in usage else None,
     ]
     if transcript_json is not None:
-        sql += ", transcript = $14::jsonb WHERE session_call_id = $15"
+        sql += ", transcript = $15::jsonb WHERE session_call_id = $16"
         args.extend([transcript_json, session_call_id])
     else:
-        sql += " WHERE session_call_id = $14"
+        sql += " WHERE session_call_id = $15"
         args.append(session_call_id)
 
     if isinstance(pool_or_conn, asyncpg.Pool):

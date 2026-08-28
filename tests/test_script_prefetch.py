@@ -62,12 +62,19 @@ async def test_render_script_config_substitutes_templates():
         "vad_silence_duration_ms": 800,
         "vad_prefix_padding_ms": 300,
         "cascade_stt_provider": "sarvam",
-        "cascade_stt_model": "saarika:v2.5",
+        "cascade_stt_model": "saaras:v3",
         "cascade_llm_provider": "groq",
-        "cascade_llm_model": "llama-3.3-70b-versatile",
+        "cascade_llm_model": "openai/gpt-oss-120b",
         "cascade_tts_provider": "cartesia",
-        "cascade_tts_voice": "sonic-3",
+        "cascade_tts_voice": "",
+        "cascade_tts_model": "sonic-3.5",
+        "cascade_stt_settings": {"language": "unknown"},
+        "cascade_llm_settings": {},
+        "cascade_tts_settings": {},
         "cascade_live_tools": [],
+        "transfer_enabled": True,
+        "transfer_number": "+919876543210",
+        "live_tools_enabled": True,
         "extraction_schema": {"fields": {}},
         "lead_schema": {"fields": []},
         "normalization_rules": [],
@@ -83,6 +90,14 @@ async def test_render_script_config_substitutes_templates():
     assert cfg["system_prompt"] == "Hello Asha from Mumbai"
     assert cfg["bootstrap_messages"][0]["content"] == "Connected. Greet Asha."
     assert cfg["version"] == 2
+    assert cfg["cascade_tts_model"] == "sonic-3.5"
+    assert cfg["cascade_tts_voice"] == ""
+    assert cfg["cascade_stt_settings"] == {"language": "unknown"}
+    assert cfg["cascade_llm_settings"] == {}
+    assert cfg["cascade_tts_settings"] == {}
+    assert cfg["transfer_enabled"] is True
+    assert cfg["transfer_number"] == "+919876543210"
+    assert cfg["live_tools_enabled"] is True
 
 
 @pytest.mark.asyncio
