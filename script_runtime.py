@@ -195,6 +195,7 @@ class CascadeRuntime:
     tts_voice: str
     tts_settings: dict[str, Any]
     push_lead_data_schema: FunctionSchema | None
+    bootstrap_messages: list[dict[str, Any]] = field(default_factory=list)
     live_tools: list[Any] = field(default_factory=list)
     live_tools_enabled: bool = False
     transfer_enabled: bool = False
@@ -630,6 +631,9 @@ def _cascade_from_prefetch(prefetch: dict[str, Any]) -> CascadeRuntime:
     live_tools = prefetch.get("cascade_live_tools") or []
     if not isinstance(live_tools, list):
         live_tools = []
+    bootstrap = prefetch.get("bootstrap_messages") or []
+    if not isinstance(bootstrap, list):
+        bootstrap = []
     return CascadeRuntime(
         script_id=str(prefetch.get("script_id") or ""),
         source="script_config",
@@ -646,6 +650,7 @@ def _cascade_from_prefetch(prefetch: dict[str, Any]) -> CascadeRuntime:
         tts_voice=voice,
         tts_settings=tts_settings,
         push_lead_data_schema=build_push_lead_data_schema(live_tools),
+        bootstrap_messages=[dict(m) for m in bootstrap if isinstance(m, dict)],
         live_tools=list(live_tools),
         live_tools_enabled=_as_bool(prefetch.get("live_tools_enabled")),
         transfer_enabled=_as_bool(prefetch.get("transfer_enabled")),
@@ -671,6 +676,7 @@ def _cascade_from_module(mod: ModuleType, ctx: LeadContext) -> CascadeRuntime:
         tts_voice="",
         tts_settings={},
         push_lead_data_schema=None,
+        bootstrap_messages=[],
         live_tools=[],
         live_tools_enabled=False,
         transfer_enabled=False,
