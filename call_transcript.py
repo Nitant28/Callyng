@@ -7,6 +7,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from loguru import logger
@@ -256,13 +257,32 @@ async def _run_campaign_post_call(
             return
 
         # ---------------------------------------------------------
-        # NO CAMPAIGN / EVENT
+        # NO CAMPAIGN / EVENT (Admin dial-test / ephemeral calls)
+        # Still persist extraction + usage so Admin/client detail UI works.
         # ---------------------------------------------------------
-        logger.warning(
-            "post_call skipped: context has neither campaign_id nor event_id "
-            "for session={} ctx={}",
+        outcome = str((extraction or {}).get("intent_status") or "Unknown")
+        usage = dict(usage_dict or {})
+        await pg_db.finalize_call_log(
+            pool,
             session_call_id,
-            resolved_ctx,
+            duration_seconds,
+            outcome,
+            extraction or {},
+            Decimal("0"),
+            Decimal("0"),
+            usage,
+            transcript=transcript,
+            extraction_model=extraction_model,
+            extraction_error=extraction_error,
+            qualified=(outcome == "Interested"),
+            setup_charge=Decimal("0"),
+            duration_charge=Decimal("0"),
+        )
+        logger.debug(
+            "dial-test/orphan call_log finalized session={} outcome={} ext_keys={}",
+            session_call_id,
+            outcome,
+            len(extraction or {}),
         )
 
     except Exception as exc:
@@ -809,7 +829,7 @@ def attach_pipeline_finalize(
             spawn_background_task(_extract_patch_and_webhook())
         else:
             logger.debug("post_call_extract skipped: {}", post_call_missing_key_message())
-            if session_call_id and _pg_context_has_campaign_fields(resolved_ctx):
+            if session_call_id:
                 spawn_background_task(
                     _run_campaign_post_call(
                         resolved_ctx=resolved_ctx,

@@ -88,6 +88,8 @@ CASCADE_VAD_PARAMS = VADParams(
     min_volume=0.4,
 )
 CASCADE_SPEECH_TIMEOUT_S = 0.6
+
+
 # Empty LLMContext + LLMRunFrame yields a 0-length assistant turn (no TTS).
 # Mute-until-first-bot then deadlocks: user stays muted, greeting never starts.
 def cascade_kickoff_messages(lead_name: str) -> list[dict[str, str]]:
@@ -218,6 +220,10 @@ async def run_bot(
     session_call_id = body.get("_session_call_id")
     schedule_post_call_snapshot_write(session_call_id, runtime, pg)
 
+    bootstrap_from_prefetch = list(runtime.bootstrap_messages or [])
+    kickoff = cascade_kickoff_messages(ctx.lead_name)
+    context_messages = bootstrap_from_prefetch if bootstrap_from_prefetch else kickoff
+
     logger.info(
         "Starting cascaded bot — script {} | stt={}/{} llm={}/{} tts={}/{}",
         runtime.script_id,
@@ -268,7 +274,7 @@ async def run_bot(
         raise
 
     context = LLMContext(
-        messages=cascade_kickoff_messages(ctx.lead_name),
+        messages=context_messages,
         tools=tools,
     )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(

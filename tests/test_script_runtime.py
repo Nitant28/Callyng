@@ -148,6 +148,9 @@ def test_resolve_cascade_runtime_prefetch_hit():
             "cascade_tts_voice": "voice-123",
             "cascade_tts_settings": {},
             "cascade_live_tools": [],
+            "bootstrap_messages": [
+                {"role": "user", "content": "CMS kickoff for {lead_name}"}
+            ],
             "extraction_schema": {"fields": {}},
         },
     }
@@ -159,6 +162,9 @@ def test_resolve_cascade_runtime_prefetch_hit():
     assert runtime.tts_provider == "cartesia"
     assert runtime.llm_settings == {"temperature": 0.2}
     assert runtime.tts_voice == "voice-123"
+    assert runtime.bootstrap_messages == [
+        {"role": "user", "content": "CMS kickoff for {lead_name}"}
+    ]
 
 
 def test_resolve_cascade_runtime_module_fallback():
