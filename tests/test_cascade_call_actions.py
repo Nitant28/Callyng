@@ -11,27 +11,27 @@ from script_runtime import CascadeRuntime, build_live_tool_schemas
 
 
 def _runtime(**overrides) -> CascadeRuntime:
-    kwargs = dict(
-        script_id="x",
-        source="script_config",
-        system_prompt="hi",
-        extraction_schema={},
-        stt_provider="sarvam",
-        stt_model="saaras:v3",
-        stt_settings={},
-        llm_provider="groq",
-        llm_model="openai/gpt-oss-120b",
-        llm_settings={},
-        tts_provider="cartesia",
-        tts_model="sonic-3.5",
-        tts_voice="",
-        tts_settings={},
-        push_lead_data_schema=None,
-        live_tools=[],
-        live_tools_enabled=False,
-        transfer_enabled=False,
-        transfer_number="",
-    )
+    kwargs = {
+        "script_id": "x",
+        "source": "script_config",
+        "system_prompt": "hi",
+        "extraction_schema": {},
+        "stt_provider": "sarvam",
+        "stt_model": "saaras:v3",
+        "stt_settings": {},
+        "llm_provider": "groq",
+        "llm_model": "openai/gpt-oss-120b",
+        "llm_settings": {},
+        "tts_provider": "cartesia",
+        "tts_model": "sonic-3.5",
+        "tts_voice": "",
+        "tts_settings": {},
+        "push_lead_data_schema": None,
+        "live_tools": [],
+        "live_tools_enabled": False,
+        "transfer_enabled": False,
+        "transfer_number": "",
+    }
     kwargs.update(overrides)
     return CascadeRuntime(**kwargs)
 
