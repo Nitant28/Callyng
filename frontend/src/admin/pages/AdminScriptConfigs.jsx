@@ -5,6 +5,7 @@ import adminApi from "../../shared/api/admin";
 import ScriptingGuideModal from '../components/ScriptingGuideModal';
 import CascadeScriptingGuideModal from '../components/CascadeScriptingGuideModal';
 import CascadeModelsPanel from '../components/CascadeModelsPanel';
+import LeadSchemaBuilder from '../components/LeadSchemaBuilder';
 import {
   getRoleKeys,
   isCascadeConfigValidForSave,
@@ -440,17 +441,6 @@ export default function AdminScriptConfigs() {
     fetchConfigs();
   }, []);
 
-  useEffect(() => {
-    if (isEditorOpen && activeTab === 'models' && !cascadeCatalog && !catalogLoading) {
-      fetchCascadeCatalog();
-    }
-  }, [isEditorOpen, activeTab, cascadeCatalog, catalogLoading]);
-
-  const getClientName = (clientId) => {
-    const c = clients.find((c) => c.id === clientId);
-    return c ? c.name : "Unknown Client";
-  };
-
   const fetchCascadeCatalog = async (force = false) => {
     if (!force && (cascadeCatalog || catalogLoading)) return cascadeCatalog;
     setCatalogLoading(true);
@@ -466,6 +456,17 @@ export default function AdminScriptConfigs() {
     } finally {
       setCatalogLoading(false);
     }
+  };
+
+  useEffect(() => {
+    if (isEditorOpen && activeTab === 'models' && !cascadeCatalog && !catalogLoading) {
+      fetchCascadeCatalog();
+    }
+  }, [isEditorOpen, activeTab, cascadeCatalog, catalogLoading]);
+
+  const getClientName = (clientId) => {
+    const c = clients.find((c) => c.id === clientId);
+    return c ? c.name : "Unknown Client";
   };
 
   const prepareEditorConfig = (config) => {

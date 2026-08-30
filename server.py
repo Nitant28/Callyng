@@ -20,7 +20,7 @@ import aiohttp  # noqa: E402
 import uvicorn  # noqa: E402
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import HTMLResponse, JSONResponse, Response  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
 from loguru import logger  # noqa: E402
 from xml.sax.saxutils import escape as xml_escape  # noqa: E402
 from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: E402

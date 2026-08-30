@@ -35,15 +35,15 @@ def _clear_cascade_rates(monkeypatch):
 
 
 def _cost(**overrides):
-    kwargs = dict(
-        duration_seconds=60,
-        usage_prompt_tokens=0,
-        usage_completion_tokens=0,
-        usage_tts_characters=0,
-        stt_provider="sarvam",
-        llm_provider="groq",
-        tts_provider="cartesia",
-    )
+    kwargs = {
+        "duration_seconds": 60,
+        "usage_prompt_tokens": 0,
+        "usage_completion_tokens": 0,
+        "usage_tts_characters": 0,
+        "stt_provider": "sarvam",
+        "llm_provider": "groq",
+        "tts_provider": "cartesia",
+    }
     kwargs.update(overrides)
     return compute_cascade_cost_usd(**kwargs)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from api.routes.internal import CreateOutcomeMappingBody, PatchEventBody
