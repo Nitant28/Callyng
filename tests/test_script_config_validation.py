@@ -145,6 +145,14 @@ def test_validate_script_config_parses_json_string_extraction_schema():
     assert data["extraction_schema"]["mode"] == "both"
 
 
+def test_default_template_cascaded_includes_bot_follow_up_bucket():
+    tpl = default_template("cascaded")
+    assert tpl["route"] == "cascaded"
+    assert tpl["outcome_bot_follow_up"] == []
+    assert tpl["transfer_enabled"] is False
+    assert tpl["live_tools_enabled"] is True
+
+
 def test_normalize_script_config_payload_route_alias():
     payload = normalize_script_config_payload({"route": "cascade"})
     assert payload["route"] == "cascaded"

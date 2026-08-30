@@ -44,7 +44,10 @@ async def list_calls(
     """
     cid = client_id_uuid(client)
     calls, total_count = await pg_db.list_call_logs(pool, cid, limit=limit, offset=offset, search=search)
-    return {"calls": calls, "total_count": total_count}
+    return {
+        "calls": [pg_db.public_call_detail(c) for c in calls],
+        "total_count": total_count,
+    }
 
 
 @router.get("/{session_call_id}")
@@ -57,7 +60,7 @@ async def get_call(
     row = await _resolve_call_log(pool, session_call_id, cid)
     if row is None:
         raise HTTPException(404, "Call not found")
-    return dict(row)
+    return pg_db.public_call_detail(dict(row))
 
 
 @router.get("/{session_call_id}/recording")

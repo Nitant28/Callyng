@@ -1413,6 +1413,74 @@ export default function AdminScriptConfigs() {
                 </div>
               )}
 
+                {activeTab === "post-call" && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">
+                        Extraction Schema (JSON Schema)
+                      </label>
+                      <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-2">
+                        Must include an <code>intent_status</code> enum in{" "}
+                        <code>fields</code> (unless using summary-only mode).
+                        Those values drive the outcome mapper below.
+                      </p>
+                      <textarea
+                        rows="10"
+                        className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text"
+                        value={editingConfig.extraction_schema || ""}
+                        onChange={(e) =>
+                          handleEditorChange(
+                            "extraction_schema",
+                            e.target.value,
+                          )
+                        }
+                      ></textarea>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">
+                        Normalization Rules (JSON)
+                      </label>
+                      <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-2">
+                        Deterministic corrections applied after AI extraction,
+                        before bucketing. Encodes reliable domain logic.
+                      </p>
+                      <textarea
+                        rows="6"
+                        className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text"
+                        value={editingConfig.normalization_rules || ""}
+                        onChange={(e) =>
+                          handleEditorChange(
+                            "normalization_rules",
+                            e.target.value,
+                          )
+                        }
+                      ></textarea>
+                    </div>
+                    <div>
+                      <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">
+                        Outcome Event Map (JSON)
+                      </label>
+                      <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mb-2">
+                        Maps an <code>intent_status</code> value to the webhook
+                        event name fired to the client&apos;s automation (e.g. n8n).
+                        Example:{" "}
+                        <code>
+                          {"{"}"Interested": "lead_qualified"{"}"}
+                        </code>
+                      </p>
+                      <textarea
+                        rows="4"
+                        className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text"
+                        value={editingConfig.outcome_event_map || ""}
+                        onChange={(e) =>
+                          handleEditorChange(
+                            "outcome_event_map",
+                            e.target.value,
+                          )
+                        }
+                      ></textarea>
+                    </div>
+
                     <OutcomeDragDropEditor
                       editingConfig={editingConfig}
                       setEditingConfig={setEditingConfig}
@@ -1425,54 +1493,6 @@ export default function AdminScriptConfigs() {
                   </div>
                 )}
 
-                {activeTab === "advanced" && (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">
-                        Lead Schema (JSON)
-                      </label>
-                      <textarea
-                        rows="5"
-                        className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text"
-                        value={editingConfig.lead_schema || ""}
-                        onChange={(e) =>
-                          handleEditorChange("lead_schema", e.target.value)
-                        }
-                      ></textarea>
-                    </div>
-                    <div>
-                      <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">
-                        Cascade Live Tools (JSON)
-                      </label>
-                      <textarea
-                        rows="5"
-                        className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text"
-                        value={editingConfig.cascade_live_tools || ""}
-                        onChange={(e) =>
-                          handleEditorChange(
-                            "cascade_live_tools",
-                            e.target.value,
-                          )
-                        }
-                      ></textarea>
-                    </div>
-                    <div>
-                      <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">
-                        Goodbye Markers (JSON)
-                      </label>
-                      <textarea
-                        rows="3"
-                        className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text"
-                        value={editingConfig.goodbye_markers || ""}
-                        onChange={(e) =>
-                          handleEditorChange("goodbye_markers", e.target.value)
-                        }
-                      ></textarea>
-                    </div>
-                  )}
-                </div>
-              )}
-              
               {activeTab === 'advanced' && (
                 <div className="space-y-4">
                   <LeadSchemaBuilder
@@ -1537,10 +1557,11 @@ export default function AdminScriptConfigs() {
                     <label className="block text-sm mb-1 text-on-surface dark:text-molten-text">Goodbye Markers (JSON)</label>
                     <textarea rows="3" className="w-full json-editor bg-surface-container-lowest dark:bg-[#1A1A24] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 text-on-surface dark:text-molten-text" value={editingConfig.goodbye_markers || ''} onChange={e => handleEditorChange('goodbye_markers', e.target.value)}></textarea>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
+        </div>
         </div>
       )}
 

@@ -765,8 +765,8 @@ async def create_script_config(
                         $26, $27, $28,
                         $29::jsonb, $30::jsonb,
                         $31::jsonb, $32::jsonb,
-                        $33::jsonb, $34::jsonb, $35::jsonb,
-                        $36, $37
+                        $33::jsonb, $34::jsonb, $35::jsonb, $36::jsonb,
+                        $37, $38
                     )
                     RETURNING *
                     """,
@@ -2386,11 +2386,7 @@ async def count_event_leads(
                 WHERE status = 'callback_scheduled'
             ) AS callback_leads,
             COUNT(*) FILTER (
-                WHERE status IN (
-                    'completed',
-                    'interested',
-                    'not_interested'
-                )
+                WHERE status = 'completed'
             ) AS completed_leads,
             COUNT(*) FILTER (
                 WHERE status = 'failed'
@@ -3332,7 +3328,8 @@ async def finalize_event_call_log(
                 ) = 'object'
                 THEN COALESCE(call_data, '{}'::jsonb) || $13::jsonb
                 ELSE $13::jsonb
-            END
+            END,
+            cost_usd = COALESCE($14, cost_usd)
     """
 
     args: list[Any] = [
@@ -3353,14 +3350,15 @@ async def finalize_event_call_log(
         extraction_model,
         extraction_error,
         charge_patch,
+        usage["cost_usd"] if "cost_usd" in usage else None,
     ]
 
     if transcript is not None:
         sql += """
-            , transcript = $14::jsonb
-            WHERE session_call_id = $15
-              AND client_id = $16
-              AND event_id = $17
+            , transcript = $15::jsonb
+            WHERE session_call_id = $16
+              AND client_id = $17
+              AND event_id = $18
         """
 
         args.extend(
@@ -3373,9 +3371,9 @@ async def finalize_event_call_log(
         )
     else:
         sql += """
-            WHERE session_call_id = $14
-              AND client_id = $15
-              AND event_id = $16
+            WHERE session_call_id = $15
+              AND client_id = $16
+              AND event_id = $17
         """
 
         args.extend(
@@ -4154,11 +4152,12 @@ async def insert_call_log_start(
     session_call_id: str,
     client_id: UUID,
     campaign_id: UUID | None,
-    event_id: UUID | None,
     lead_id: UUID | None,
     bot_config_id: UUID | None,
     route: str,
     started_at: datetime,
+    *,
+    event_id: UUID | None = None,
     call_data: dict | None = None,
     is_test_call: bool = False,
     budget_reserved_credits: Decimal | float = 0,

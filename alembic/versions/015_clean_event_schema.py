@@ -7,8 +7,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "012_clean_event_schema"
-down_revision: Union[str, Sequence[str], None] = "011_bot_fixed_start_credits"
+revision: str = "015_clean_event_schema"
+down_revision: Union[str, Sequence[str], None] = "014_cascade_call_actions"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

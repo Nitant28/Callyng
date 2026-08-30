@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.auth import client_id_uuid, get_client_from_token, get_pool
+from api.routes.internal import CreateOutcomeMappingBody, PatchEventBody
 from dialer.concurrent_dialer import start_event_dialer
 from db import postgres as pg_db
 
@@ -118,7 +119,9 @@ async def patch_event(
             cid,
             name=body.name,
             description=body.description,
-            source_type=body.source_type,
+            source_types=body.source_types,
+            lead_handling=body.lead_handling,
+            status=body.status,
             primary_bot_config_id=body.primary_bot_config_id,
             max_concurrent_calls=body.max_concurrent_calls,
             calls_per_minute=body.calls_per_minute,

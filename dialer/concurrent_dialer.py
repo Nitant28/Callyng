@@ -177,6 +177,7 @@ async def fire_call(
     cid = client_id or UUID(str(campaign["client_id"]))
     camp_id = campaign_id or (UUID(str(campaign["id"])) if campaign.get("id") else None)
     event_id = campaign.get("event_id")
+    event_id_uuid = UUID(str(event_id)) if event_id else None
     lead_uuid = UUID(str(lead["id"])) if lead.get("id") else None
     bot_config_id = UUID(str(bot_config["id"])) if bot_config.get("id") else None
     
@@ -261,7 +262,9 @@ async def fire_call(
                 script_config_id,
                 bot_config.get("id"),
             )
-            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            await _release_dialed_lead_to_pending(
+                pool, lead, camp_id=camp_id, event_id=event_id_uuid, client_id=cid
+            )
             return
         if row.get("route") != bot_config["route"]:
             logger.error(
@@ -271,7 +274,9 @@ async def fire_call(
                 bot_config["route"],
             )
             if lead_uuid:
-                await _release_lead_to_pending(pool, lead, camp_id, cid)
+                await _release_dialed_lead_to_pending(
+                    pool, lead, camp_id=camp_id, event_id=event_id_uuid, client_id=cid
+                )
             return
         lead_dict = build_lead_dict(lead, meta)
         try:
@@ -286,7 +291,9 @@ async def fire_call(
                 exc,
             )
             if lead_uuid:
-                await _release_lead_to_pending(pool, lead, camp_id, cid)
+                await _release_dialed_lead_to_pending(
+                    pool, lead, camp_id=camp_id, event_id=event_id_uuid, client_id=cid
+                )
             return
         await register_prefetched_config(call_id, config)
         prefetch_registered = True
@@ -309,7 +316,9 @@ async def fire_call(
         if prefetch_registered:
             await pop_prefetched_config(call_id)
         if lead_uuid:
-            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            await _release_dialed_lead_to_pending(
+                pool, lead, camp_id=camp_id, event_id=event_id_uuid, client_id=cid
+            )
         raise Exception("Plivo error (402): Insufficient balance")
 
     reserved = Decimal("0")
@@ -353,7 +362,9 @@ async def fire_call(
             exc,
         )
         if lead_uuid:
-            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            await _release_dialed_lead_to_pending(
+                pool, lead, camp_id=camp_id, event_id=event_id_uuid, client_id=cid
+            )
         raise
 
     try:
@@ -392,7 +403,9 @@ async def fire_call(
             exc,
         )
         if lead_uuid:
-            await _release_lead_to_pending(pool, lead, camp_id, cid)
+            await _release_dialed_lead_to_pending(
+                pool, lead, camp_id=camp_id, event_id=event_id_uuid, client_id=cid
+            )
         raise
 
 
@@ -683,6 +696,34 @@ async def run_campaign_dialer(
         await release_dialer_lock(campaign_id, lock_token)
 
 
+async def _release_dialed_lead_to_pending(
+    pool,
+    lead: dict,
+    *,
+    camp_id: UUID | None,
+    event_id: UUID | None,
+    client_id: UUID,
+    defer_until: datetime | None = None,
+) -> None:
+    """Return a lead to pending after a dial failure (campaign or event)."""
+    if event_id is not None:
+        await _release_event_lead_to_pending(
+            pool,
+            lead,
+            event_id,
+            client_id,
+            defer_until=defer_until,
+        )
+        return
+    await _release_lead_to_pending(
+        pool,
+        lead,
+        camp_id,
+        client_id,
+        defer_until=defer_until,
+    )
+
+
 async def _release_event_lead_to_pending(
     pool,
     lead: dict,
@@ -745,7 +786,7 @@ async def run_event_dialer(
 
     try:
         while True:
-            if not await refresh_dialer_lock(event_id, lock_token):
+            if not await refresh_dialer_lock(event_id, lock_token, resource_type="event"):
                 logger.warning(
                     "Event dialer lock lost for event {}; stopping",
                     event_id,
@@ -848,11 +889,12 @@ async def run_event_dialer(
                             lead_outcome,
                         )
 
-                        await _terminalize_event_lead(
+                        await pg_db.terminalize_event_lead(
                             pool,
-                            lead,
                             event_id,
+                            UUID(str(lead["id"])),
                             client_id,
+                            outcome=str(lead_outcome or "Unmapped"),
                         )
                         continue
 
@@ -875,11 +917,12 @@ async def run_event_dialer(
                         lead.get("id"),
                     )
 
-                    await _terminalize_event_lead(
+                    await pg_db.terminalize_event_lead(
                         pool,
-                        lead,
                         event_id,
+                        UUID(str(lead["id"])),
                         client_id,
+                        outcome="Missing_Bot_Config",
                     )
                     continue
 
@@ -924,7 +967,7 @@ async def run_event_dialer(
         raise
 
     finally:
-        await release_dialer_lock(event_id, lock_token)
+        await release_dialer_lock(event_id, lock_token, resource_type="event")
 
 
 async def start_dialer(
@@ -999,7 +1042,7 @@ async def start_event_dialer(
         )
         return
 
-    lock_token = await acquire_dialer_lock(event_id)
+    lock_token = await acquire_dialer_lock(event_id, resource_type="event")
 
     if lock_token is None:
         logger.warning(

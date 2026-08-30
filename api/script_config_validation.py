@@ -77,6 +77,7 @@ _SNAPSHOT_COLUMNS = (
 _DEFAULT_OUTCOME_TERMINAL = ["Interested", "Not_Interested"]
 _DEFAULT_OUTCOME_RETRY = ["Busy", "Unknown", "Wrong_Requirement"]
 _DEFAULT_OUTCOME_CALLBACK = ["Callback_Requested", "Early_Disconnect"]
+_DEFAULT_OUTCOME_BOT_FOLLOW_UP: list[str] = []
 
 _DEFAULT_EXTRACTION_SCHEMA: dict[str, Any] = {
     "mode": "fields",
@@ -238,7 +239,7 @@ def validate_outcome_mapping(
     outcome_terminal: list[Any],
     outcome_retry: list[Any],
     outcome_callback: list[Any],
-    outcome_bot_follow_up: list[Any],
+    outcome_bot_follow_up: list[Any] | None = None,
 ) -> None:
     """Ensure intent_status enum values map exactly once across outcome buckets."""
     if extraction_schema.get("mode") == "summary":
