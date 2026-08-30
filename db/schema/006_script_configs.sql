@@ -27,7 +27,7 @@ CREATE TABLE script_configs (
     cascade_stt_provider    TEXT DEFAULT 'sarvam',
     cascade_stt_model       TEXT DEFAULT 'saarika:v2.5',
     cascade_llm_provider    TEXT DEFAULT 'groq',
-    cascade_llm_model       TEXT DEFAULT 'llama-3.3-70b-versatile',
+    cascade_llm_model       TEXT DEFAULT 'openai/gpt-oss-120b',
     cascade_tts_provider    TEXT DEFAULT 'cartesia',
     cascade_tts_voice       TEXT DEFAULT 'sonic-3',
     cascade_live_tools      JSONB NOT NULL DEFAULT '[]'::jsonb,

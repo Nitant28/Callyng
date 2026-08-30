@@ -108,7 +108,7 @@ EXTRACTION_SCHEMA = {
             "key": "caller_notes",
             "type": "string",
             "required": False,
-            "description": "Other useful facts, or null.",
+            "description": "Other useful facts, or the literal NULL.",
         },
     ],
     "extraction_rules": (
@@ -553,14 +553,17 @@ When in doubt: keep talking. A slightly long call is better than a wrong hangup.
 #   Complements the "don't go silent" guardrail in the system prompt.
 #   Check ProactivityConfig fields before enabling; behaviour can be surprising.
 #
-# filter_incomplete_user_turns: bool
+# filter_incomplete_user_turns: bool  (DEPRECATED in Pipecat 1.7)
 #   Filters turns where user started speaking but didn't complete a thought.
 #   Set False to let through very short turns like "हा", "जी", "यस".
-#   Recommended: False when using START_SENSITIVITY_HIGH
+#   Recommended: False when using START_SENSITIVITY_HIGH.
+#   Prefer user-turn strategies on the aggregator; this Settings field is
+#   deprecated and will be removed in 2.0.
 #
-# user_turn_completion_config: UserTurnCompletionConfig
+# user_turn_completion_config: UserTurnCompletionConfig  (DEPRECATED in Pipecat 1.7)
 #   Fine-grained control over when a user turn is considered "done".
-#   Interacts with VAD end_sensitivity. Check Pipecat source for fields.
+#   Interacts with VAD end_sensitivity. Turn completion is now configured
+#   via user-turn strategies, not this Settings field.
 
 # -----------------------------------------------------------------------------
 # LiveConnectConfig — raw Google API fields
@@ -575,7 +578,8 @@ When in doubt: keep talking. A slightly long call is better than a wrong hangup.
 # safety_settings: list[SafetySetting]
 #   Adjust content safety thresholds per harm category.
 #   Useful if Gemini over-refuses on property/financial terms.
-#   Pass via settings.extra if not surfaced directly.
+#   Cascade GoogleLLMService.Settings (Pipecat 1.7) accepts this as a
+#   first-class field. Gemini Live still does not — pass via settings.extra.
 #
 # explicit_vad_signal: bool
 #   If True, you drive VAD signals manually instead of letting Gemini do it.

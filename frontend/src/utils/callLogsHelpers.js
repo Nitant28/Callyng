@@ -6,15 +6,6 @@ export function formatCallDuration(seconds) {
   return `${m}m ${s < 10 ? `0${s}` : s}s`;
 }
 
-/** Display the billed call cost (1 credit = ₹1). Live / unset rows show an em dash. */
-export function formatCallCost(credits, { inProgress = false } = {}) {
-  if (inProgress) return '—';
-  if (credits == null || credits === '') return '₹0.00';
-  const n = Number(credits);
-  if (!Number.isFinite(n)) return '₹0.00';
-  return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 export function normalizeOutcome(outcome) {
   const raw = (outcome || '').toString().trim();
   if (!raw) return '';
@@ -89,7 +80,6 @@ export function mapCallListRow(row) {
     createdAt: row.created_at,
     campaignId: row.campaign_id,
     inProgress: row.in_progress === true,
-    creditsCharged: row.credits_charged ?? row.creditsCharged ?? null,
   };
 }
 

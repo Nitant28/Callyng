@@ -69,17 +69,14 @@
   gap: 12px;
   flex-wrap: wrap;
 }
-.cl-card__duration,
-.cl-card__cost {
+.cl-card__duration {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: 12px;
   color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
 }
-.cl-card__duration .material-symbols-outlined,
-.cl-card__cost .material-symbols-outlined { font-size: 14px; }
+.cl-card__duration .material-symbols-outlined { font-size: 14px; }
 .cl-card__chevron {
   color: var(--text-caption);
   font-size: 20px;

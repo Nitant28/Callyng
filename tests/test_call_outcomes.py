@@ -1,6 +1,6 @@
 """Unit tests for canonical outcome vocabulary and Plivo mapping."""
 
-from call_outcomes import outcome_from_plivo_status
+from call_outcomes import SYSTEM_OUTCOMES, TERMINAL, outcome_from_plivo_status
 
 
 def test_outcome_from_plivo_status_busy():
@@ -18,6 +18,11 @@ def test_outcome_from_plivo_status_reject():
 
 def test_outcome_from_plivo_status_carrier_failed():
     assert outcome_from_plivo_status("failed") == "Carrier_Failed"
+
+
+def test_transferred_is_terminal_system_outcome():
+    assert "Transferred" in TERMINAL
+    assert "Transferred" in SYSTEM_OUTCOMES
 
 
 def test_outcome_from_plivo_status_unknown():

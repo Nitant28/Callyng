@@ -11,6 +11,7 @@ from pipecat.transcriptions.language import Language
 from api.script_config_validation import validate_script_config_payload
 from lead_context import LeadContext
 from n8n_webhook import outcome_to_event
+from providers.catalog import default_cascade_boilerplate
 from script_runtime import (
     DEFAULT_OUTCOME_CALLBACK,
     DEFAULT_OUTCOME_RETRY,
@@ -103,12 +104,19 @@ def export_sts_module(module_stem: str) -> dict[str, Any]:
             "vad_silence_duration_ms": int(vad.silence_duration_ms or 800),
             "vad_prefix_padding_ms": int(vad.prefix_padding_ms or 300),
             "cascade_stt_provider": "sarvam",
-            "cascade_stt_model": "saarika:v2.5",
+            "cascade_stt_model": "saaras:v3",
             "cascade_llm_provider": "groq",
-            "cascade_llm_model": "llama-3.3-70b-versatile",
+            "cascade_llm_model": "openai/gpt-oss-120b",
             "cascade_tts_provider": "cartesia",
-            "cascade_tts_voice": "sonic-3",
+            "cascade_tts_voice": "",
+            "cascade_tts_model": "sonic-3.5",
+            "cascade_stt_settings": {},
+            "cascade_llm_settings": {},
+            "cascade_tts_settings": {},
             "cascade_live_tools": [],
+            "transfer_enabled": False,
+            "transfer_number": "",
+            "live_tools_enabled": False,
             "extraction_schema": dict(mod.EXTRACTION_SCHEMA),
             "lead_schema": dict(getattr(mod, "LEAD_SCHEMA", PYRAMID_LEAD_SCHEMA)),
         }
@@ -140,12 +148,16 @@ def export_cascade_module(module_stem: str) -> dict[str, Any]:
             "vad_silence_duration_ms": 800,
             "vad_prefix_padding_ms": 300,
             "cascade_stt_provider": "sarvam",
-            "cascade_stt_model": "saarika:v2.5",
+            "cascade_stt_model": "saaras:v3",
             "cascade_llm_provider": "groq",
-            "cascade_llm_model": "llama-3.3-70b-versatile",
+            "cascade_llm_model": "openai/gpt-oss-120b",
             "cascade_tts_provider": "cartesia",
-            "cascade_tts_voice": "sonic-3",
+            "cascade_tts_model": "sonic-3.5",
+            **default_cascade_boilerplate(),
             "cascade_live_tools": list(getattr(mod, "CASCADE_LIVE_TOOLS", [])),
+            "transfer_enabled": False,
+            "transfer_number": "",
+            "live_tools_enabled": bool(getattr(mod, "CASCADE_LIVE_TOOLS", [])),
             "extraction_schema": dict(mod.EXTRACTION_SCHEMA),
             "lead_schema": dict(getattr(mod, "LEAD_SCHEMA", PYRAMID_LEAD_SCHEMA)),
         }

@@ -50,7 +50,7 @@ export function createEmptyDialerQueues() {
 const idOf = (row) => (row?.id == null ? null : String(row.id));
 
 function terminalQueueKey(status) {
-  if (status === 'callback_scheduled') return 'callbackQueue';
+  if (status === 'callback_scheduled' || status === 'bot_follow_up') return 'callbackQueue';
   if (status === 'cancelled') return 'cancelledQueue';
   if (status === 'pending') return 'pendingQueue';
   if (status === 'completed' || status === 'failed') return 'completedQueue';

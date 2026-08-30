@@ -198,7 +198,7 @@ async def test_test_endpoint_mocked(client):
                     mock_extract.return_value = (
                         {"intent_status": "Interested"},
                         None,
-                        "llama-3.3-70b-versatile",
+                        "openai/gpt-oss-120b",
                     )
                     res = await client.post(
                         f"/internal/script-configs/{sc_id}/test",

@@ -91,3 +91,86 @@
   background-color: #141210;
   border: 1px solid #2A345E;
 }
+
+/* Cascade Models tab (Phase 1b) */
+.cascade-models-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 1024px) {
+  .cascade-models-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.cascade-role-column {
+  padding: 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-outline-variant);
+  background: var(--color-surface-container-lowest);
+}
+
+.dark .cascade-role-column {
+  border-color: #2A345E;
+  background: #1A1A24;
+}
+
+.cascade-key-warning {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  background: rgb(245 158 11 / 0.12);
+  border: 1px solid rgb(245 158 11 / 0.35);
+  color: rgb(146 64 14);
+}
+
+.dark .cascade-key-warning {
+  color: rgb(253 230 138);
+}
+
+.cascade-legacy-banner {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.375rem;
+  background: rgb(245 158 11 / 0.12);
+  border: 1px solid rgb(245 158 11 / 0.35);
+  color: rgb(146 64 14);
+}
+
+.dark .cascade-legacy-banner {
+  color: rgb(253 230 138);
+}
+
+.cascade-voice-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid var(--color-outline-variant);
+  background: var(--color-surface-container-high);
+  color: var(--color-on-surface);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.cascade-voice-chip:hover {
+  border-color: var(--color-primary);
+  background: rgb(22 71 232 / 0.08);
+}
+
+.dark .cascade-voice-chip {
+  border-color: #2A345E;
+  background: #2A345E;
+  color: var(--color-molten-text);
+}
+
+.dark .cascade-voice-chip:hover {
+  border-color: var(--color-molten-primary);
+  background: rgb(92 247 219 / 0.1);
+}

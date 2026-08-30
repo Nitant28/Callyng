@@ -44,13 +44,13 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
             "key": "bhk_preference",
             "type": "string",
             "required": False,
-            "description": "e.g. 2BHK, 3BHK, or null if not stated.",
+            "description": "e.g. 2BHK, 3BHK, or the literal NULL if not stated.",
         },
         {
             "key": "location_preference",
             "type": "string",
             "required": False,
-            "description": "Area/city mentioned, or null.",
+            "description": "Area/city mentioned, or the literal NULL.",
         },
         {
             "key": "site_visit_agreed",
@@ -62,7 +62,7 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
             "key": "callback_time",
             "type": "string",
             "required": False,
-            "description": "Specific time/date if given, else null.",
+            "description": "Specific time/date if given, else the literal NULL.",
         },
         {
             "key": "language_used",
@@ -75,7 +75,7 @@ PYRAMID_EXTRACTION_SCHEMA: dict = {
             "key": "caller_notes",
             "type": "string",
             "required": False,
-            "description": "Other useful facts, or null.",
+            "description": "Other useful facts, or the literal NULL.",
         },
     ],
     "extraction_rules": PYRAMID_EXTRACTION_RULES,
@@ -124,15 +124,16 @@ PYRAMID_CASCADE_LIVE_TOOLS = [
             },
             "bhk_preference": {
                 "type": "string",
-                "description": "BHK preference: 2BHK, 3BHK, NULL if not collected",
+                "description": "BHK preference: 2BHK, 3BHK, or the string NULL if not collected",
             },
             "location_preference": {
                 "type": "string",
-                "description": "Preferred location in Pune, or NULL if not collected",
+                "description": "Preferred location in Pune, or the string NULL if not collected",
             },
             "callback_time": {
                 "type": "string",
-                "description": "Requested callback time if busy, else NULL",
+                "nullable": True,
+                "description": "Requested callback time if busy; omit or null if none",
             },
             "language_used": {
                 "type": "string",

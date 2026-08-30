@@ -88,6 +88,9 @@ export const getLeadDialState = (lead) => {
     }
     return { label: 'Callback', sub, tone: 'warning' };
   }
+  if (status === 'bot_follow_up') {
+    return { label: 'Bot Follow Up', sub: 'Bot scheduled', tone: 'warning' };
+  }
   if (status === 'pending' && attempts > 0) {
     return { label: 'Pending', sub: `Attempt ${attempts}/${max}`, tone: 'warning' };
   }
@@ -110,6 +113,9 @@ export const getLeadCallResult = (lead) => {
 
   if (status === 'calling') {
     return { label: 'In progress', tone: 'info' };
+  }
+  if (status === 'bot_follow_up') {
+    return { label: 'Bot Follow Up', tone: 'warning' };
   }
   if (!outcome) {
     if (status === 'pending' || status === 'callback_scheduled') return { label: '—', tone: 'neutral' };
@@ -147,6 +153,9 @@ export const getLeadInterestState = (lead) => {
   if (lead?.status === 'calling') {
     return { label: '—', sub: 'On call', tone: 'neutral' };
   }
+  if (lead?.status === 'bot_follow_up') {
+    return { label: '—', sub: 'Bot Follow Up', tone: 'warning' };
+  }
   if (lead?.status === 'pending' || lead?.status === 'callback_scheduled') {
     return { label: '—', sub: 'Pending', tone: 'neutral' };
   }
@@ -159,11 +168,12 @@ const STATUS_RANK = {
   connecting: 1,
   connected: 1,
   busy: 2,
-  callback_scheduled: 3,
-  callback: 3,
-  pending: 4,
-  completed: 5,
-  failed: 6,
+  bot_follow_up: 3,
+  callback_scheduled: 4,
+  callback: 4,
+  pending: 5,
+  completed: 6,
+  failed: 7,
 };
 
 const leadTimestamp = (lead, ...fields) => {
@@ -183,12 +193,9 @@ const leadWasDialed = (lead) =>
 
 /**
  * Live dial stack: current call(s) on top, each finished call drops one row below in LIFO order.
- * Concurrent live calls are always ordered newest-first by last_attempted_at.
  */
 export const sortLeadsCallStack = (rows, { live = false } = {}) => {
   if (!rows?.length) return rows;
-
-  const byId = (a, b) => String(a?.id || '').localeCompare(String(b?.id || ''));
 
   if (!live) {
     return [...rows].sort((a, b) => {
@@ -197,8 +204,7 @@ export const sortLeadsCallStack = (rows, { live = false } = {}) => {
       if (ra !== rb) return ra - rb;
       const ta = leadTimestamp(a, 'updated_at', 'updatedAt', 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'created_at', 'createdAt');
       const tb = leadTimestamp(b, 'updated_at', 'updatedAt', 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'created_at', 'createdAt');
-      if (tb !== ta) return tb - ta;
-      return byId(a, b);
+      return tb - ta;
     });
   }
 
@@ -208,11 +214,8 @@ export const sortLeadsCallStack = (rows, { live = false } = {}) => {
     if (aLive !== bLive) return aLive ? -1 : 1;
 
     if (aLive && bLive) {
-      const diff =
-        leadTimestamp(b, 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt')
+      return leadTimestamp(b, 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt')
         - leadTimestamp(a, 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt');
-      if (diff !== 0) return diff;
-      return byId(b, a);
     }
 
     const aDialed = leadWasDialed(a);
@@ -220,17 +223,11 @@ export const sortLeadsCallStack = (rows, { live = false } = {}) => {
     if (aDialed !== bDialed) return aDialed ? -1 : 1;
 
     if (aDialed && bDialed) {
-      const diff =
-        leadTimestamp(b, 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt')
+      return leadTimestamp(b, 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt')
         - leadTimestamp(a, 'last_call_ended_at', 'lastCallEndedAt', 'last_attempted_at', 'lastAttemptedAt', 'updated_at', 'updatedAt');
-      if (diff !== 0) return diff;
-      return byId(b, a);
     }
 
-    const createdDiff =
-      leadTimestamp(b, 'created_at', 'createdAt') - leadTimestamp(a, 'created_at', 'createdAt');
-    if (createdDiff !== 0) return createdDiff;
-    return byId(b, a);
+    return leadTimestamp(b, 'created_at', 'createdAt') - leadTimestamp(a, 'created_at', 'createdAt');
   });
 };
 
@@ -241,6 +238,7 @@ export const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
   { value: 'pending', label: 'Pending' },
   { value: 'calling', label: 'Calling' },
+  { value: 'bot_follow_up', label: 'Bot Follow Up' },
   { value: 'callback_scheduled', label: 'Callback' },
   { value: 'completed', label: 'Completed' },
   { value: 'failed', label: 'Failed' },

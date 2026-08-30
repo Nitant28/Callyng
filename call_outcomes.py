@@ -1,6 +1,6 @@
 """Canonical call-outcome vocabulary and Plivo CallStatus mapping."""
 
-TERMINAL = frozenset({"Interested", "Not_Interested"})
+TERMINAL = frozenset({"Interested", "Not_Interested", "Transferred"})
 CALLBACK = frozenset({"Callback_Requested", "Early_Disconnect"})
 RETRY = frozenset({"Busy", "No_Answer", "Rejected", "Carrier_Failed",
                    "Wrong_Requirement", "Unknown"})
@@ -23,6 +23,7 @@ SYSTEM_OUTCOMES = frozenset({
     "Carrier_Failed",        # Plivo CallStatus "failed"
     "Max_Attempts_Reached",  # dialer: attempts exhausted
     "Campaign_Cancelled",    # dialer: campaign cancelled mid-run
+    "Transferred",           # cascade cold transfer to a human
 })
 
 _PLIVO_STATUS_TO_OUTCOME = {

@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 import aiohttp
 from loguru import logger
 
-_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+_DEFAULT_MODEL = "openai/gpt-oss-120b"
 _DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 _DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 _DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
@@ -110,7 +110,7 @@ def _field_type_hint(field: dict[str, Any]) -> str:
     if ftype == "boolean":
         return "boolean (true/false)"
     if ftype == "datetime":
-        return "ISO 8601 datetime string or null"
+        return "ISO 8601 datetime string or the literal NULL"
     return "string"
 
 
@@ -216,8 +216,7 @@ def build_extraction_system_prompt(schema: dict[str, Any]) -> str:
     mode = schema["mode"]
     parts = [
         "You analyze outbound voice-call transcripts.",
-        "Reply with ONE valid JSON object only. No markdown fences, no other text.",
-        "Use standard JSON formatting (use null for empty/unspecified fields, never uppercase NULL or None, lowercase true/false).",
+        "Reply with ONE JSON object only. No markdown fences, no other text.",
         "",
         _GLOBAL_EXTRACTION_PREAMBLE,
         "",
@@ -388,31 +387,8 @@ def _first_markdown_json_block(text: str) -> str | None:
     return inner if inner else None
 
 
-def _repair_llm_json(raw: str) -> str:
-    """Repair common LLM JSON malformations (NULL/None, True/False, trailing commas) without touching string literals."""
-    pattern = re.compile(r'("(?:\\.|[^"\\])*")|([^"]+)')
-
-    def repl(m: re.Match) -> str:
-        string_val = m.group(1)
-        if string_val is not None:
-            return string_val
-        other = m.group(2)
-        # Strip single-line comments //...
-        other = re.sub(r"//.*$", "", other, flags=re.MULTILINE)
-        # Replace unquoted NULL, Null, None, NONE, undefined with null
-        other = re.sub(r"\b(?:NULL|Null|None|NONE|undefined)\b", "null", other)
-        # Replace unquoted True, False with true, false
-        other = re.sub(r"\bTrue\b", "true", other)
-        other = re.sub(r"\bFalse\b", "false", other)
-        # Remove trailing commas before } or ]
-        other = re.sub(r",\s*([}\]])", r"\1", other)
-        return other
-
-    return pattern.sub(repl, raw)
-
-
 def _parse_model_json_object(content: str) -> tuple[dict[str, Any] | None, str | None]:
-    """Parse one JSON object from model message.content (empty, fences, leading prose, unquoted NULL/None)."""
+    """Parse one JSON object from model message.content (empty, fences, leading prose)."""
     if not isinstance(content, str):
         return None, "missing_message_content"
     text = content.strip()
@@ -439,16 +415,6 @@ def _parse_model_json_object(content: str) -> tuple[dict[str, Any] | None, str |
                 return obj, None
             return None, "parsed_JSON_is_not_an_object"
         except json.JSONDecodeError:
-            pass
-
-        # Try repairing candidate (unquoted NULL/None, True/False, trailing commas)
-        try:
-            repaired = _repair_llm_json(candidate)
-            obj = json.loads(repaired)
-            if isinstance(obj, dict):
-                return obj, None
-            return None, "parsed_JSON_is_not_an_object"
-        except json.JSONDecodeError:
             continue
 
     start = text.find("{")
@@ -459,17 +425,9 @@ def _parse_model_json_object(content: str) -> tuple[dict[str, Any] | None, str |
     dec = json.JSONDecoder()
     try:
         obj, _end = dec.raw_decode(text, start)
-    except json.JSONDecodeError:
-        try:
-            repaired_text = _repair_llm_json(text)
-            start_rep = repaired_text.find("{")
-            if start_rep != -1:
-                obj, _end = dec.raw_decode(repaired_text, start_rep)
-            else:
-                raise
-        except json.JSONDecodeError as exc:
-            snippet = text[start : start + 400].replace("\n", "\\n")
-            return None, f"JSONDecodeError: {exc}; snippet={snippet!r}"
+    except json.JSONDecodeError as exc:
+        snippet = text[start : start + 400].replace("\n", "\\n")
+        return None, f"JSONDecodeError: {exc}; snippet={snippet!r}"
 
     if not isinstance(obj, dict):
         return None, "parsed_JSON_is_not_an_object"
@@ -655,7 +613,7 @@ async def extract_post_call(
     """Call the configured post-call LLM; return (parsed, error, model_used)."""
     system_prompt = build_extraction_system_prompt(extraction_schema)
     provider = post_call_provider()
-    default_model = "llama-3.3-70b-versatile" if provider == "groq" else ("gpt-4o-mini" if provider == "openai" else _DEFAULT_MODEL)
+    default_model = "openai/gpt-oss-120b" if provider == "groq" else ("gpt-4o-mini" if provider == "openai" else _DEFAULT_MODEL)
     mdl = model or os.getenv("POST_CALL_MODEL", default_model)
     if provider not in _VALID_PROVIDERS:
 

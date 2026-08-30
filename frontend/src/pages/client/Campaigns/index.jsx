@@ -1,35 +1,29 @@
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useToast } from '../../../contexts/ToastContext';
-import { useCampaigns } from '../../../hooks/useCampaigns';
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useToast } from "../../../contexts/ToastContext";
+import { useCampaigns } from "../../../hooks/useCampaigns";
 import {
   filterCampaigns,
   sortCampaigns,
   tabCounts,
-} from '../../../utils/campaignHelpers';
-import CampaignHeader from './components/CampaignHeader';
-import CampaignToolbar from './components/CampaignToolbar';
-import CampaignGrid from './components/CampaignGrid';
+} from "../../../utils/campaignHelpers";
+import CampaignHeader from "./components/CampaignHeader";
+import CampaignToolbar from "./components/CampaignToolbar";
+import CampaignGrid from "./components/CampaignGrid";
 // CreateCampaignModal intentionally omitted from client UI
-import './Campaigns.css';
+import "./Campaigns.css";
 
 const PAGE_SIZE = 25;
 
 const CampaignsPage = () => {
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const {
-    campaigns,
-    loading,
-    refreshing,
-    error,
-    botOptions,
-    refresh,
-  } = useCampaigns();
+  const { campaigns, loading, refreshing, error, botOptions, refresh } =
+    useCampaigns();
 
-  const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState('newest');
-  const [activeTab, setActiveTab] = useState('all');
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState("newest");
+  const [activeTab, setActiveTab] = useState("all");
   const [page, setPage] = useState(0);
 
   const counts = useMemo(() => tabCounts(campaigns), [campaigns]);
@@ -42,17 +36,21 @@ const CampaignsPage = () => {
   }, [botOptions]);
   const tabs = useMemo(
     () => [
-      { id: 'all', label: 'All', count: counts.all },
-      { id: 'running', label: 'Running', count: counts.running },
-      { id: 'paused', label: 'Paused', count: counts.paused },
-      { id: 'draft', label: 'Draft', count: counts.draft },
-      { id: 'completed', label: 'Completed', count: counts.completed },
+      { id: "all", label: "All", count: counts.all },
+      { id: "running", label: "Running", count: counts.running },
+      { id: "paused", label: "Paused", count: counts.paused },
+      { id: "draft", label: "Draft", count: counts.draft },
+      { id: "completed", label: "Completed", count: counts.completed },
     ],
     [counts],
   );
 
   const filtered = useMemo(() => {
-    const list = filterCampaigns(campaigns, { tab: activeTab, search });
+    const list = filterCampaigns(campaigns, {
+      tab: activeTab,
+      search,
+    });
+
     return sortCampaigns(list, sortBy);
   }, [campaigns, activeTab, search, sortBy]);
 
@@ -71,12 +69,18 @@ const CampaignsPage = () => {
 
       <CampaignToolbar
         search={search}
-        onSearchChange={(v) => { setSearch(v); setPage(0); }}
+        onSearchChange={(v) => {
+          setSearch(v);
+          setPage(0);
+        }}
         sortBy={sortBy}
         onSortChange={setSortBy}
         tabs={tabs}
         activeTab={activeTab}
-        onTabChange={(t) => { setActiveTab(t); setPage(0); }}
+        onTabChange={(t) => {
+          setActiveTab(t);
+          setPage(0);
+        }}
       />
 
       <CampaignGrid
@@ -90,11 +94,25 @@ const CampaignsPage = () => {
       {!loading && filtered.length > PAGE_SIZE && (
         <footer className="cmp-page__pagination">
           <span>
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of {filtered.length}
+            Showing {page * PAGE_SIZE + 1}–
+            {Math.min((page + 1) * PAGE_SIZE, filtered.length)} of{" "}
+            {filtered.length}
           </span>
           <div>
-            <button type="button" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Previous</button>
-            <button type="button" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</button>
+            <button
+              type="button"
+              disabled={page === 0}
+              onClick={() => setPage((p) => p - 1)}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={page >= totalPages - 1}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+            </button>
           </div>
         </footer>
       )}
