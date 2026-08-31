@@ -23,4 +23,12 @@ export const SIDEBAR_NAV = [
     enabled: true,
     match: (path) => path.startsWith('/app/messages'),
   },
+  {
+    id: 'events',
+    label: 'Events',
+    path: '/app/events',
+    icon: 'event',
+    enabled: true,
+    match: (path) => path.startsWith('/app/events'),
+  },
 ];

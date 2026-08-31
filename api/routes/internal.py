@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Optional
@@ -42,7 +43,8 @@ class CreateBotConfigBody(BaseModel):
     script_id: str
     script_config_id: UUID | None = None
     telephony_number: str
-    credits_per_minute: float
+    credits_per_minute: float = Field(ge=0, le=9999.99)
+    fixed_start_credits: float | None = Field(default=None, ge=0, le=999999.9999)
 
 
 class CreateCampaignBody(BaseModel):
@@ -55,6 +57,47 @@ class CreateCampaignBody(BaseModel):
     max_attempts: int = 3
     retry_delay_minutes: int = 120
     max_call_minutes: int | None = None
+
+class CreateEventBody(BaseModel):
+    client_id: UUID
+    name: str
+    description: str | None = None
+
+    source_types: list[str] | None = None
+    lead_handling: str | None = None
+
+    primary_bot_config_id: UUID
+
+    max_concurrent_calls: int = Field(default=5, ge=1)
+    calls_per_minute: int = Field(default=10, ge=1)
+    max_attempts: int = Field(default=3, ge=1)
+
+    attempt_0_schedule_minutes: int | None = None
+    attempt_1_schedule_minutes: int | None = None
+    attempt_2_schedule_minutes: int | None = None
+
+class PatchEventBody(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    source_types: list[str] | None = None
+    lead_handling: str | None = None
+    status: str | None = None
+    primary_bot_config_id: UUID | None = None
+
+    max_concurrent_calls: int | None = Field(default=None, ge=1)
+    calls_per_minute: int | None = Field(default=None, ge=1)
+    max_attempts: int | None = Field(default=None, ge=1)
+
+    attempt_0_schedule_minutes: int | None = None
+    attempt_1_schedule_minutes: int | None = None
+    attempt_2_schedule_minutes: int | None = None
+
+
+class CreateOutcomeMappingBody(BaseModel):
+    outcome: str
+    bot_config_id: UUID
+
+
 
 
 class PatchCampaignBody(BaseModel):
@@ -89,7 +132,8 @@ class BotConfigPatchBody(BaseModel):
     script_id: str | None = None
     script_config_id: UUID | None = None
     telephony_number: str | None = None
-    credits_per_minute: float | None = None
+    credits_per_minute: float | None = Field(default=None, ge=0, le=9999.99)
+    fixed_start_credits: float | None = Field(default=None, ge=0, le=999999.9999)
     active: bool | None = None
 
 
@@ -252,6 +296,7 @@ async def create_bot_config(
         body.telephony_number,
         body.credits_per_minute,
         script_config_id=body.script_config_id,
+        fixed_start_credits=body.fixed_start_credits,
     )
     return {"id": str(bot_id)}
 
@@ -326,6 +371,10 @@ async def patch_bot_config(
         sets.append(f"credits_per_minute = ${idx}")
         args.append(body.credits_per_minute)
         idx += 1
+    if body.fixed_start_credits is not None:
+        sets.append(f"fixed_start_credits = ${idx}")
+        args.append(body.fixed_start_credits)
+        idx += 1
     if body.active is not None:
         sets.append(f"active = ${idx}")
         args.append(body.active)
@@ -335,6 +384,53 @@ async def patch_bot_config(
         await pool.execute(f"UPDATE bot_configs SET {', '.join(sets)} WHERE id = ${idx}", *args)
     row = await pool.fetchrow("SELECT * FROM bot_configs WHERE id = $1", bot_config_id)
     return {"bot_config": pg_db.record_to_dict(row) if row else None}
+
+
+@router.get("/bot-configs/{bot_config_id}/outcomes")
+async def get_bot_outcomes(
+    bot_config_id: UUID,
+    client_id: UUID = Query(...),
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    bot = await pg_db.get_bot_config(pool, bot_config_id, client_id)
+
+    if bot is None:
+        raise HTTPException(404, "Bot config not found")
+
+    script_config_id = bot.get("script_config_id")
+
+    if not script_config_id:
+        return {"outcomes": []}
+
+    config = await pg_db.get_script_config(
+        pool,
+        UUID(str(script_config_id)),
+        client_id,
+    )
+
+    if config is None:
+        return {"outcomes": []}
+
+    schema = config.get("extraction_schema") or {}
+
+    if isinstance(schema, str):
+        try:
+            schema = json.loads(schema)
+        except json.JSONDecodeError:
+            return {"outcomes": []}
+
+    outcomes = []
+
+    for field in schema.get("fields", []):
+        if field.get("key") == "intent_status":
+            values = field.get("values", [])
+            if isinstance(values, list):
+                outcomes = values
+            break
+
+    return {"outcomes": outcomes}
+
 
 
 @router.post("/campaigns")
@@ -368,6 +464,212 @@ async def create_campaign(
         "balance_credits": float(row["balance_credits"]) if row else None,
     }
 
+
+# =========================================
+
+@router.post("/events")
+async def create_event(
+    body: CreateEventBody,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    try:
+        event = await pg_db.create_event(
+            pool,
+            body.client_id,
+            body.name,
+            body.description,
+            body.source_types,
+            body.lead_handling,
+            body.primary_bot_config_id,
+            body.max_concurrent_calls,
+            body.calls_per_minute,
+            body.max_attempts,
+            body.attempt_0_schedule_minutes,
+            body.attempt_1_schedule_minutes,
+            body.attempt_2_schedule_minutes,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "id": str(event["id"]),
+        "event": event,
+    }
+
+
+@router.patch("/events/{event_id}")
+async def patch_event_admin(
+    event_id: UUID,
+    body: PatchEventBody,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    event = await pg_db.get_event_admin(pool, event_id)
+
+    if event is None:
+        raise HTTPException(404, "Event not found")
+
+    client_id = UUID(str(event["client_id"]))
+
+    if body.primary_bot_config_id is not None:
+        bot = await pg_db.get_bot_config(
+            pool,
+            body.primary_bot_config_id,
+            client_id,
+        )
+
+        if bot is None:
+            raise HTTPException(
+                400,
+                "Bot does not belong to this event's client",
+            )
+
+    try:
+        updated = await pg_db.update_event(
+            pool,
+            event_id,
+            client_id,
+            name=body.name,
+            description=body.description,
+            source_types=body.source_types,
+            lead_handling=body.lead_handling,
+            status=body.status,
+            primary_bot_config_id=body.primary_bot_config_id,
+            max_concurrent_calls=body.max_concurrent_calls,
+            calls_per_minute=body.calls_per_minute,
+            max_attempts=body.max_attempts,
+            attempt_0_schedule_minutes=body.attempt_0_schedule_minutes,
+            attempt_1_schedule_minutes=body.attempt_1_schedule_minutes,
+            attempt_2_schedule_minutes=body.attempt_2_schedule_minutes,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if updated is None:
+        raise HTTPException(404, "Event not found")
+
+    return {
+        "event": updated,
+    }
+
+@router.delete("/events/{event_id}")
+async def delete_event_admin(
+    event_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    event = await pg_db.get_event_admin(pool, event_id)
+
+    if event is None:
+        raise HTTPException(404, "Event not found")
+
+    client_id = UUID(str(event["client_id"]))
+
+    deleted = await pg_db.delete_event(
+        pool,
+        event_id,
+        client_id,
+    )
+
+    if not deleted:
+        raise HTTPException(404, "Event not found")
+
+    return {
+        "success": True,
+        "event_id": str(event_id),
+    }
+
+@router.get("/events")
+async def list_events_admin(
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+    search: Optional[str] = Query(None),
+    client_id: Optional[UUID] = Query(None),
+):
+    if client_id:
+        rows = await pool.fetch(
+            """
+            SELECT *
+            FROM events
+            WHERE client_id = $1
+            ORDER BY created_at DESC
+            LIMIT 200
+            """,
+            client_id,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT *
+            FROM events
+            ORDER BY created_at DESC
+            LIMIT 200
+            """
+        )
+
+    events = pg_db.records_to_dicts(rows)
+
+    if search:
+        q = search.lower()
+        events = [
+            event
+            for event in events
+            if q in (event.get("name") or "").lower()
+        ]
+
+    return {"events": events}
+
+@router.post("/events/{event_id}/outcomes")
+async def create_event_outcome_admin(
+    event_id: UUID,
+    body: CreateOutcomeMappingBody,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    event = await pool.fetchrow(
+        """
+        SELECT *
+        FROM events
+        WHERE id = $1
+        """,
+        event_id,
+    )
+
+    if event is None:
+        raise HTTPException(404, "Event not found")
+
+    client_id = UUID(str(event["client_id"]))
+
+    # Make sure the selected bot belongs to this event's client.
+    bot = await pg_db.get_bot_config(
+        pool,
+        body.bot_config_id,
+        client_id,
+    )
+
+    if bot is None:
+        raise HTTPException(
+            400,
+            "Bot does not belong to this event's client",
+        )
+
+    try:
+        mapping = await pg_db.create_event_outcome_bot_mapping(
+            pool,
+            event_id,
+            body.outcome,
+            body.bot_config_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "mapping": mapping,
+    }
+
+
+# ===========================
 
 @router.get("/campaigns")
 async def list_campaigns_admin(
@@ -652,10 +954,18 @@ async def get_stats(_: None = Depends(require_admin), pool=Depends(get_pool)):
     total_calls_today = await pool.fetchval("SELECT COUNT(*) FROM call_logs WHERE started_at >= CURRENT_DATE")
     active_campaigns = await pool.fetchval("SELECT COUNT(*) FROM campaigns WHERE status = 'running'")
     total_credits_used_today = await pool.fetchval("SELECT SUM(credits_charged) FROM call_logs WHERE started_at >= CURRENT_DATE")
+    telephony_credits_today = await pool.fetchval(
+        "SELECT SUM((call_data->>'setup_charge')::numeric) FROM call_logs WHERE started_at >= CURRENT_DATE"
+    )
+    bot_credits_today = await pool.fetchval(
+        "SELECT SUM((call_data->>'duration_charge')::numeric) FROM call_logs WHERE started_at >= CURRENT_DATE"
+    )
     return {
         "total_calls_today": total_calls_today or 0,
         "active_campaigns": active_campaigns or 0,
-        "total_credits_used_today": float(total_credits_used_today or 0)
+        "total_credits_used_today": float(total_credits_used_today or 0),
+        "telephony_credits_today": float(telephony_credits_today or 0),
+        "bot_credits_today": float(bot_credits_today or 0),
     }
 
 

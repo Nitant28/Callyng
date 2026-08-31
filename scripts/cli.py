@@ -367,7 +367,7 @@ async def cmd_show_campaign(args):
         cid = camp["client_id"]
 
         client = await pool.fetchrow("SELECT name FROM clients WHERE id = $1", cid)
-        bot = await pool.fetchrow("SELECT name, route, script_id, credits_per_minute FROM bot_configs WHERE id = $1", camp["bot_config_id"])
+        bot = await pool.fetchrow("SELECT name, route, script_id, credits_per_minute, fixed_start_credits FROM bot_configs WHERE id = $1", camp["bot_config_id"])
 
         _header(f"Campaign: {camp['name']}")
         _kv("ID", camp["id"])
@@ -382,7 +382,8 @@ async def cmd_show_campaign(args):
             _kv("Name", bot["name"], indent=4)
             _kv("Route", bot["route"], indent=4)
             _kv("Script", bot["script_id"], indent=4)
-            _kv("Credits/min", bot["credits_per_minute"], indent=4)
+            _kv("₹/min", bot["credits_per_minute"], indent=4)
+            _kv("Setup ₹", bot.get("fixed_start_credits"), indent=4)
 
         print(f"\n  {_BOLD}Budget:{_RESET}")
         budget = float(camp.get("budget_credits") or 0)

@@ -7,7 +7,7 @@ import importlib
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any
 
@@ -19,6 +19,7 @@ from pipecat.transcriptions.language import Language
 
 from lead_context import LeadContext
 from background_tasks import spawn_background_task
+from providers import catalog
 
 
 def _log_prompt_summary(system_instruction: str, bootstrap_messages: list) -> None:
@@ -60,10 +61,6 @@ _CASCADE_SCRIPT_ATTRS = (
     "build_system_prompt",
     "EXTRACTION_SCHEMA",
 )
-
-_DEFAULT_CASCADE_STT_MODEL = "saarika:v2.5"
-_DEFAULT_CASCADE_LLM_MODEL = "llama-3.3-70b-versatile"
-_DEFAULT_CASCADE_TTS_VOICE_ENV = "CARTESIA_VOICE_ID"
 
 _BCP47_TO_LANGUAGE: dict[str, Language] = {
     "hi-in": Language.HI_IN,
@@ -187,10 +184,22 @@ class CascadeRuntime:
     source: str
     system_prompt: str
     extraction_schema: dict[str, Any]
+    stt_provider: str
     stt_model: str
+    stt_settings: dict[str, Any]
+    llm_provider: str
     llm_model: str
+    llm_settings: dict[str, Any]
+    tts_provider: str
+    tts_model: str
     tts_voice: str
+    tts_settings: dict[str, Any]
     push_lead_data_schema: FunctionSchema | None
+    bootstrap_messages: list[dict[str, Any]] = field(default_factory=list)
+    live_tools: list[Any] = field(default_factory=list)
+    live_tools_enabled: bool = False
+    transfer_enabled: bool = False
+    transfer_number: str = ""
     module_name: str = ""
 
 
@@ -246,30 +255,88 @@ def build_gemini_vad(config: dict[str, Any]) -> GeminiVADParams:
     )
 
 
-def build_push_lead_data_schema(tools: list[Any]) -> FunctionSchema | None:
+def allow_json_null_on_string_props(
+    properties: dict[str, Any],
+    required: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Groq may send JSON null; Gemini rejects type=['string','null'] (must be one enum).
+
+    Keep a single type and set nullable=True on optional string fields.
+    """
+    required_set = {str(k) for k in (required or [])}
+    out: dict[str, Any] = {}
+    for key, spec in properties.items():
+        if not isinstance(spec, dict):
+            out[key] = spec
+            continue
+        patched = dict(spec)
+        t = patched.get("type")
+        if isinstance(t, list):
+            non_null = [x for x in t if x != "null"]
+            patched["type"] = non_null[0] if non_null else "string"
+            patched["nullable"] = True
+        elif t == "string" and key not in required_set:
+            patched["nullable"] = True
+        out[key] = patched
+    return out
+
+
+_SKIP_LIVE_TOOL_NAMES = frozenset({"end_call", "transfer_call"})
+
+
+def _as_bool(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return False
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+def build_live_tool_schemas(tools: list[Any]) -> list[FunctionSchema]:
+    """Turn cascade_live_tools JSON into Pipecat FunctionSchema list."""
     if not isinstance(tools, list):
-        return None
+        return []
+    schemas: list[FunctionSchema] = []
     for tool in tools:
         if not isinstance(tool, dict):
             continue
-        if tool.get("name") != "push_lead_data":
+        name = str(tool.get("name") or "").strip()
+        if not name or name in _SKIP_LIVE_TOOL_NAMES:
             continue
         properties = tool.get("properties")
+        if name == "push_lead_data" and not isinstance(properties, dict):
+            continue
+        if properties is None:
+            properties = {}
         if not isinstance(properties, dict):
             continue
         required = tool.get("required")
         if not isinstance(required, list):
             required = []
-        description = str(
-            tool.get("description")
-            or "Call this before ending every call to save lead qualification data."
+        description = str(tool.get("description") or "").strip()
+        if name == "push_lead_data" and not description:
+            description = (
+                "Call this before ending every call to save lead qualification data."
+            )
+        if not description:
+            continue
+        schemas.append(
+            FunctionSchema(
+                name=name,
+                description=description,
+                properties=allow_json_null_on_string_props(properties, required),
+                required=required,
+            )
         )
-        return FunctionSchema(
-            name="push_lead_data",
-            description=description,
-            properties=properties,
-            required=required,
-        )
+    return schemas
+
+
+def build_push_lead_data_schema(tools: list[Any]) -> FunctionSchema | None:
+    for schema in build_live_tool_schemas(tools):
+        if schema.name == "push_lead_data":
+            return schema
     return None
 
 
@@ -527,21 +594,67 @@ def resolve_sts_runtime(body: dict[str, Any]) -> StsRuntime:
     return runtime
 
 
+def _coerce_settings_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    return {}
+
+
+def _resolve_cascade_role(
+    prefetch: dict[str, Any],
+    *,
+    kind: catalog.Kind,
+    provider_key: str,
+    model_key: str,
+) -> tuple[str, str, dict[str, Any]]:
+    raw_provider = str(prefetch.get(provider_key) or "").strip()
+    raw_model = str(prefetch.get(model_key) or "").strip()
+    provider = raw_provider or catalog.default_provider(kind)
+    model = raw_model or catalog.default_model(kind, provider)
+    settings = _coerce_settings_dict(prefetch.get(f"cascade_{kind}_settings"))
+    return provider, model, settings
+
+
 def _cascade_from_prefetch(prefetch: dict[str, Any]) -> CascadeRuntime:
-    tts_voice = str(prefetch.get("cascade_tts_voice") or "")
-    if not tts_voice:
-        tts_voice = os.getenv(_DEFAULT_CASCADE_TTS_VOICE_ENV, "") or "sonic-3"
+    stt_provider, stt_model, stt_settings = _resolve_cascade_role(
+        prefetch, kind="stt", provider_key="cascade_stt_provider", model_key="cascade_stt_model"
+    )
+    llm_provider, llm_model, llm_settings = _resolve_cascade_role(
+        prefetch, kind="llm", provider_key="cascade_llm_provider", model_key="cascade_llm_model"
+    )
+    tts_provider, tts_model, tts_settings = _resolve_cascade_role(
+        prefetch, kind="tts", provider_key="cascade_tts_provider", model_key="cascade_tts_model"
+    )
+    voice = str(prefetch.get("cascade_tts_voice") or "")
+    if voice == tts_model:
+        voice = ""
+    live_tools = prefetch.get("cascade_live_tools") or []
+    if not isinstance(live_tools, list):
+        live_tools = []
+    bootstrap = prefetch.get("bootstrap_messages") or []
+    if not isinstance(bootstrap, list):
+        bootstrap = []
     return CascadeRuntime(
         script_id=str(prefetch.get("script_id") or ""),
         source="script_config",
         system_prompt=str(prefetch.get("system_prompt") or ""),
         extraction_schema=dict(prefetch.get("extraction_schema") or {}),
-        stt_model=str(prefetch.get("cascade_stt_model") or _DEFAULT_CASCADE_STT_MODEL),
-        llm_model=str(prefetch.get("cascade_llm_model") or _DEFAULT_CASCADE_LLM_MODEL),
-        tts_voice=tts_voice,
-        push_lead_data_schema=build_push_lead_data_schema(
-            prefetch.get("cascade_live_tools") or []
-        ),
+        stt_provider=stt_provider,
+        stt_model=stt_model,
+        stt_settings=stt_settings,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        llm_settings=llm_settings,
+        tts_provider=tts_provider,
+        tts_model=tts_model,
+        tts_voice=voice,
+        tts_settings=tts_settings,
+        push_lead_data_schema=build_push_lead_data_schema(live_tools),
+        bootstrap_messages=[dict(m) for m in bootstrap if isinstance(m, dict)],
+        live_tools=list(live_tools),
+        live_tools_enabled=_as_bool(prefetch.get("live_tools_enabled")),
+        transfer_enabled=_as_bool(prefetch.get("transfer_enabled")),
+        transfer_number=str(prefetch.get("transfer_number") or "").strip(),
     )
 
 
@@ -552,10 +665,22 @@ def _cascade_from_module(mod: ModuleType, ctx: LeadContext) -> CascadeRuntime:
         source="module",
         system_prompt=mod.build_system_prompt(ctx),
         extraction_schema=dict(mod.EXTRACTION_SCHEMA),
-        stt_model=_DEFAULT_CASCADE_STT_MODEL,
-        llm_model=_DEFAULT_CASCADE_LLM_MODEL,
-        tts_voice=os.getenv(_DEFAULT_CASCADE_TTS_VOICE_ENV, "") or "",
+        stt_provider=catalog.default_provider("stt"),
+        stt_model=catalog.default_model("stt", catalog.default_provider("stt")),
+        stt_settings={},
+        llm_provider=catalog.default_provider("llm"),
+        llm_model=catalog.default_model("llm", catalog.default_provider("llm")),
+        llm_settings={},
+        tts_provider=catalog.default_provider("tts"),
+        tts_model=catalog.default_model("tts", catalog.default_provider("tts")),
+        tts_voice="",
+        tts_settings={},
         push_lead_data_schema=None,
+        bootstrap_messages=[],
+        live_tools=[],
+        live_tools_enabled=False,
+        transfer_enabled=False,
+        transfer_number="",
         module_name=mod.__name__,
     )
 

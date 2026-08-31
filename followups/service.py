@@ -124,7 +124,7 @@ async def trigger_follow_up(
     if phone and first_contact.get("can_send") is False:
         channels["whatsapp"] = "blocked"
 
-    n8n_cfg = await N8nConfig.resolve(pool)
+    n8n_cfg = await N8nConfig.resolve(pool, client_id=client_id)
     service = N8nService(n8n_cfg, pool=pool)
     if not service.is_configured():
         event = await repo.insert_event(

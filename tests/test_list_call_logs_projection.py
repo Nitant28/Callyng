@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -67,3 +67,115 @@ async def test_list_campaign_leads_query_syntax():
     assert "COALESCE(lc.turn_count, 0) AS turns" in sql
     assert "WHERE l.campaign_id = $1 AND l.client_id = $2" in sql
 
+
+def test_public_call_detail_strips_hangup_and_storage_keys():
+    from db import postgres as pg_db
+
+    row = {
+        "session_call_id": "abc",
+        "transcript": [{"role": "user", "content": "hi"}],
+        "extraction_json": {"intent": "x"},
+        "plivo_hangup_json": {"HangupCause": "NORMAL"},
+        "recording_url": "plivo:https://media.plivo.com/very-long-key",
+        "call_data": {
+            "setup_charge": 0.6,
+            "duration_charge": 1.2,
+            "is_test_call": False,
+            "post_call_snapshot": {"system_instruction": "huge"},
+        },
+        "credits_charged": 1.8,
+        "cost_usd": 0.42,
+    }
+    out = pg_db.public_call_detail(row)
+    assert "plivo_hangup_json" not in out
+    assert "recording_url" not in out
+    assert "cost_usd" not in out
+    assert out["has_recording"] is True
+    assert out["call_data"] == {
+        "setup_charge": 0.6,
+        "duration_charge": 1.2,
+        "is_test_call": False,
+    }
+    assert out["transcript"][0]["content"] == "hi"
+    assert out["extraction_json"]["intent"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_finalize_call_log_sql_includes_cost_usd():
+    from db import postgres as pg_db
+
+    pool = MagicMock()
+    pool.execute = AsyncMock()
+
+    await pg_db.finalize_call_log(
+        pool,
+        session_call_id="s1",
+        duration_seconds=10,
+        outcome="Interested",
+        extraction_json={},
+        billed_minutes=1,
+        credits_charged=0,
+        usage={"cost_usd": 0.123456},
+    )
+
+    sql = pool.execute.await_args.args[0]
+    args = pool.execute.await_args.args[1:]
+    assert "cost_usd" in sql
+    assert "COALESCE($14, cost_usd)" in sql
+    assert args[13] == 0.123456
+    assert args[14] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_finalize_event_call_log_sql_includes_cost_usd():
+    from db import postgres as pg_db
+
+    conn = MagicMock()
+    conn.execute = AsyncMock()
+
+    event_id = uuid4()
+    client_id = uuid4()
+
+    await pg_db.finalize_event_call_log(
+        conn,
+        session_call_id="evt-1",
+        duration_seconds=10,
+        outcome="Interested",
+        extraction_json={},
+        billed_minutes=1,
+        credits_charged=0,
+        usage={"cost_usd": 0.55},
+        client_id=client_id,
+        event_id=event_id,
+    )
+
+    sql = conn.execute.await_args.args[0]
+    args = conn.execute.await_args.args[1:]
+    assert "cost_usd" in sql
+    assert "COALESCE($14, cost_usd)" in sql
+    assert args[13] == 0.55
+
+
+@pytest.mark.asyncio
+async def test_list_calls_handler_strips_cost_usd():
+    from api.routes.calls import list_calls
+
+    row = {
+        "session_call_id": "abc",
+        "cost_usd": 0.42,
+        "plivo_hangup_json": {"HangupCause": "NORMAL"},
+        "call_data": {"setup_charge": 0.6, "duration_charge": 1.2, "is_test_call": False},
+        "recording_url": "plivo:https://example.com/rec",
+    }
+
+    with patch(
+        "api.routes.calls.pg_db.list_call_logs",
+        new=AsyncMock(return_value=([row], 1)),
+    ):
+        result = await list_calls(
+            client={"id": str(uuid4())},
+            pool=MagicMock(),
+        )
+        assert result["total_count"] == 1
+        assert "cost_usd" not in result["calls"][0]
+        assert "plivo_hangup_json" not in result["calls"][0]

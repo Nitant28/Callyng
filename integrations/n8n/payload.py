@@ -367,6 +367,15 @@ def build_lead_qualified_payload(
     }
 
 
+def build_connectivity_test_payload() -> dict[str, Any]:
+    """Safe admin connectivity probe — does not trigger customer follow-ups."""
+    return {
+        "event": "connectivity_test",
+        "test": True,
+        "source": "aakashvani_admin",
+    }
+
+
 def build_test_payload(*, client_id: UUID | None = None) -> dict[str, Any]:
     """Synthetic payload for admin connectivity tests — clearly marked."""
     from uuid import uuid4

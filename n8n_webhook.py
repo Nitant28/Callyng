@@ -112,7 +112,7 @@ async def fire_event_webhook(
     campaign: dict,
     extraction: dict,
     duration_seconds: int,
-    billed_minutes: int,
+    billed_minutes: float,
     credits_charged: float,
     route: str | None,
     recording_url: str | None = None,
@@ -169,7 +169,7 @@ async def fire_event_webhook(
         from followups.service import record_auto_n8n_send
 
         try:
-            n8n_cfg = await N8nConfig.resolve(pool)
+            n8n_cfg = await N8nConfig.resolve(pool, client_id=client_id)
             service = N8nService(n8n_cfg, pool=pool)
         except Exception as exc:
             logger.exception("n8n follow-up setup failed; call settlement continues: {}", exc)
@@ -254,6 +254,7 @@ async def fire_event_webhook(
             "recording_url": recording_url,
         },
         "lead": {
+            "id": str(lead.get("id")) if lead.get("id") else None,
             "phone": lead.get("phone"),
             "name": lead.get("name"),
             "lead_type": lead.get("lead_type"),

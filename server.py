@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, WebSocket  # noqa: E
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
 from loguru import logger  # noqa: E402
+from xml.sax.saxutils import escape as xml_escape  # noqa: E402
 from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: E402
 from slowapi.util import get_remote_address  # noqa: E402
 from slowapi.errors import RateLimitExceeded  # noqa: E402
@@ -365,6 +366,70 @@ async def plivo_hangup(request: Request):
     return await handle_plivo_hangup(request)
 
 
+@app.api_route("/plivo-transfer-xml", methods=["GET", "POST"])
+@limiter.exempt
+async def plivo_transfer_xml(
+    request: Request,
+    session_call_id: str = Query(""),
+):
+    """Plivo fetches this after Transfer REST; must accept GET and POST."""
+    from call_transfer import load_transfer_destination
+
+    sid = (session_call_id or "").strip()
+    if not sid:
+        sid = str(request.query_params.get("session_call_id") or "").strip()
+    number = await load_transfer_destination(sid)
+    logger.info(
+        "plivo-transfer-xml method={} session={} dest={}",
+        request.method,
+        sid or "?",
+        number or "MISSING",
+    )
+    if not number:
+        raise HTTPException(404, "transfer destination not found")
+    caller_id = xml_escape((os.getenv("PLIVO_PHONE_NUMBER") or "").strip())
+    dest = xml_escape(number)
+    host = request.headers.get("host", "")
+    action = ""
+    if sid:
+        action_url = (
+            f"{public_telephony_base_url(host)}"
+            f"/plivo-dial-status?session_call_id={urllib.parse.quote(sid)}"
+        )
+        action = f' action="{xml_escape(action_url)}" method="POST"'
+    caller_attr = f' callerId="{caller_id}"' if caller_id else ""
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        "<Speak>Connecting you to a human agent now.</Speak>"
+        f"<Dial timeout=\"45\" redirect=\"false\"{caller_attr}{action}>"
+        f"<Number>{dest}</Number></Dial>"
+        "</Response>"
+    )
+    return HTMLResponse(content=xml, media_type="application/xml")
+
+
+@app.api_route("/plivo-dial-status", methods=["GET", "POST"])
+@limiter.exempt
+async def plivo_dial_status(request: Request, session_call_id: str = Query("")):
+    """Dial action callback — logs whether the transfer ring connected."""
+    form: dict = {}
+    try:
+        form = dict(await request.form())
+    except Exception:
+        pass
+    logger.info(
+        "plivo-dial-status session={} q={} form={}",
+        session_call_id or "?",
+        dict(request.query_params),
+        form,
+    )
+    return HTMLResponse(
+        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+        media_type="application/xml",
+    )
+
+
 @app.api_route("/plivo-recording", methods=["GET", "POST"])
 @limiter.exempt
 async def plivo_recording(request: Request):
@@ -529,6 +594,7 @@ def _register_api_routes() -> None:
         client_leads,
         credits,
         dashboard,
+        events,
         internal,
         internal_messages,
         internal_n8n,
@@ -536,8 +602,10 @@ def _register_api_routes() -> None:
         internal_script_configs,
         leads,
         messages,
+        whatsapp,
     )
 
+    app.include_router(events.router)
     app.include_router(internal.router)
     app.include_router(internal_script_configs.router)
     app.include_router(internal_messages.router)
@@ -548,6 +616,7 @@ def _register_api_routes() -> None:
     app.include_router(client_leads.router)
     app.include_router(calls.router)
     app.include_router(credits.router)
+    app.include_router(whatsapp.router)
     app.include_router(dashboard.router)
     app.include_router(messages.router)
 

@@ -197,9 +197,9 @@ Statuses: `draft → running → (pausing) → paused → … → completed | ca
 - `cancelled`: manually cancelled, leads terminalized, unused budget returned.
 
 Budget is **pre-allocated**: at campaign creation the budget is deducted from
-`clients.balance_credits`. Each dial reserves `RESERVE_CREDITS_PER_LEAD = 2`
-credits against `budget_used_credits`; the reservation is settled to the actual
-billed amount at call end. Unused budget is returned on completion/cancel.
+`clients.balance_credits`. Each dial reserves `setup + rate × 2 minutes`
+against `budget_used_credits`; the reservation is settled to the actual
+pro-rata charge (plus setup) at call end. Unused budget is returned on completion/cancel.
 
 See `08_DATA_FLOW.md` and `11_STATISTICS_ENGINE.md`.
 

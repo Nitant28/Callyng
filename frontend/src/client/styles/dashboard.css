@@ -2,25 +2,25 @@
 
 .cl-dashboard-kpis {
   display: flex;
-  gap: 8px;
+  gap: var(--space-card);
   width: 100%;
-  flex-wrap: wrap;
-  overflow-x: visible;
+  flex-wrap: nowrap;
+  overflow-x: auto;
   align-items: stretch;
 }
 
 .cl-dashboard-kpis .cl-card {
-  min-width: 160px;
-  flex: 1 1 160px;
-  min-height: 120px;
-  padding: 16px;
+  min-width: 220px;
+  flex: 1 1 0;
+  min-height: 160px;
+  padding: 24px;
   box-sizing: border-box;
 }
 
 .cl-dashboard-grid {
   display: grid;
   grid-template-columns: 1.5fr 1fr;
-  gap: 16px;
+  gap: var(--space-card);
   width: 100%;
   align-items: stretch;
 }
@@ -30,7 +30,7 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  margin-bottom: 8px;
+  margin-bottom: 24px;
   flex-wrap: wrap;
 }
 
@@ -96,9 +96,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-content);
-  max-height: none;
-  overflow-y: visible;
-  padding-right: 0;
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .cl-activity-item {
@@ -147,13 +147,10 @@
 
 /* ── Dashboard chart panel ── */
 .cl-dashboard-chart {
-  height: auto;
-  min-height: 280px;
-  max-height: 320px;
+  height: 360px;
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  overflow: hidden;
+  padding: 24px;
 }
 
 .cl-dashboard-chart__header {
@@ -232,13 +229,10 @@
 
 /* ── Live activity panel ── */
 .cl-dashboard-activity {
-  height: auto;
-  min-height: 280px;
-  max-height: 320px;
+  height: 360px;
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  overflow: hidden;
+  padding: 24px;
 }
 
 .cl-dashboard-activity__header {

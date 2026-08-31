@@ -42,7 +42,35 @@ Provider Manager → Meta / FinBite / Wapi
 
 No n8n username/password is stored or used.
 
-## Exact payload sent to Mega_Workflow
+## Admin configuration
+
+Configure the production Mega_Workflow webhook at:
+
+**Admin → Webhooks → N8N Follow-up Workflow**
+
+- Paste the production webhook URL (e.g. `https://n8n.bhuvisx.com/webhook/5879f520-d9b9-4dc9-ba95-3392c2f30792`)
+- Click **Save** — stored in `integration_settings.n8n_lead_webhook_url`
+- Click **Test Connection** — sends a safe `connectivity_test` payload (no WhatsApp/email)
+
+Per-client CRM webhooks on the same page are **not** the n8n follow-up URL.
+
+### URL resolution precedence
+
+When dispatching interested-lead follow-ups:
+
+1. Client-specific DB key `n8n_lead_webhook_url:{client_id}` (if set)
+2. Global DB key `n8n_lead_webhook_url` (Admin → Webhooks save)
+3. `N8N_LEAD_WEBHOOK_URL` environment variable
+
+## Client visibility
+
+| Surface | What it shows |
+|---------|----------------|
+| **Client → Campaign → Leads** | Follow-up status, WhatsApp/email channel status, last follow-up per lead |
+| **Client → Messages** | WhatsApp conversations from follow-ups (lead, phone, campaign, direction, status) |
+
+Flow: Call → Interested → n8n Mega_Workflow → WhatsApp/email → customer reply → lead lookup → AI response → Messages inbox.
+
 
 ```json
 {
@@ -220,19 +248,16 @@ Content-Type: application/json
 
 Response includes `payload` and `field_sources`.
 
-### Step 4 — Real n8n test (Webhook only — no WhatsApp yet)
+### Step 4 — Real n8n connectivity test (safe — no customer follow-up)
 
 ```http
-POST /internal/n8n/test
+POST /internal/n8n/settings/test
 X-Admin-Key: {ADMIN_API_KEY}
-Content-Type: application/json
-
-{}
 ```
 
-Then check **Mega_Workflow → Executions** in n8n dashboard. Verify Webhook JSON and Lead Context input.
+Payload: `{"event":"connectivity_test","test":true,"source":"aakashvani_admin"}`
 
-**Do not proceed to WhatsApp credentials until Webhook → Lead Context works.**
+Then check **Mega_Workflow → Executions** in the n8n dashboard.
 
 ## Manual n8n configuration still required
 

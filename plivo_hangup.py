@@ -94,11 +94,35 @@ async def handle_plivo_hangup(request: Request) -> PlainTextResponse:
                 camp = await pg_db.get_campaign(pool, call_log["campaign_id"], call_log["client_id"])
                 if camp and camp.get("retry_delay_minutes") is not None:
                     delay = int(camp["retry_delay_minutes"])
-            settled = await pg_db.settle_unanswered_call(pool, call_log, retry_delay_minutes=delay, base_outcome=base_out)
+            settled = await pg_db.settle_unanswered_call(
+                pool,
+                call_log,
+                retry_delay_minutes=delay,
+                base_outcome=base_out,
+                charge_setup=False,
+            )
             if settled:
                 logger.info("plivo-hangup settled unanswered session={}", call_log.get("session_call_id"))
         else:
-            applied = await pg_db.apply_callee_hangup_callback(pool, call_log, payload)
+            skip_callback = False
+            sid = str(call_log.get("session_call_id") or session_call_id or "")
+            try:
+                from call_transfer import has_transfer_flag
+
+                skip_callback = bool(sid) and await has_transfer_flag(sid)
+            except Exception:
+                skip_callback = False
+            if not skip_callback:
+                call_data = pg_db.parse_call_data(call_log.get("call_data"))
+                skip_callback = bool(call_data.get("transferred"))
+            if skip_callback:
+                logger.info(
+                    "plivo-hangup skip callback: transferred session={}",
+                    call_log.get("session_call_id"),
+                )
+                applied = False
+            else:
+                applied = await pg_db.apply_callee_hangup_callback(pool, call_log, payload)
             if applied:
                 logger.info(
                     "plivo-hangup callback_scheduled session_call_id={}",

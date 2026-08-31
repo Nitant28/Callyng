@@ -31,13 +31,13 @@ class N8nService:
         self._pool = pool
         self.config = config or N8nConfig.from_env()
 
-    async def _resolved_config(self) -> N8nConfig:
-        if self.config.lead_webhook_url:
-            return self.config
+    async def _resolved_config(self, *, client_id=None) -> N8nConfig:
         if self._pool is not None:
-            resolved = await N8nConfig.resolve(self._pool)
+            resolved = await N8nConfig.resolve(self._pool, client_id=client_id)
             if resolved.lead_webhook_url:
                 return resolved
+        if self.config.lead_webhook_url:
+            return self.config
         return self.config
 
     def is_configured(self) -> bool:
@@ -47,14 +47,13 @@ class N8nService:
         return await self._post(payload, event_label="lead_qualified")
 
     async def send_test_event(self, payload: dict[str, Any] | None = None) -> N8nSendResult:
-        from integrations.n8n.payload import build_test_payload
+        from integrations.n8n.payload import build_connectivity_test_payload
 
-        body = payload or build_test_payload()
-        body = {**body, "metadata": {**(body.get("metadata") or {}), "test": True}}
-        return await self._post(body, event_label="test")
+        body = payload or build_connectivity_test_payload()
+        return await self._post(body, event_label="connectivity_test")
 
-    async def _post(self, payload: dict[str, Any], *, event_label: str) -> N8nSendResult:
-        cfg = await self._resolved_config()
+    async def _post(self, payload: dict[str, Any], *, event_label: str, client_id=None) -> N8nSendResult:
+        cfg = await self._resolved_config(client_id=client_id)
         url = cfg.lead_webhook_url
         if not url:
             logger.debug("n8n skipped ({}): N8N_LEAD_WEBHOOK_URL not set", event_label)

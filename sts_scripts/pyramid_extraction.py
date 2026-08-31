@@ -124,15 +124,16 @@ PYRAMID_CASCADE_LIVE_TOOLS = [
             },
             "bhk_preference": {
                 "type": "string",
-                "description": "BHK preference: 2BHK, 3BHK, NULL if not collected",
+                "description": "BHK preference: 2BHK, 3BHK, or the string NULL if not collected",
             },
             "location_preference": {
                 "type": "string",
-                "description": "Preferred location in Pune, or NULL if not collected",
+                "description": "Preferred location in Pune, or the string NULL if not collected",
             },
             "callback_time": {
                 "type": "string",
-                "description": "Requested callback time if busy, else NULL",
+                "nullable": True,
+                "description": "Requested callback time if busy; omit or null if none",
             },
             "language_used": {
                 "type": "string",

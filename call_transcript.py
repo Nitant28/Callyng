@@ -7,6 +7,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from loguru import logger
@@ -24,6 +25,7 @@ from post_call_extract import (
     post_call_missing_key_message,
     prepare_transcript_for_storage,
 )
+from pricing_cascade import compute_cascade_cost_usd
 from pricing_sts import compute_sts_cost_inr
 
 from db.redis_client import get_redis
@@ -34,6 +36,7 @@ _PG_WRITE_TIMEOUT_S = 5.0
 _PG_WRITE_LIVE_TIMEOUT_S = 2.0
 _TRANSCRIPT_DEBOUNCE_S = 2.0
 _CAMPAIGN_PG_FIELDS = ("client_id", "campaign_id", "lead_id", "bot_config_id")
+_EVENT_PG_FIELDS = ("client_id", "event_id", "lead_id", "bot_config_id")
 
 
 def _pgctx_key(session_call_id: str) -> str:
@@ -73,8 +76,11 @@ async def pop_pg_context(session_call_id: str | None) -> dict[str, Any] | None:
 def _pg_context_has_campaign_fields(ctx: dict[str, Any] | None) -> bool:
     if not ctx:
         return False
-    return all(ctx.get(k) for k in _CAMPAIGN_PG_FIELDS)
 
+    has_campaign = all(ctx.get(k) for k in _CAMPAIGN_PG_FIELDS)
+    has_event = all(ctx.get(k) for k in _EVENT_PG_FIELDS)
+
+    return has_campaign or has_event
 
 def _pg_context_from_call_log(row: dict[str, Any]) -> dict[str, Any] | None:
     if not row.get("client_id"):
@@ -82,29 +88,62 @@ def _pg_context_from_call_log(row: dict[str, Any]) -> dict[str, Any] | None:
 
     is_test_call = False
     call_data = row.get("call_data")
+
     if call_data and isinstance(call_data, dict):
-        if call_data.get("is_test_call"):
-            is_test_call = True
+        is_test_call = bool(call_data.get("is_test_call"))
     elif call_data and isinstance(call_data, str):
         try:
             parsed = json.loads(call_data)
-            if isinstance(parsed, dict) and parsed.get("is_test_call"):
-                is_test_call = True
+            if isinstance(parsed, dict):
+                is_test_call = bool(parsed.get("is_test_call"))
         except json.JSONDecodeError:
             pass
 
+    # Event call
+    if row.get("event_id"):
+        if not is_test_call:
+            if not all(row.get(k) for k in _EVENT_PG_FIELDS):
+                return None
+
+        ctx: dict[str, Any] = {
+            "client_id": str(row["client_id"]),
+            "event_id": str(row["event_id"]),
+            "lead_id": str(row["lead_id"]) if row.get("lead_id") else "",
+            "bot_config_id": (
+                str(row["bot_config_id"])
+                if row.get("bot_config_id")
+                else ""
+            ),
+        }
+
+        if row.get("route"):
+            ctx["route"] = row["route"]
+
+        return ctx
+
+    # Campaign call
     if not is_test_call:
         if not all(row.get(k) for k in _CAMPAIGN_PG_FIELDS):
             return None
-            
-    ctx: dict[str, Any] = {
+
+    ctx = {
         "client_id": str(row["client_id"]),
-        "campaign_id": str(row["campaign_id"]) if row.get("campaign_id") else "",
+        "campaign_id": (
+            str(row["campaign_id"])
+            if row.get("campaign_id")
+            else ""
+        ),
         "lead_id": str(row["lead_id"]) if row.get("lead_id") else "",
-        "bot_config_id": str(row.get("bot_config_id")) if row.get("bot_config_id") else "",
+        "bot_config_id": (
+            str(row["bot_config_id"])
+            if row.get("bot_config_id")
+            else ""
+        ),
     }
+
     if row.get("route"):
         ctx["route"] = row["route"]
+
     return ctx
 
 
@@ -114,18 +153,26 @@ async def resolve_pg_context(
     redis_ctx: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if redis_ctx and redis_ctx.get("client_id"):
+        # Event context
+        if all(redis_ctx.get(k) for k in _EVENT_PG_FIELDS):
+            return redis_ctx
+
+        # Campaign context
         if _pg_context_has_campaign_fields(redis_ctx):
             return redis_ctx
-        if not redis_ctx.get("campaign_id") and not redis_ctx.get("lead_id"):
+
+        if not redis_ctx.get("campaign_id") and not redis_ctx.get("event_id"):
             return redis_ctx
 
     if not pool or not session_call_id:
         return None
+
     row = await pg_db.get_call_log_by_session(pool, session_call_id)
+
     if not row:
         return None
-    return _pg_context_from_call_log(row)
 
+    return _pg_context_from_call_log(row)
 
 async def _run_campaign_post_call(
     *,
@@ -141,74 +188,108 @@ async def _run_campaign_post_call(
 ) -> None:
     if not session_call_id:
         return
-    if not _pg_context_has_campaign_fields(resolved_ctx):
-        if resolved_ctx is None:
-            logger.warning(
-                "post_call skipped: no campaign context for session={}",
-                session_call_id,
-            )
-        else:
-            # If it has a client_id but lacks campaign fields, it is a test call
-            if resolved_ctx.get("client_id"):
-                pool = _pg_pool()
-                if pool:
-                    try:
-                        test_outcome = (extraction or {}).get("intent_status", "Test Call")
-                        await pg_db.finalize_call_log(
-                            pool,
-                            session_call_id,
-                            duration_seconds,
-                            test_outcome,
-                            extraction or {},
-                            0,
-                            0.0,
-                            usage_dict,
-                            transcript=transcript,
-                            extraction_model=extraction_model,
-                            extraction_error=extraction_error,
-                            qualified=False,
-                        )
-                        logger.info("Finalized test call log in Postgres for session={}", session_call_id)
-                    except Exception as exc:
-                        logger.exception("Failed to finalize test call log for session={}: {}", session_call_id, exc)
-            else:
-                logger.error(
-                    "call_log missing campaign fields for post_call session={} ctx={}",
-                    session_call_id,
-                    resolved_ctx,
-                )
+
+    if resolved_ctx is None:
+        logger.warning(
+            "post_call skipped: no context for session={}",
+            session_call_id,
+        )
         return
+
     try:
-        from post_call_processor import process_post_call
         from uuid import UUID
 
         pool = _pg_pool()
         if pool is None:
             return
-        if resolved_ctx is None:
-            logger.error(
-                "post_call_processor skipped: resolved_ctx is None for session={}",
+
+        client_id = resolved_ctx.get("client_id")
+        lead_id = resolved_ctx.get("lead_id")
+        bot_config_id = resolved_ctx.get("bot_config_id")
+        campaign_id = resolved_ctx.get("campaign_id")
+        event_id = resolved_ctx.get("event_id")
+
+        # ---------------------------------------------------------
+        # EVENT POST-CALL
+        # ---------------------------------------------------------
+        if event_id:
+            from post_call_processor import process_event_post_call
+
+            await process_event_post_call(
+                pool,
                 session_call_id,
+                UUID(lead_id),
+                UUID(event_id),
+                UUID(client_id),
+                UUID(bot_config_id),
+                duration_seconds,
+                transcript,
+                extraction or {},
+                usage=usage_dict,
+                extraction_model=extraction_model,
+                extraction_error=extraction_error,
             )
+
             return
-        await process_post_call(
+
+        # ---------------------------------------------------------
+        # CAMPAIGN POST-CALL
+        # ---------------------------------------------------------
+        if campaign_id:
+            from post_call_processor import process_post_call
+
+            await process_post_call(
+                pool,
+                session_call_id,
+                UUID(lead_id),
+                UUID(campaign_id),
+                UUID(client_id),
+                UUID(bot_config_id),
+                duration_seconds,
+                transcript,
+                extraction or {},
+                usage=usage_dict,
+                extraction_model=extraction_model,
+                extraction_error=extraction_error,
+                post_call_snapshot=post_call_snapshot,
+            )
+
+            return
+
+        # ---------------------------------------------------------
+        # NO CAMPAIGN / EVENT (Admin dial-test / ephemeral calls)
+        # Still persist extraction + usage so Admin/client detail UI works.
+        # ---------------------------------------------------------
+        outcome = str((extraction or {}).get("intent_status") or "Unknown")
+        usage = dict(usage_dict or {})
+        await pg_db.finalize_call_log(
             pool,
             session_call_id,
-            UUID(resolved_ctx["lead_id"]),
-            UUID(resolved_ctx["campaign_id"]),
-            UUID(resolved_ctx["client_id"]),
-            UUID(resolved_ctx["bot_config_id"]),
             duration_seconds,
-            transcript,
+            outcome,
             extraction or {},
-            usage=usage_dict,
+            Decimal("0"),
+            Decimal("0"),
+            usage,
+            transcript=transcript,
             extraction_model=extraction_model,
             extraction_error=extraction_error,
-            post_call_snapshot=post_call_snapshot,
+            qualified=(outcome == "Interested"),
+            setup_charge=Decimal("0"),
+            duration_charge=Decimal("0"),
         )
-    except Exception as exc:
-        logger.exception("post_call_processor failed: {}", exc)
+        logger.debug(
+            "dial-test/orphan call_log finalized session={} outcome={} ext_keys={}",
+            session_call_id,
+            outcome,
+            len(extraction or {}),
+        )
 
+    except Exception as exc:
+        logger.exception(
+            "post_call_processor failed: {}",
+            exc,
+        )
 
 def _pg_pool():
     try:
@@ -421,6 +502,35 @@ def _transcript_for_webhook(
     return best, truncated
 
 
+def apply_transfer_outcome(
+    extraction: dict[str, Any] | None,
+    transfer_state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Force intent_status=Transferred when the cascade transfer tool ran."""
+    if not (transfer_state and transfer_state.get("transferred")):
+        return extraction
+    out = dict(extraction or {})
+    out["intent_status"] = "Transferred"
+    return out
+
+
+def _usage_view(summary: dict[str, Any] | None) -> dict[str, Any]:
+    """Compact usage dict for logs, SQLite blob consumers, and n8n."""
+    summary = summary or {}
+    return {
+        "llm_prompt_tokens": int(summary.get("llm_prompt_tokens") or 0),
+        "llm_completion_tokens": int(summary.get("llm_completion_tokens") or 0),
+        "llm_total_tokens": int(summary.get("llm_total_tokens") or 0),
+        "tts_characters": int(summary.get("tts_characters") or 0),
+        "stt_audio_seconds": float(summary.get("stt_audio_seconds") or 0),
+        "llm_input_audio_tokens": int(summary.get("llm_input_audio_tokens") or 0),
+        "llm_output_audio_tokens": int(summary.get("llm_output_audio_tokens") or 0),
+        "llm_cache_read_input_audio_tokens": int(
+            summary.get("llm_cache_read_input_audio_tokens") or 0
+        ),
+    }
+
+
 def _build_n8n_payload(
     *,
     row_id: int,
@@ -440,6 +550,10 @@ def _build_n8n_payload(
     extraction_error: str | None,
     extraction_model: str | None,
     post_call_extraction_skipped: bool,
+    usage_stt_audio_seconds: float = 0,
+    usage_input_audio_tokens: int = 0,
+    usage_output_audio_tokens: int = 0,
+    usage_cache_read_input_audio_tokens: int = 0,
 ) -> dict[str, Any]:
     tw, trunc = _transcript_for_webhook(transcript)
     return {
@@ -456,6 +570,10 @@ def _build_n8n_payload(
             "llm_completion_tokens": usage_completion_tokens,
             "llm_total_tokens": usage_total_tokens,
             "tts_characters": usage_tts_characters,
+            "stt_audio_seconds": usage_stt_audio_seconds,
+            "llm_input_audio_tokens": usage_input_audio_tokens,
+            "llm_output_audio_tokens": usage_output_audio_tokens,
+            "llm_cache_read_input_audio_tokens": usage_cache_read_input_audio_tokens,
         },
         "cost_inr": cost_inr,
         "transcript": tw,
@@ -480,6 +598,8 @@ def attach_pipeline_finalize(
     strip_bootstrap: bool = False,
     usage_accumulator: UsageMetricsAccumulator | None = None,
     extraction_schema: dict[str, Any],
+    providers: dict[str, str] | None = None,
+    transfer_state: dict[str, Any] | None = None,
 ) -> None:
     @task.event_handler("on_pipeline_finished")
     async def _on_pipeline_finished(task, frame):
@@ -501,12 +621,7 @@ def attach_pipeline_finalize(
             "turn_count": len(transcript),
         }
         if usage_summary is not None:
-            summary["usage"] = {
-                "llm_prompt_tokens": usage_summary.get("llm_prompt_tokens"),
-                "llm_completion_tokens": usage_summary.get("llm_completion_tokens"),
-                "llm_total_tokens": usage_summary.get("llm_total_tokens"),
-                "tts_characters": usage_summary.get("tts_characters"),
-            }
+            summary["usage"] = _usage_view(usage_summary)
         logger.info(
             "call_transcript_summary {}",
             json.dumps(summary, ensure_ascii=False),
@@ -526,20 +641,37 @@ def attach_pipeline_finalize(
                 preview,
             )
 
-        usage_metrics_blob: str | None = None
-        up, uc, ut, tts_c = 0, 0, 0, 0
-        if usage_summary is not None:
-            usage_metrics_blob = json.dumps(usage_summary, ensure_ascii=False)
-            up = int(usage_summary.get("llm_prompt_tokens") or 0)
-            uc = int(usage_summary.get("llm_completion_tokens") or 0)
-            ut = int(usage_summary.get("llm_total_tokens") or 0)
-            tts_c = int(usage_summary.get("tts_characters") or 0)
+        compact = _usage_view(usage_summary)
+        up = compact["llm_prompt_tokens"]
+        uc = compact["llm_completion_tokens"]
+        ut = compact["llm_total_tokens"]
+        tts_c = compact["tts_characters"]
+        duration_seconds = int(round(duration_ms / 1000))
 
         cost_inr = compute_sts_cost_inr(
             route,
             usage_prompt_tokens=up,
             usage_completion_tokens=uc,
         )
+
+        cost_usd = None
+        if providers:
+            cost_usd = compute_cascade_cost_usd(
+                duration_seconds=duration_seconds,
+                usage_prompt_tokens=up,
+                usage_completion_tokens=uc,
+                usage_tts_characters=tts_c,
+                stt_provider=providers.get("stt") or "",
+                llm_provider=providers.get("llm") or "",
+                tts_provider=providers.get("tts") or "",
+            )
+            compact["cost_usd"] = cost_usd
+            if usage_summary is not None and cost_usd is not None:
+                usage_summary["cost_usd"] = cost_usd
+
+        usage_metrics_blob: str | None = None
+        if usage_summary is not None:
+            usage_metrics_blob = json.dumps(usage_summary, ensure_ascii=False)
 
         try:
             row_id = await asyncio.to_thread(
@@ -582,13 +714,7 @@ def attach_pipeline_finalize(
                     session_call_id,
                     exc,
                 )
-        duration_seconds = int(round(duration_ms / 1000))
-        usage_dict = {
-            "llm_prompt_tokens": up,
-            "llm_completion_tokens": uc,
-            "llm_total_tokens": ut,
-            "tts_characters": tts_c,
-        }
+        usage_dict = compact
 
         if post_call_llm_configured():
 
@@ -654,7 +780,7 @@ def attach_pipeline_finalize(
                             extraction_json=None,
                             extraction_error=extraction_error,
                             extraction_model=os.getenv(
-                                "POST_CALL_MODEL", "llama-3.3-70b-versatile"
+                                "POST_CALL_MODEL", "openai/gpt-oss-120b"
                             ),
                         )
                     except Exception:
@@ -665,7 +791,7 @@ def attach_pipeline_finalize(
                     session_call_id=session_call_id,
                     duration_seconds=duration_seconds,
                     transcript=transcript,
-                    extraction=extraction,
+                    extraction=apply_transfer_outcome(extraction, transfer_state),
                     usage_dict=usage_dict,
                     extraction_model=extraction_model,
                     extraction_error=extraction_error,
@@ -686,6 +812,12 @@ def attach_pipeline_finalize(
                         usage_completion_tokens=uc,
                         usage_total_tokens=ut,
                         usage_tts_characters=tts_c,
+                        usage_stt_audio_seconds=compact["stt_audio_seconds"],
+                        usage_input_audio_tokens=compact["llm_input_audio_tokens"],
+                        usage_output_audio_tokens=compact["llm_output_audio_tokens"],
+                        usage_cache_read_input_audio_tokens=compact[
+                            "llm_cache_read_input_audio_tokens"
+                        ],
                         cost_inr=cost_inr,
                         extraction=extraction,
                         extraction_error=extraction_error,
@@ -697,14 +829,14 @@ def attach_pipeline_finalize(
             spawn_background_task(_extract_patch_and_webhook())
         else:
             logger.debug("post_call_extract skipped: {}", post_call_missing_key_message())
-            if session_call_id and _pg_context_has_campaign_fields(resolved_ctx):
+            if session_call_id:
                 spawn_background_task(
                     _run_campaign_post_call(
                         resolved_ctx=resolved_ctx,
                         session_call_id=session_call_id,
                         duration_seconds=duration_seconds,
                         transcript=transcript,
-                        extraction=None,
+                        extraction=apply_transfer_outcome(None, transfer_state),
                         usage_dict=usage_dict,
                     )
                 )
@@ -722,6 +854,12 @@ def attach_pipeline_finalize(
                     usage_completion_tokens=uc,
                     usage_total_tokens=ut,
                     usage_tts_characters=tts_c,
+                    usage_stt_audio_seconds=compact["stt_audio_seconds"],
+                    usage_input_audio_tokens=compact["llm_input_audio_tokens"],
+                    usage_output_audio_tokens=compact["llm_output_audio_tokens"],
+                    usage_cache_read_input_audio_tokens=compact[
+                        "llm_cache_read_input_audio_tokens"
+                    ],
                     cost_inr=cost_inr,
                     extraction=None,
                     extraction_error=None,

@@ -6,7 +6,7 @@
 
 ```
 1. CLAIM     claim_leads_for_dialer: pending|callback_scheduled → calling, attempts+1
-2. RESERVE   budget_used += 2 (RESERVE_CREDITS_PER_LEAD), stored on call_log.call_data
+2. RESERVE   budget_used += R (setup + rate × 2 min), stored on call_log.call_data
 3. LOG START insert_call_log_start: in_progress=TRUE, session_call_id=UUID
 4. DIAL      Plivo REST POST /Call/ → answer_url, hangup_url
 5. PREWARM   (STS only) Redis warmup signal; /answer waits ≤3s
@@ -64,12 +64,12 @@ billing unless `_pg` context is injected in `body`. Used by admin dial-test and
 ## Credits (per call)
 
 ```
-billed_minutes = ceil(duration_seconds / 60)  [0 if duration 0]
-credits_charged = billed_minutes * bot_config.credits_per_minute
-budget_used adjustment = credits_charged - reservation(2)
+billed_minutes = duration_seconds / 60
+credits_charged = setup + billed_minutes * rate   (snapshot on call_data)
+budget_used adjustment = round_half_up(credits_charged, 2) - reservation
 ```
 
-Unanswered: `credits_charged=0`, reservation released.
+Unanswered (busy / no-answer / reject / failed): **₹0**, reservation refunded. Charge only after the callee picks up (post-call). Never-Plivo / test call: ₹0.
 
 ---
 

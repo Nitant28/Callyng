@@ -15,12 +15,12 @@ export default function Sidebar() {
   const navItems = [
     { to: '/admin',               label: 'Dashboard',        icon: 'dashboard',               end: true },
     { to: '/admin/campaigns',     label: 'Campaigns',        icon: 'campaign' },
+    { to: '/admin/events', label: 'Events', icon: 'event' },
     { to: '/admin/calls',         label: 'Calls',            icon: 'call' },
     { to: '/admin/clients',       label: 'Clients',          icon: 'groups' },
     { to: '/admin/bot-configs',   label: 'Bot Configuration',icon: 'settings' },
     { to: '/admin/script-configs',label: 'Script Templates', icon: 'integration_instructions' },
     { to: '/admin/webhooks',      label: 'Webhooks',         icon: 'webhook' },
-    { to: '/admin/whatsapp',      label: 'WhatsApp',         icon: 'chat' },
     { to: '/admin/diagnostics',   label: 'Diagnostics',      icon: 'monitor_heart' },
   ];
 

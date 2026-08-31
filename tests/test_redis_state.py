@@ -143,6 +143,14 @@ def test_dialer_lock_acquire_refresh_release():
     _run(_run_test())
 
 
+def test_dialer_lock_key_uses_resource_type_namespace():
+    from dialer.dialer_lock import _lock_key
+
+    resource_id = uuid.uuid4()
+    assert _lock_key(resource_id, "campaign") == f"dialer_lock:campaign:{resource_id}"
+    assert _lock_key(resource_id, "event") == f"dialer_lock:event:{resource_id}"
+
+
 @pytest.mark.skipif(not os.getenv("REDIS_URL"), reason="REDIS_URL not set")
 def test_sweep_stale_prefetched_configs():
     async def _run_test():

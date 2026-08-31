@@ -175,10 +175,10 @@ Conventions:
 ### Bot configs
 | Method | Path | Body / Query | Response |
 |--------|------|--------------|----------|
-| POST | `/internal/bot-configs` | `{client_id, name, route, script_id, script_config_id?, telephony_number, credits_per_minute}` | `{id}` (422 bad script_id/route) |
+| POST | `/internal/bot-configs` | `{client_id, name, route, script_id, script_config_id?, telephony_number, credits_per_minute, fixed_start_credits?}` | `{id}` (422 bad script_id/route) |
 | GET | `/internal/bot-configs` | `client_id?, search?` | `{bot_configs:[...]}` (hides "CLI Sandbox") |
 | GET | `/internal/bot-configs/{id}` | | `{bot_config}` |
-| PATCH | `/internal/bot-configs/{id}` | partial fields incl. `active` | `{bot_config}` |
+| PATCH | `/internal/bot-configs/{id}` | partial fields incl. `credits_per_minute`, `fixed_start_credits`, `active` | `{bot_config}` |
 
 ### Campaigns (admin)
 | Method | Path | Body / Query | Response | Notes |

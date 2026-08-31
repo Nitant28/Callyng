@@ -35,7 +35,7 @@ Admin UI routes under `/admin/*`. All API calls use `X-Admin-Key` against `/inte
 
 ### Bot configs (`/admin/bot-configs`)
 - **APIs:** list/create/patch bot-configs; list clients + script-configs for forms.
-- **Actions:** bind route+script_id+script_config_id+telephony+credits_per_minute.
+- **Actions:** bind route+script_id+script_config_id+telephony+₹/min+setup fee.
 - **DB:** `bot_configs`.
 
 ### Script configs (`/admin/script-configs`)

@@ -52,6 +52,17 @@ def test_early_disconnect_at_threshold():
     )
 
 
+def test_early_disconnect_transferred_not_rewritten():
+    assert (
+        apply_early_disconnect_policy(
+            intent_status="Transferred",
+            duration_seconds=5,
+            callee_hangup=True,
+        )
+        is None
+    )
+
+
 def test_early_disconnect_strong_intent_not_applied():
     assert (
         apply_early_disconnect_policy(

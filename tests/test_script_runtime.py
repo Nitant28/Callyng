@@ -60,6 +60,7 @@ def test_build_push_lead_data_schema():
             "description": "Save lead data",
             "properties": {
                 "intent_status": {"type": "string", "description": "status"},
+                "callback_time": {"type": "string", "description": "else NULL"},
             },
             "required": ["intent_status"],
         }
@@ -68,6 +69,10 @@ def test_build_push_lead_data_schema():
     assert schema is not None
     assert schema.name == "push_lead_data"
     assert schema.required == ["intent_status"]
+    assert schema.properties["callback_time"]["type"] == "string"
+    assert schema.properties["callback_time"].get("nullable") is True
+    assert schema.properties["intent_status"]["type"] == "string"
+    assert "nullable" not in schema.properties["intent_status"]
 
 
 def test_resolve_sts_runtime_prefetch_hit():
@@ -132,17 +137,34 @@ def test_resolve_cascade_runtime_prefetch_hit():
             "script_id": "prowave_db",
             "version": 1,
             "system_prompt": "Cascade hello",
-            "cascade_stt_model": "saarika:v2.5",
-            "cascade_llm_model": "llama-3.3-70b-versatile",
+            "cascade_stt_provider": "sarvam",
+            "cascade_stt_model": "saaras:v3",
+            "cascade_stt_settings": {},
+            "cascade_llm_provider": "groq",
+            "cascade_llm_model": "openai/gpt-oss-120b",
+            "cascade_llm_settings": {"temperature": 0.2},
+            "cascade_tts_provider": "cartesia",
+            "cascade_tts_model": "sonic-3.5",
             "cascade_tts_voice": "voice-123",
+            "cascade_tts_settings": {},
             "cascade_live_tools": [],
+            "bootstrap_messages": [
+                {"role": "user", "content": "CMS kickoff for {lead_name}"}
+            ],
             "extraction_schema": {"fields": {}},
         },
     }
     runtime = sr.resolve_cascade_runtime(body)
     assert runtime.source == "script_config"
     assert runtime.system_prompt == "Cascade hello"
+    assert runtime.stt_provider == "sarvam"
+    assert runtime.llm_provider == "groq"
+    assert runtime.tts_provider == "cartesia"
+    assert runtime.llm_settings == {"temperature": 0.2}
     assert runtime.tts_voice == "voice-123"
+    assert runtime.bootstrap_messages == [
+        {"role": "user", "content": "CMS kickoff for {lead_name}"}
+    ]
 
 
 def test_resolve_cascade_runtime_module_fallback():

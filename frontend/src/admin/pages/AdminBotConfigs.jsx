@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import adminApi from '../../shared/api/admin';
-import AdminCustomerFilter from '../components/AdminCustomerFilter';
 
 
 export default function AdminBotConfigs() {
@@ -10,7 +9,6 @@ export default function AdminBotConfigs() {
   const [editingBot, setEditingBot] = useState(null);
   const [editPrice, setEditPrice] = useState('');
   const [search, setSearch] = useState('');
-  const [clientFilter, setClientFilter] = useState('');
   
   // Create Bot Config states
   const [clients, setClients] = useState([]);
@@ -28,9 +26,7 @@ export default function AdminBotConfigs() {
 
   const fetchBots = async () => {
     try {
-      const response = await adminApi.get('/internal/bot-configs', {
-        params: { client_id: clientFilter || undefined },
-      });
+      const response = await adminApi.get('/internal/bot-configs');
       const botConfigs = response.data.bot_configs || [];
       const mapped = botConfigs.map(bot => {
         const isOnline = bot.active;
@@ -72,7 +68,7 @@ export default function AdminBotConfigs() {
 
   useEffect(() => {
     fetchBots();
-  }, [clientFilter]);
+  }, []);
 
   const openPriceModal = (bot) => {
     setEditingBot(bot);
@@ -164,27 +160,22 @@ export default function AdminBotConfigs() {
 
   return (
     <>
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4">
-        <div className="min-w-0">
-          <h2 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text mb-1">Active Synthesizers</h2>
+      <div className="flex justify-between items-end mb-stack-lg">
+        <div>
+          <h2 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text mb-2">Active Synthesizers</h2>
           <p className="font-body-md text-body-md text-arctic-text-muted dark:text-molten-text-muted">Configure pricing and monitor neural output for deployed agents.</p>
         </div>
-        <div className="flex flex-nowrap items-center gap-3 shrink-0">
-          <AdminCustomerFilter
-            clients={clients}
-            value={clientFilter}
-            onChange={setClientFilter}
-          />
-          <input
+        <div className="flex gap-2">
+          <input 
             type="text"
             placeholder="Search bots"
-            className="h-10 w-[220px] px-3 bg-surface-container-lowest dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
+            className="px-4 py-2 bg-surface-container-lowest dark:bg-[#1A1C24] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm text-on-surface dark:text-molten-text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button
+          <button 
             onClick={openCreateModal}
-            className="h-10 shrink-0 px-4 rounded-lg bg-primary dark:bg-molten-primary text-white dark:text-molten-bg font-label-md text-label-md hover:brightness-110 hover:-translate-y-px active:translate-y-0 transition-all flex items-center gap-2 whitespace-nowrap"
+            className="px-4 py-2 rounded-lg bg-primary dark:bg-molten-primary text-white dark:text-molten-bg font-label-md text-label-md hover:brightness-110 hover:-translate-y-px active:translate-y-0 transition-all flex items-center gap-2"
           >
             <span className="material-symbols-outlined text-[18px]">add</span> Create Bot Config
           </button>

@@ -461,6 +461,8 @@ async def test_recover_abandoned_session_moves_calling_lead():
             "sts",
             datetime.now(timezone.utc),
             budget_reserved_credits=2.0,
+            credits_per_minute=3.5,
+            fixed_start_credits=0.6,
         )
         budget_before = await pool.fetchval(
             "SELECT budget_used_credits FROM campaigns WHERE id = $1",

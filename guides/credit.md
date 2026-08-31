@@ -1,353 +1,377 @@
-# Aakashvani Credit & Billing System Specification
+# Aakashvani Credit & Billing System
 
-This document details the complete architecture, mathematical billing formulas, technical mechanics, and native observability model for the **Aakashvani Hybrid Credit & Billing System**.
+Per-minute pricing, billed **pro-rata per second**, with a configurable **setup fee per started minute**.  
+1 credit = ₹1. Clients see rupees. Admins set rates per bot.
 
-The platform supports two distinct voice AI architectures:
-1. **SECTION 1: STS ROUTE (Gemini Live Speech-to-Speech)**
-2. **SECTION 2: CASCADED ROUTE (STT + LLM + TTS Pipeline)**
-3. **SECTION 3: NATIVE DASHBOARD OBSERVABILITY & ALERTING ARCHITECTURE**
-4. **SECTION 4: TECHNICAL IMPLEMENTATION PLAN (Current Repo → New System)**
+This spec is the source of truth for implementation. It matches the **current** architecture (campaign pre-allocation, claim-time reservation, settle-as-delta) and replaces the old ceiling-minute model.
 
 ---
 
-# SECTION 1: STS ROUTE (Gemini Live Speech-to-Speech)
+## 1. Why this model
 
-## 1.1 Architecture & Component Overview
+Token billing is deferred. Vendor cost is roughly ₹5/min today because prompts are heavy. We bill clients a simple, predictable rate:
 
-### Why This Architecture?
-The **STS (Speech-to-Speech)** route uses Google's `gemini-3.1-flash-live-preview` native multimodal audio model over WebSockets. Unlike traditional cascaded stacks, Gemini Live processes audio natively and returns audio directly within a single model container.
+| Who | Quoted rate | Notes |
+| --- | --- | --- |
+| Existing Gemini Live STS clients | ₹3.50–₹4.00 / min | Honour existing quotes |
+| New clients | ₹5.00–₹6.00 / min | Reflects current vendor cost |
+| Setup fee | ₹0.60 / started minute | Plivo charges ₹0.60 per started minute (0.6 at 0s, another 0.6 as soon as it crosses 1m, 2m, etc.); admin can set custom value |
 
-Consequently, the STS route consists of only **2 primary operational components**:
-1. **Telephony (Plivo)** — Telecommunication carrier setup and call duration.
-2. **Gemini Live Multimodal Model** — Native audio and text token processing.
+Tell clients these prices can change if LLM or carrier costs move.
 
-### Audio vs Text Token Separation: CANNOT Be Done Live
-
-A critical technical constraint verified against the actual codebase:
-
-> **Google's Gemini Live API does NOT expose a breakdown of audio tokens vs text tokens in its usage response.** The API returns aggregate `prompt_token_count` and `candidates_token_count` covering all modalities combined. Pipecat's `LLMUsageMetricsData` in `MetricsFrame` carries these aggregate numbers. `UsageMetricsAccumulator` in [`call_metrics.py`](file:///home/satyam/aakashvani/call_metrics.py) stores them as generic `llm_prompt_tokens` and `llm_completion_tokens` with no audio/text distinction.
-
-**Implications for billing**: We **cannot** scope `UsageMetricsTap` to "text tokens only" for STS. Instead, we use a hybrid approach:
-
-1. **Duration-based audio cost estimate**: Google publishes flat per-minute audio equivalents ($0.005/min in, $0.018/min out). We compute audio cost from call duration and **subtract** it from the total reported token cost to derive the text token residual. This is an approximation but matches Google's own published billing rates.
-2. **Total token cost**: Compute total cost from aggregate `prompt_tokens` and `completion_tokens` using the blended per-1M rates.
-3. **Recommended approach**: Use the **total aggregate token cost** (audio + text combined) from the Gemini usage metadata directly, since that is what Google actually bills us. The audio per-minute rates are published *equivalents*, not separate line items on the invoice. Trying to decompose and recompose them introduces rounding drift for zero benefit.
-
-### STS Billing Model: Use Aggregate Token Cost + Telephony
-
-Given the above constraint, the STS billing formula is:
-
-$$C_{\text{STS}} = C_{\text{telephony}} + C_{\text{gemini\_tokens}} \times (1 + M_{\text{margin}}) + C_{\text{post\_call}}$$
-
-Where $C_{\text{gemini\_tokens}}$ uses the aggregate token counts reported by the Gemini API.
+Rates are **never hardcoded** in billing logic. Every bot has its own `credits_per_minute` and `fixed_start_credits` in `bot_configs`. Admins change them from `/admin/bot-configs` or `PATCH /internal/bot-configs/{id}` with no deploy.
 
 ---
 
-## 1.2 Mathematical Billing Model & Formulas
+## 2. Locked decisions (gotchas closed)
 
-$$\text{Total STS Call Cost } (C_{\text{STS}}) = C_{\text{telephony}} + C_{\text{gemini}} \times (1 + M_{\text{margin}}) + C_{\text{post\_call}}$$
+These were ambiguous or wrong in the previous draft. Do not re-open them during implementation.
 
-### Detailed Component Calculation:
-
-1. **Telephony Cost ($C_{\text{telephony}}$)**:
-   - **Plivo Setup Fee ($C_{\text{fixed\_start}}$)**: **₹0.60** per attempt (Charged on every dial attempt initiated via Plivo, regardless of whether answered, busy, or failed, matching Plivo carrier charges).
-   - **Telephony Minute Fee**: $\lceil t_{\text{seconds}} / 60 \rceil \times R_{\text{telephony\_min}}$ (Default: ₹0.50 per started minute).
-
-2. **Gemini Token Cost ($C_{\text{gemini}}$)**:
-   - Uses aggregate tokens reported by Gemini API (audio + text combined):
-     $$C_{\text{gemini\_usd}} = \left( \frac{T_{\text{prompt}}}{1,000,000} \times R_{\text{sts\_in\_usd\_1m}} \right) + \left( \frac{T_{\text{completion}}}{1,000,000} \times R_{\text{sts\_out\_usd\_1m}} \right)$$
-     $$C_{\text{gemini\_inr}} = C_{\text{gemini\_usd}} \times \text{USD\_INR}$$
-   - Default rates for `gemini-3.1-flash-live-preview`:
-     - Input (audio+text blended): **$3.00 / 1M tokens**
-     - Output (audio+text blended): **$12.00 / 1M tokens**
-   - **Note**: These are the audio-dominant blended rates. Text-only input is $0.75/1M and text-only output is $4.50/1M, but since the API does not separate them, we use the blended audio-inclusive rates as the billing basis. This slightly overcharges for text-heavy prompts (system prompt, tool schemas) but is conservative and matches what Google actually invoices.
-
-3. **Profit Overhead Margin ($M_{\text{margin}}$)**:
-   - A configurable profit margin percentage (Default: **25%**) applied to Gemini vendor costs.
-
-4. **Post-Call Processing Charge ($C_{\text{post\_call}}$)**:
-   - Fixed fee of **₹0.25** applied at post-call settlement to cover structured lead extraction (`post_call_extract.py`), normalization, and platform webhooks.
-
----
-
-## 1.3 End-to-End Lifecycle & Technical Mechanics
-
-### Phase 1: Pre-Reservation Hold (Dial Claim)
-- **Objective**: Prevent credit overbooking under 50–100 parallel dials.
-- **Current state**: `adjust_budget_used` in [`db/postgres.py`](file:///home/satyam/aakashvani/db/postgres.py#L1265) has **NO WHERE clause** checking balance. It blindly increments `budget_used_credits`. This must be fixed.
-- **Required SQL**: Atomic conditional UPDATE:
-  ```sql
-  UPDATE campaigns
-  SET budget_used_credits = budget_used_credits + $2
-  WHERE id = $1 AND client_id = $3
-    AND (budget_credits - budget_used_credits) >= $2
-  RETURNING budget_credits, budget_used_credits;
-  ```
-- **Application Guard**: Dialer checks if a row was returned. If `None` (insufficient balance), reject before dialing Plivo.
-
-### Phase 2: Live In-Memory Monitoring (Zero-DB Writes)
-- **Objective**: Zero database queries during live audio streaming to prevent latency jitter.
-- **Pipeline Capture**: `UsageMetricsTap` captures aggregate `prompt_tokens` and `completion_tokens` in memory via `UsageMetricsAccumulator`.
-- **Minute Watchdog**: A 60-second timer increments started minute counts.
-- **Redis Snapshotting**: **Does NOT currently exist.** Must be implemented from scratch. Active call metrics and running cost estimates will be written to Redis key `active_call:{call_id}:cost` periodically.
-
-### Phase 3: Post-Call Settlement
-- **Objective**: Atomic final settlement when call hangs up.
-- **Execution**: [`post_call_processor.py`](file:///home/satyam/aakashvani/post_call_processor.py) executes a single PostgreSQL transaction:
-  1. Computes final $C_{\text{STS\_INR}}$ from accumulated token counts.
-  2. Executes `settle_call_budget`, replacing the initial reservation hold with exact final charges.
-  3. If `budget_credits - budget_used_credits < 0`, automatically transitions campaign status to `paused` and queues deficit deduction against client `balance_credits`.
+| Topic | Decision |
+| --- | --- |
+| Duration charge | **Pro-rata per second.** `billed_minutes = duration_seconds / 60.0`. Never `math.ceil(seconds / 60)` for duration rate. |
+| Setup charge | **Per started minute.** `started_minutes = math.ceil(duration_seconds / 60)` (or 1 for dial attempt). `setup_charge = started_minutes * fixed_start_credits`. 0–60s = ₹0.60 setup, 61–120s = ₹1.20 setup, 121–180s = ₹1.80 setup. |
+| Money type | `Decimal` only. Never `float` for charges, reservations, or budget deltas. |
+| Display vs storage | Store 4 decimal places on the call (`credits_charged NUMERIC(10,4)`). **Round HALF_UP to 2 decimal places** when applying to campaign/wallet (`NUMERIC(12,2)`). UI always shows ₹ with 2 decimals. |
+| Setup fee column | `fixed_start_credits NUMERIC(10,4) NOT NULL DEFAULT 0.6000`. **Not** `NUMERIC(6,4)` (that overflows at ₹100). |
+| Negative / huge rates | Reject. API validation: `credits_per_minute` ∈ [0, 9999.99], `fixed_start_credits` ∈ [0, 999999.9999]. Zero is allowed (free setup or free minutes). |
+| When the setup fee applies | Charged per started minute only when the **callee picks up** (connected / answered). **Not** charged for busy, no-answer, reject, cancel, failed, never-Plivo, orphans, or test calls. |
+| Unanswered / busy | **₹0.** Full reservation refunded. Charge only after answer. |
+| Test calls (`is_test_call`) | **Free.** No reservation, no charge, no budget pause. |
+| Rate changes mid-flight | **Snapshot at dial.** In-flight calls bill at the rate stored on `call_logs.call_data`. New dials pick up the new rate. Admin copy must say this. |
+| Reservation amount | `(setup × 2) + (rate × 2 minutes)`, computed from the campaign’s bot **inside** `claim_leads_for_dialer`. |
+| Reservation vs settle | Keep **delta settle**: `budget_used += charged − reserved`. Do not release-then-re-add (race). Do not use a conditional `UPDATE … remaining >= charge` on settle — the call already happened; always commit the charge. |
+| Conditional remaining check | Only on **reserve** (claim / pre-dial). If remaining < one reservation, claim 0 leads and the dialer pauses with `reason="budget_exhausted"` (already exists). |
+| Campaign overspend | A live call can run longer than the 2-minute buffer. Always commit the charge. If `budget_used > budget_credits` after settle: pause the campaign, deduct the overflow from `clients.balance_credits` (floor at 0), write a `credit_transactions` row (`note` like `Campaign overspend {campaign_id}`). |
+| Redis `active_call:{session_id}` | **Not used for billing.** Duration comes from the pipeline’s `duration_seconds`. |
+| Pre-allocation | Unchanged. Starting a campaign still deducts `budget_credits` from the client wallet once. Per-call accounting only touches `campaigns.budget_used_credits`. |
+| Token metrics | Logged for telemetry. Ignored for billing. |
+| Buffer minutes | Constant `BILLING_RESERVE_MINUTES = 2` in **one** Python module (`billing.py`). |
 
 ---
 
-# SECTION 2: CASCADED ROUTE (STT + LLM + TTS Pipeline)
+## 3. Formula
 
-## 2.1 Architecture & Component Overview
-
-### Why This Architecture?
-The **Cascaded** route connects decoupled provider APIs in a serial audio processing pipeline.
-
-### Current Provider Stack (Verified Against Codebase)
-As verified in [`bot_cascade.py`](file:///home/satyam/aakashvani/bot_cascade.py), the cascaded route currently uses a **fixed provider stack**:
-- **Telephony**: Plivo
-- **Speech-to-Text (STT)**: **Sarvam AI** (`SarvamSTTService`)
-- **Large Language Model (LLM)**: **Groq** (`GroqLLMService`)
-- **Text-to-Speech (TTS)**: **Cartesia** (`CartesiaTTSService`)
-
-> **Important correction**: The previous draft of this document listed "Deepgram / Sarvam AI" for STT and "OpenAI / ElevenLabs" as alternative providers. **These alternatives do NOT exist in the codebase.** There are no Deepgram, OpenAI, or ElevenLabs imports, API keys, or script config fields anywhere. All cascade scripts (`cascade_scripts/*.py`) exclusively configure Sarvam models, Groq models, and Cartesia voices via `script_runtime.py` fields (`sarvam_model`, `sarvam_language`, `groq_model`, `cartesia_voice`).
-
-### Multi-Vendor Future Support
-If we later add alternative providers (Deepgram STT, OpenAI LLM, ElevenLabs TTS), the billing system should be designed to handle it. The approach:
-- Each `bot_config` / `script_config` record stores the specific vendor names alongside their rates.
-- At post-call settlement, the pricing engine reads the vendor from the call's `bot_config` and applies the matching rate table.
-- **For now**, we hardcode the current Sarvam + Groq + Cartesia rates as defaults and make the rate columns configurable for future vendors.
-
-### STT Metrics Gap: Audio Duration Not Tracked
-
-> **Critical gap verified**: Pipecat does **NOT** emit `STTUsageMetricsData` as a `MetricsFrame`. `UsageMetricsTap` in [`call_metrics.py`](file:///home/satyam/aakashvani/call_metrics.py) only captures `LLMUsageMetricsData` (tokens) and `TTSUsageMetricsData` (characters). **STT audio duration is completely untracked.**
-
-**Resolution options**:
-1. **Use call duration as STT proxy** — STT runs for the full duration of the call (Sarvam receives continuous audio). This slightly overestimates because it includes periods of silence, but Sarvam/Deepgram billing works on audio-seconds-sent, which correlates closely with call duration.
-2. **Add VAD-aware STT duration tracking** — Track only the user-speaking segments via `UserStartedSpeakingFrame`/`UserStoppedSpeakingFrame` in a custom frame processor. More accurate but adds complexity.
-
-**Recommended**: Option 1 (use call duration) for initial implementation. The overestimate is small and conservative. Option 2 can be added later if STT costs become a significant billing concern.
-
----
-
-## 2.2 Mathematical Billing Model & Formulas
-
-$$\text{Total Cascaded Call Cost } (C_{\text{Cascade}}) = C_{\text{telephony}} + \left( C_{\text{stt}} + C_{\text{llm}} + C_{\text{tts}} \right) \times (1 + M_{\text{margin}}) + C_{\text{post\_call}}$$
-
-### Component Calculations:
-
-1. **Component 1: Telephony (Plivo)**:
-   - Setup Fee: $C_{\text{fixed\_start}} = 0.60$ INR.
-   - Minute Fee: $\lceil t_{\text{seconds}} / 60 \rceil \times R_{\text{telephony\_min}}$.
-
-2. **Component 2: Speech-to-Text (STT — Sarvam AI)**:
-   - Billed per audio minute (approximated as call duration):
-     $$C_{\text{stt\_inr}} = \frac{t_{\text{seconds}}}{60} \times R_{\text{stt\_usd\_min}} \times \text{USD\_INR}$$
-
-3. **Component 3: Large Language Model (LLM — Groq)**:
-   - Billed per input/output tokens (live-captured via `UsageMetricsTap`):
-     $$C_{\text{llm\_usd}} = \left( \frac{T_{\text{llm\_in}}}{1,000,000} \times R_{\text{llm\_in\_usd}} \right) + \left( \frac{T_{\text{llm\_out}}}{1,000,000} \times R_{\text{llm\_out\_usd}} \right)$$
-     $$C_{\text{llm\_inr}} = C_{\text{llm\_usd}} \times \text{USD\_INR}$$
-
-4. **Component 4: Text-to-Speech (TTS — Cartesia)**:
-   - Billed per 1,000 synthesized characters (live-captured via `UsageMetricsTap`):
-     $$C_{\text{tts\_inr}} = \frac{\text{Chars}_{\text{tts}}}{1,000} \times R_{\text{tts\_usd\_1k}} \times \text{USD\_INR}$$
-
-5. **Post-Call Processing Fee ($C_{\text{post\_call}}$)**:
-   - Fixed fee of **₹0.25** applied at post-call extraction.
-
----
-
-## 2.3 End-to-End Lifecycle & Technical Mechanics
-
-### Phase 1: Pre-Reservation Hold
-- Same atomic conditional UPDATE on `campaigns` table (see Section 1.3 Phase 1).
-
-### Phase 2: Live In-Memory Monitoring
-- `UsageMetricsTap` tracks LLM tokens (`llm_prompt_tokens`, `llm_completion_tokens`) and TTS characters (`tts_characters`) per frame.
-- **STT duration**: Not tracked by `UsageMetricsTap`. Derived from `duration_seconds` at settlement.
-- Redis snapshot of active call cost to `active_call:{call_id}:cost` (to be implemented).
-
-### Phase 3: Post-Call Settlement
-- Post-call processor computes itemized component costs.
-- Saves component breakdown into new `call_logs` columns (to be added via migration).
-
----
-
-# SECTION 3: NATIVE DASHBOARD OBSERVABILITY & ALERTING ARCHITECTURE
-
-## 3.1 Why Native React Dashboard Over Grafana?
-
-Rather than adding a third-party Grafana container requiring separate logins, plugins, and volume configurations, Aakashvani uses a **Native Integrated Observability Architecture** built directly into the existing FastAPI backend and React frontend ([`frontend/`](file:///home/satyam/aakashvani/frontend/)):
-
-### Architectural Advantages:
-1. **Zero Extra Infrastructure Overhead**: Eliminates extra Docker service dependencies and RAM overhead.
-2. **Unified Authentication**: Admins and Clients view their metrics directly inside their existing JWT-authenticated dashboard.
-3. **Role-Based Visibility**: Clients see their live campaign budget burn and call logs; Admins see vendor cost breakdowns, `profit_credits`, and margin % analytics.
-
-## 3.2 Backend Endpoints & Native Alerting
-
-### 1. Live Active Call Burn Rate (`GET /api/internal/metrics/live-burn`)
-- Reads active call snapshots from Redis (`active_call:*:cost`) and returns real-time active call count, running cost burn rate (INR/sec), and route split.
-
-### 2. Settled Revenue & Realized Margins (`GET /api/internal/metrics/margins`)
-- Queries `call_logs` in PostgreSQL and returns total billed revenue, vendor cost, net profit, and margin %.
-
-### 3. Wallet Health & Underflow List (`GET /api/internal/metrics/underflow-alerts`)
-- Queries `clients` with `balance_credits < threshold` and `campaigns` where `budget_credits - budget_used_credits < 0`.
-
-### 4. Automated Event-Driven Alerts
-- When a campaign underflows or client balance drops below threshold, [`post_call_processor.py`](file:///home/satyam/aakashvani/post_call_processor.py) directly triggers an automated alert via [`n8n_webhook.py`](file:///home/satyam/aakashvani/n8n_webhook.py).
-
----
-
-# SECTION 4: TECHNICAL IMPLEMENTATION PLAN
-
-## 4.0 Current State of the Codebase (Verified)
-
-| Aspect | Current State | Required State |
-| :--- | :--- | :--- |
-| **Billing model** | Flat `credits_per_minute` × `ceil(duration/60)` in [`post_call_processor.py:392-395`](file:///home/satyam/aakashvani/post_call_processor.py#L392) | Component-level token/duration billing with margin |
-| **Token usage** | Captured by `UsageMetricsAccumulator` but **ignored for billing**. Written to `call_logs` as metrics only. | Used as primary billing input |
-| **STT tracking** | **Not tracked at all** — no `STTUsageMetricsData` in Pipecat | Derived from `duration_seconds` at settlement |
-| **Budget reservation** | `RESERVE_CREDITS_PER_LEAD = 2.0` credits, **no atomicity guard** — `adjust_budget_used` has no WHERE clause | Atomic conditional UPDATE with balance check |
-| **Redis live snapshots** | **Does not exist** — Redis only used for dialer locks | Active call cost snapshots every 5s |
-| **`call_logs` schema** | Single `credits_charged` column. No component breakdown. | Itemized: `fixed_credits_charged`, `variable_credits_charged`, `stt_credits_charged`, `llm_credits_charged`, `tts_credits_charged`, `post_call_credits_charged`, `profit_credits` |
-| **`bot_configs` schema** | Single `credits_per_minute` column | Per-component USD rates, margin %, post-call fee |
-| **Cascaded providers** | Hardcoded: Sarvam STT + Groq LLM + Cartesia TTS | Same, with configurable rates for future vendors |
-| **STS token separation** | Aggregate prompt/completion tokens (audio+text combined) | Use aggregate tokens with blended rates |
-| **Plivo setup fee** | Not tracked separately — bundled into `credits_per_minute` | Explicit `fixed_start_credits` on every dial attempt |
-| **Campaign underflow** | Not handled — no auto-pause on negative budget | Auto-pause + deficit settled from client balance |
-| **Observability endpoints** | None | 3 new FastAPI endpoints for admin dashboard |
-
----
-
-## 4.1 Database Schema Changes
-
-### File: New migration `alembic/versions/011_credit_system_redesign.py`
-
-**ADD columns to `bot_configs`**:
-```sql
--- Telephony
-fixed_start_credits NUMERIC(6,4) NOT NULL DEFAULT 0.6000   -- Plivo setup fee (INR)
-fixed_per_minute_credits NUMERIC(6,4) NOT NULL DEFAULT 0.5000  -- Platform fixed cost per started minute (INR)
-
--- STS rates (gemini-3.1-flash-live-preview, audio+text blended)
-sts_input_usd_per_1m NUMERIC(10,4) DEFAULT 3.0000    -- Blended input rate
-sts_output_usd_per_1m NUMERIC(10,4) DEFAULT 12.0000   -- Blended output rate
-
--- Cascaded rates (Sarvam + Groq + Cartesia)
-stt_usd_per_min NUMERIC(10,4) DEFAULT 0.0060           -- Sarvam STT per audio minute
-llm_input_usd_per_1m NUMERIC(10,4) DEFAULT 0.1500     -- Groq input per 1M tokens
-llm_output_usd_per_1m NUMERIC(10,4) DEFAULT 0.6000    -- Groq output per 1M tokens
-tts_usd_per_1k_chars NUMERIC(10,4) DEFAULT 0.0150     -- Cartesia per 1K chars
-
--- Profit & overhead
-profit_margin_percent NUMERIC(6,2) NOT NULL DEFAULT 25.00
-post_call_fee_credits NUMERIC(6,4) NOT NULL DEFAULT 0.2500
+```
+started_minutes    = max(1, math.ceil(duration_seconds / 60))  if connected else 1
+setup_charge       = started_minutes × fixed_start_credits
+duration_credits   = (duration_seconds / 60) × credits_per_minute
+raw_charge         = setup_charge + duration_credits
+credits_charged    = raw_charge quantized to 0.0001 (call log)
+budget_delta_amt   = credits_charged quantized to 0.01 HALF_UP (campaign / wallet)
 ```
 
-**ADD columns to `call_logs`**:
-```sql
-fixed_credits_charged NUMERIC(10,4) DEFAULT 0
-variable_credits_charged NUMERIC(10,4) DEFAULT 0
-post_call_credits_charged NUMERIC(10,4) DEFAULT 0
-stt_credits_charged NUMERIC(10,4) DEFAULT 0
-llm_credits_charged NUMERIC(10,4) DEFAULT 0
-tts_credits_charged NUMERIC(10,4) DEFAULT 0
-profit_credits NUMERIC(10,4) DEFAULT 0
+Reservation at claim:
+
+```
+R_reserve = (fixed_start_credits × BILLING_RESERVE_MINUTES) + (credits_per_minute × BILLING_RESERVE_MINUTES)
 ```
 
-**DO NOT remove** `credits_per_minute` from `bot_configs` or `credits_charged` from `call_logs` — keep for backward compatibility during rollout.
+Worked examples (setup ₹0.60 per started min unless noted):
+
+| Rate | Duration | Started mins | Setup charge | Duration charge | Total on call log | Campaign debit (2 dp) |
+| --- | --- | --- | --- | --- | --- | --- |
+| ₹3.50/min | 15s | 1 | 1 × 0.60 = 0.6000 | 3.50 × 0.25 = 0.8750 | **1.4750** | **1.48** |
+| ₹4.00/min | 45s | 1 | 1 × 0.60 = 0.6000 | 4.00 × 0.75 = 3.0000 | **3.6000** | **3.60** |
+| ₹3.50/min | 65s (1m5s) | 2 | 2 × 0.60 = 1.2000 | 3.50 × 1.0833 = 3.7917 | **4.9917** | **4.99** |
+| ₹6.00/min | 90s (1m30s) + ₹0.50 setup | 2 | 2 × 0.50 = 1.0000 | 6.00 × 1.50 = 9.0000 | **10.0000** | **10.00** |
+| ₹4.00/min | Busy / unanswered (never picked up) | — | 0 | 0 | **0** | **0** |
+| any | Test call | 0 | 0 | 0 | **0** | **0** |
+
+UI copy for a 15s call: **₹1.48** (setup ₹0.60 + talk ₹0.88). Do not show four decimals to people.
 
 ---
 
-## 4.2 Files to MODIFY
+## 4. Call lifecycle (how the code actually works)
 
-### 1. [`pricing_sts.py`](file:///home/satyam/aakashvani/pricing_sts.py)
-- **Current**: Single function `compute_sts_cost_inr()` using env vars, returns an estimate, result is never used for billing.
-- **Change**: Add `calculate_sts_call_cost(duration_seconds, prompt_tokens, completion_tokens, bot_config)` that computes telephony + Gemini token cost + margin + post-call fee. Keep old function for backward compat.
+### 4.1 Campaign start (unchanged)
 
-### 2. [`post_call_processor.py`](file:///home/satyam/aakashvani/post_call_processor.py)
-- **Current** (lines 392-395): `credits_charged = billed_minutes * credits_per_minute`.
-- **Change**: Route-aware billing:
-  - If `route == "sts"`: Call `calculate_sts_call_cost()`.
-  - If `route == "cascaded"`: Call new `calculate_cascaded_call_cost()`.
-  - Pass component breakdown to `finalize_call_log`.
+`clients.balance_credits -= budget_credits`. The campaign now owns that pool.
 
-### 3. [`db/postgres.py`](file:///home/satyam/aakashvani/db/postgres.py)
-- **`adjust_budget_used`** (line 1265): Add WHERE clause for atomic balance check.
-- **`reserve_campaign_budget`** (line 1293): Compute dynamic reservation amount from bot_config rates instead of static `RESERVE_CREDITS_PER_LEAD = 2.0`.
-- **`finalize_call_log`**: Add new columns to the UPDATE statement.
-- **`create_bot_config` / `update_bot_config`**: Add new pricing columns.
-- **New function**: `maybe_auto_pause_underflow_campaign()` — pause campaign and deduct deficit from client `balance_credits`.
+### 4.2 Pre-reserve at claim (dialer)
 
-### 4. [`call_metrics.py`](file:///home/satyam/aakashvani/call_metrics.py)
-- **No changes to capture logic** — `UsageMetricsAccumulator` already tracks all needed fields.
-- **Add**: `estimate_running_cost_inr(bot_config, route, duration_seconds)` method for Redis live snapshot computation.
+Today `claim_leads_for_dialer` does `FOR UPDATE` on the campaign, then:
 
-### 5. [`bot_sts.py`](file:///home/satyam/aakashvani/bot_sts.py) & [`bot_cascade.py`](file:///home/satyam/aakashvani/bot_cascade.py)
-- **Add**: Redis snapshot writer that publishes `active_call:{session_call_id}:cost` JSON every 5 seconds during active calls.
-- **Add**: Pass `bot_config` pricing fields into the pipeline context so `UsageMetricsAccumulator` can estimate live cost.
+```
+budget_slots = remaining // 2.0     # hardcoded
+reserve 2.0 × claimed_count
+```
 
-### 6. [`call_limits.py`](file:///home/satyam/aakashvani/call_limits.py)
-- **Add**: Minute boundary ticker that increments started-minutes counter at 60s intervals (lightweight asyncio timer alongside existing watchdog).
+Target: join the campaign’s `bot_configs` **inside the same transaction**, compute `R_reserve`, then:
 
-### 7. [`dialer/cost_guard.py`](file:///home/satyam/aakashvani/dialer/cost_guard.py)
-- **Change**: `MIN_REMAINING_CREDITS` from static `RESERVE_CREDITS_PER_LEAD` to dynamic reservation based on `bot_config.fixed_start_credits + bot_config.fixed_per_minute_credits + estimated_variable_buffer`.
+```
+budget_slots = remaining // R_reserve
+UPDATE campaigns
+  SET budget_used_credits = budget_used_credits + (R_reserve × claimed_count)
+WHERE remaining >= R_reserve × claimed_count
+```
 
-### 8. [`api/routes/internal.py`](file:///home/satyam/aakashvani/api/routes/internal.py)
-- **Change**: `BotConfigCreate` and `BotConfigUpdate` Pydantic models to include new pricing fields.
-- **Keep**: `credits_per_minute` field as optional for backward compat.
+Return `budget_reserved_credits`, `credits_per_minute`, and `fixed_start_credits` on each claimed lead (or as fields the dialer already has from the bot row fetched in that loop). `fire_call` **must write those same numbers** onto `call_logs.call_data`. Do not re-read the bot after claim — that is the mid-flight rate-change race.
+
+If remaining < one `R_reserve`, claim nothing. The dialer loop already calls `check_campaign_budget` and `pause_campaign(..., reason="budget_exhausted")`. Update `check_campaign_budget` to compare remaining against **this campaign’s** `R_reserve`, not the global `2.0`.
+
+### 4.3 Plivo connect
+
+`insert_call_log_start` stores on `call_data`:
+
+```json
+{
+  "budget_reserved_credits": 7.6,
+  "credits_per_minute": 3.5,
+  "fixed_start_credits": 0.6
+}
+```
+
+(Use JSON numbers from `float(Decimal)` only at the JSON boundary; compute in Decimal.)
+
+### 4.4 Dial never reached Plivo
+
+Existing `_release_lead_to_pending` / `set_credits_charged_zero` paths: settle with `credits_charged = 0` so the full reservation is refunded. Do not charge setup.
+
+### 4.5 Unanswered / busy (Plivo dialed, never connected)
+
+`settle_unanswered_call` writes `credits_charged = 0` (and `setup_charge` / `duration_charge` = 0) and refunds the full reservation. **No charge unless the callee picks up.** Billing for answered calls goes through post-call only.
+
+### 4.6 Connected call — post-call
+
+`post_call_processor.py` today:
+
+```python
+billed_minutes = math.ceil(duration_seconds / 60)
+credits_charged = billed_minutes * credits_per_minute
+```
+
+and reads **live** `bot_configs.credits_per_minute`.
+
+Target: call `billing.compute_call_charge(duration_seconds, rate, setup)` using **snapshots** from `call_data`, falling back to the bot row only if the snapshot is missing (old in-flight calls during deploy). Then `settle_call_budget(charged, reserved)` as today (delta). Then if `budget_used > budget_credits`, pause + wallet overflow (section 2).
+
+### 4.7 Campaign end (unchanged)
+
+`try_settle_campaign_budget`: `unused = max(budget_credits − budget_used_credits, 0)` returned to the wallet. If the campaign overspent, unused is 0 (overflow already taken from the wallet at settle time).
 
 ---
 
-## 4.3 Files to ADD
+## 5. Schema
 
-### 1. `alembic/versions/011_credit_system_redesign.py`
-- Migration adding new columns to `bot_configs` and `call_logs`.
+### 5.1 New column
 
-### 2. `pricing_cascade.py` (new file)
-- `calculate_cascaded_call_cost(duration_seconds, usage, bot_config)` → returns itemized component costs.
+```sql
+-- db/schema/011_bot_fixed_start_credits.sql
+ALTER TABLE bot_configs
+  ADD COLUMN IF NOT EXISTS fixed_start_credits NUMERIC(10,4) NOT NULL DEFAULT 0.6000;
 
-### 3. `api/routes/metrics.py` (new file)
-- Three admin endpoints: `/api/internal/metrics/live-burn`, `/api/internal/metrics/margins`, `/api/internal/metrics/underflow-alerts`.
+ALTER TABLE call_logs
+  ALTER COLUMN billed_minutes TYPE NUMERIC(10,4)
+  USING billed_minutes::numeric;
+```
 
-### 4. Frontend Admin Billing Components
-- Admin Bot Config form fields for new pricing columns.
-- Call log detail view showing component cost breakdown.
-- Admin dashboard revenue/margin analytics panel.
+Alembic revision **`011_bot_fixed_start_credits`**, `down_revision = "010_early_disconnect_outcome"`. Follow the pattern in `005_credit_ledger.py` (read the SQL file). CI runs `alembic upgrade head` before pytest — this migration must apply cleanly on empty Postgres 16.
 
----
+Existing bots get setup ₹0.60 via `DEFAULT`. No backfill script needed.
 
-## 4.4 Files to NOT CHANGE
+### 5.2 Comments to update in `db/schema/001_initial.sql`
 
-- [`call_transcript.py`](file:///home/satyam/aakashvani/call_transcript.py) — Transcript logic is billing-independent.
-- [`call_log_db.py`](file:///home/satyam/aakashvani/call_log_db.py) — SQLite call log (local dev only), not used in production billing.
-- [`script_runtime.py`](file:///home/satyam/aakashvani/script_runtime.py) — No pricing config belongs in script runtime.
-- `cascade_scripts/*.py` and `sts_scripts/*.py` — Scripts define conversation behavior, not billing.
-- [`n8n_webhook.py`](file:///home/satyam/aakashvani/n8n_webhook.py) — May optionally add component breakdown to webhook payload later, but not required for initial rollout.
+Replace every “ceiling minutes / `ceil(duration_seconds / 60)`” comment on `bot_configs`, `campaigns.budget_used_credits`, and `call_logs.billed_minutes`. Fresh installs should not teach the old model. Do **not** change `credits_per_minute NUMERIC(6,2)` or wallet `NUMERIC(12,2)`.
+
+`billed_minutes` meaning becomes “exact minutes as `duration_seconds / 60`”, e.g. 15s → `0.2500`. Integer `2` inserts in tests still work.
 
 ---
 
-## 4.5 Rollout Strategy
+## 6. Backend API
 
-### Phase A: Schema + Pricing Engine (No Billing Change Yet)
-1. Deploy migration `011_credit_system_redesign.py` — adds new columns with defaults, old `credits_per_minute` untouched.
-2. Deploy updated `pricing_sts.py` and new `pricing_cascade.py` — calculate new costs but write them to `variable_credits_charged`, `profit_credits` etc. as **shadow columns** only.
-3. Continue using old `credits_charged = billed_minutes * credits_per_minute` for actual billing.
-4. Compare shadow vs actual charges across ~1000 calls to validate pricing accuracy.
+`POST /internal/bot-configs` and `PATCH /internal/bot-configs/{id}` already exist. Add `fixed_start_credits`.
 
-### Phase B: Switch Billing Source
-1. Flip `post_call_processor.py` to use new pricing engine for `credits_charged`.
-2. Deploy atomic budget reservation SQL.
-3. Enable auto-pause on campaign underflow.
+Create body:
 
-### Phase C: Observability & Dashboard
-1. Deploy Redis live snapshots.
-2. Deploy admin metrics API endpoints.
-3. Deploy frontend billing analytics components.
+```json
+{
+  "client_id": "…",
+  "name": "Custom Pricing Bot",
+  "route": "sts",
+  "script_id": "script_456",
+  "script_config_id": "…",
+  "telephony_number": "+1234567890",
+  "credits_per_minute": 5.50,
+  "fixed_start_credits": 0.60
+}
+```
+
+Patch body (either field optional):
+
+```json
+{
+  "credits_per_minute": 6.00,
+  "fixed_start_credits": 0.50
+}
+```
+
+Pydantic: `Field(ge=0, le=9999.99)` / `Field(ge=0, le=999999.9999)`. Omit `fixed_start_credits` on create → DB default 0.60.
+
+`create_bot_config(...)` in `db/postgres.py` takes `fixed_start_credits: Decimal | float | None = None`. Existing positional test callers stay valid.
+
+GET list/detail already `SELECT *`, so the new column appears without extra queries. `record_to_dict` must serialize `Decimal` as `float` (it already does for other numerics — verify, don’t regress).
+
+No new routes. Client `/api/credits` stays wallet-only.
+
+---
+
+## 7. Frontend — make it obvious, not clever
+
+### 7.1 Bug to kill
+
+`AdminBotConfigs.jsx` labels `credits_per_minute` as **“RATE (INR/HR)”** and **“Hourly Rate (INR)”**. It is per **minute**. That label would make a ₹4.00/min bot look like ₹4/hour. Fix every string.
+
+### 7.2 Admin bot cards (`/admin/bot-configs`)
+
+Show two figures:
+
+- **₹4.00 / min**
+- **Setup ₹0.60 / call**
+
+Edit modal: two number inputs (`step="0.01"`, `min="0"`), helper text:
+
+> Talk time is billed per second. A 15-second call at ₹4.00/min + ₹0.60 setup costs ₹1.60. Changes apply to **new dials only**; calls already ringing keep the old rate.
+
+Live preview under the inputs (15s / 1 min / 2 min) using the same formula as the backend (or a tiny shared comment in the spec — JS may round to 2 dp for preview; backend remains source of truth).
+
+Create modal: same two fields. Setup defaults to `0.60` so admins are not forced to remember it. Validate ≥ 0 in the form; show API 422 text if the server rejects.
+
+### 7.3 Deploy-bot modal (`AdminScriptConfigs.jsx`)
+
+Same two fields. Today it only posts `credits_per_minute`. If this form is skipped, every bot deployed from a template gets setup ₹0.60 silently — easy to miss.
+
+### 7.4 Admin call drawer (`AdminCalls.jsx`)
+
+`billed_minutes` will be fractional (`0.25`). Show duration as `mm:ss` (already) and charge as `₹1.48`. Optional second line: `Setup ₹0.60 + 15s talk`. Do not render `0.2500` as a raw integer `0` (`{callData.billed_minutes || 0}` is fine; `{parseInt(...)}` is not).
+
+### 7.5 Client surfaces
+
+Clients already see wallet and campaign used as ₹. Keep that.
+
+Add **Credits** on the client call metadata panel (currently duration/outcome only). Format `₹1.48`. People should be able to match a short call to a small charge without opening a ticket.
+
+Campaign detail already shows `{bot_config.credits_per_minute} credits/min`. Change copy to **₹4.00 per minute** plus **₹0.60 to connect**. Fallback `|| 1` is wrong once rates vary — use the real number or “—”.
+
+### 7.6 Copy rules
+
+- Always ₹, two decimals, `en-IN` grouping where we already use it.
+- “Credits” and “rupees” are the same number; don’t mix “credits/min” on one screen and “₹/min” on another. Prefer **₹**.
+- Empty/unbilled: **₹0.00** or “—” (test calls), never `null` crashing `.toFixed`.
+
+---
+
+## 8. File change map
+
+CI is `ruff check .` then `alembic upgrade head` then `pytest -x` (`.github/workflows/deploy.yml`). Frontend is not linted in that job, but **VPS deploy runs `npm run build`** — JS must compile.
+
+### 8.1 New files
+
+| File | Why |
+| --- | --- |
+| `billing.py` | Single home for `BILLING_RESERVE_MINUTES`, `reservation_credits(setup, rate)`, `compute_call_charge(duration_seconds, rate, setup) → {billed_minutes, credits_charged, budget_amount}`. Import from processor, dialer, postgres, tests. |
+| `db/schema/011_bot_fixed_start_credits.sql` | Column + `billed_minutes` type change. |
+| `alembic/versions/011_bot_fixed_start_credits.py` | `down_revision = "010_early_disconnect_outcome"`. |
+| `tests/test_billing.py` | Pure unit tests, no DB: formula examples, setup-only, zero duration, rounding 1.475 → budget 1.48, reservation math, reject negatives via helper clamps if any. |
+
+### 8.2 Backend (must change)
+
+| File | What |
+| --- | --- |
+| `db/schema/001_initial.sql` | Comments; `fixed_start_credits` on `bot_configs`; `billed_minutes NUMERIC(10,4)`. |
+| `db/postgres.py` | Drop `RESERVE_CREDITS_PER_LEAD = 2.0`. `create_bot_config` writes `fixed_start_credits`. `reserve_campaign_budget` / `release_campaign_budget_reservation` take `amount: Decimal` (or `per_lead` from billing), not `2.0 * count`. `claim_leads_for_dialer` reads bot rates in the transaction. `insert_call_log_start` snapshots rate + setup. `settle_unanswered_call` always ₹0 (refund reservation). `settle_call_budget` after delta: if used > budget, deduct overflow from wallet (floor 0), insert `credit_transactions`, return a flag so the dialer/processor can `pause_campaign`. `finalize_call_log` type hint `billed_minutes: Decimal \| float`. |
+| `dialer/cost_guard.py` | `MIN_REMAINING_CREDITS` cannot stay a module constant. `check_campaign_budget(pool, campaign_id, client_id, reserve_amount)` or look up the bot inside. |
+| `dialer/concurrent_dialer.py` | Pass **claim-time** `budget_reserved_credits` into `fire_call`, not `MIN_REMAINING_CREDITS`. Test-call path stays 0. |
+| `post_call_processor.py` | Remove `math.ceil`. Use snapshots + `billing.compute_call_charge`. `_finalize_call_log_and_settle_budget` billed_minutes type. After settle, pause on overspend. |
+| `api/routes/internal.py` | `CreateBotConfigBody` / `BotConfigPatchBody` fields + `Field(ge=0, …)`. Pass through to `create_bot_config` / PATCH SQL. |
+| `n8n_webhook.py` | `billed_minutes: int` → `float` (or `Decimal` serialized). Payload already JSON. |
+| `db/seed/dev_tenant.sql` | Optional explicit `fixed_start_credits` on seed bots (default is enough; set it so seeds document the model). |
+
+### 8.3 Frontend (must change)
+
+| File | What |
+| --- | --- |
+| `frontend/src/admin/pages/AdminBotConfigs.jsx` | Map `fixed_start_credits`. Fix INR/HR labels. Edit + create inputs. Preview. `step="0.01"` `min="0"`. |
+| `frontend/src/admin/pages/AdminBotConfigs.css` | Only if the two-rate layout needs it. Prefer existing utility classes. |
+| `frontend/src/admin/pages/AdminScriptConfigs.jsx` | Deploy modal: setup fee field; POST both prices. |
+| `frontend/src/admin/pages/AdminCalls.jsx` | Fractional billed minutes; ₹ two decimals; don’t treat `0.25` as falsy in a bad way (`credits_charged ?` already hides ₹0.00 — show ₹0.00 for billed unanswered). |
+| `frontend/src/client/pages/CampaignDetail.jsx` | ₹/min + setup; drop `\|\| 1`. |
+| `frontend/src/pages/client/CallLogs/components/MetadataPanel.jsx` | Credits row. |
+| `frontend/src/admin/pages/AdminCampaigns.jsx` | No formula change. Creating a campaign still takes a ₹ budget. Optional helper: “At ₹4.00/min + ₹0.60 setup, ₹100 covers about N connected minutes.” Nice-to-have, not required for CI. |
+| `frontend/src/admin/pages/AdminClientDetail.jsx` | Same as campaigns if it embeds bot price later; today it does not. No change required unless it displays bot rates. |
+
+Client dashboard totals (`budget_used_credits`) keep working. Short calls will show **smaller** used amounts than ceiling billing — that is intended.
+
+### 8.4 Tests (CI will fail if skipped)
+
+`pytest -x --tb=short` stops on first failure. Touch every assertion that assumes 2-credit reserve or ceiling minutes.
+
+| File | What breaks / what to do |
+| --- | --- |
+| `tests/test_billing.py` | **Add.** Formula + reservation. No `DATABASE_URL` needed. |
+| `tests/test_cost_guard_budget.py` | `credits_per_minute=2.5` + default setup 0.60 → `R = 5.60`, not `2.0`. `test_claim_leads_caps_by_remaining_budget` currently: remaining 2.0, expects 1 lead. After change remaining 2.0 < 5.60 → **0 leads**. Rewrite remaining/budget so `remaining // R == 1` and assert `used == previous + R`. Replace every `RESERVE_CREDITS_PER_LEAD` with `billing.reservation_credits(...)`. |
+| `tests/test_settle_unanswered_call.py` | After unanswered settle, assert `credits_charged == 0` and full reservation refund (even when `call_data` has a rate snapshot). Raw `INSERT INTO bot_configs` still works (new column has DEFAULT). |
+| `tests/test_phase2.py` | `budget_reserved_credits=2.0` fixtures: keep as explicit snapshots (old shape) **and** add one with rate+setup snapshots. `finalize_call_log(..., billed_minutes=1)` still valid (`1` → `1.0000`). |
+| `tests/test_e2e.py` | Many `create_bot_config(..., 2.0)` positional — **keep working**. Fixture `billed_minutes=2` / `credits_charged=2.5` are inserted values, not computed — still pass. Add one admin test: POST bot with `fixed_start_credits`, PATCH it, GET it back. |
+| `tests/test_pg_context_recovery.py` | `create_bot_config` kwargs only — no change unless signature becomes required. Keep `fixed_start_credits` optional. |
+| `tests/test_migrate_script_configs.py` | Same as e2e positional create. |
+| `tests/test_early_disconnect_post_call.py` | Uses `duration_seconds=12`. If it ever asserts `credits_charged`, update to pro-rata (12/60 × rate + setup). Check assertions when implementing. |
+| `tests/test_list_call_logs_projection.py` | Unlikely to break. If `billed_minutes` is selected, type is still numeric. |
+| `tests/conftest.py` | Only if tests need a billing helper fixture. Prefer importing `billing`. |
+
+Do **not** leave `RESERVE_CREDITS_PER_LEAD` as an alias for `2.0` — tests would pass while production reserved the wrong amount.
+
+### 8.5 Docs & CLI (drift if skipped; not in pytest)
+
+| File | What |
+| --- | --- |
+| `guides/aakash_arch.md` | Ceiling-minute examples and `calculate_billing`. |
+| `docs/system/09_CALL_LIFECYCLE.md` | `credits_charged = billed_minutes * rate`, reservation(2). |
+| `docs/system/10_AI_PIPELINE.md` | “ceiling minutes × credits_per_minute”. |
+| `docs/system/05_API_REFERENCE.md` | POST body fields. |
+| `docs/system/13_ADMIN_GUIDE.md` | Rate fields. |
+| `guides/CLI_GUIDE.md` | “ceil minutes”. |
+| `guides/TESTING.md` | What to inspect after a call. |
+| `guides/fdesign.md` | Edit Bot Price modal. |
+| `scripts/cli.py` | Print setup fee; billed minutes may be `0.25`. |
+
+Out of scope for this change (do not “fix” while touching billing): `guides/aakashvani_v2.md` historical notes, `handoff/*`.
+
+---
+
+## 9. Implementation order (so CI stays green)
+
+1. Add `billing.py` + `tests/test_billing.py` (pure, cannot fail on schema).
+2. Alembic `011` + schema SQL. Local: `alembic upgrade head`.
+3. `create_bot_config` optional column (tests that only INSERT still pass).
+4. Switch processor + unanswered settle + claim/reserve/cost_guard together in one commit-worth of work — **do not land ceil removal without reservation change**, or a 15s call charges ~₹1.48 while only ₹2 was reserved (often OK) but a ₹6/min bot reserves ₹2 and charges ₹9+ (budget lies).
+5. Rewrite `test_cost_guard_budget.py` in the same change as (4).
+6. API + both admin forms + label bug.
+7. Client metadata + campaign rate copy.
+8. Docs/CLI.
+9. `ruff check .` and `pytest -x`. Watch unused imports (`F401` is **not** ignored; `F841` is).
+
+---
+
+## 10. User-facing behaviour cheat sheet
+
+| Event | Client sees | Admin sees |
+| --- | --- | --- |
+| Connected 15s @ ₹3.50 + ₹0.60 | Call ₹1.48, campaign used ticks ₹1.48 | Same, plus 0.25 billed minutes |
+| Busy / no-answer | Call ₹0.60 | Setup only |
+| Dial aborted before Plivo | Nothing | ₹0, reservation returned |
+| Test call from script editor | Nothing | Marked test, ₹0 |
+| Campaign budget cannot cover next `R_reserve` | Campaign goes paused | Pause reason budget_exhausted |
+| One long call overruns campaign budget | Used can exceed allocated; extra ₹ taken from wallet (not below 0); campaign pauses | Ledger note “Campaign overspend” |
+| Admin edits rate during a live call | Live call still old rate | Banner: applies to new dials |
+
+---
+
+## 11. Phase 2 (not this work)
+
+When prompts are smaller and cascaded STT+LLM+TTS is measured:
+
+1. Keep token counters as telemetry (already ignored for billing).
+2. Add optional ₹/1M input-output fields on `bot_configs`.
+3. Wallet and `credits_charged` stay the same shape — only the `compute_call_charge` implementation grows.
+
+Do not mix token fees into this phase.

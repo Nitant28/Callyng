@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-import math
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 import asyncpg
 from loguru import logger
 
+from billing import compute_call_charge
 from db import postgres as pg_db
 from n8n_webhook import fire_event_webhook, outcome_to_event
 from script_runtime import outcome_buckets
@@ -213,8 +214,9 @@ async def _finalize_call_log_and_settle_budget(
     duration_seconds: int,
     outcome: str,
     extraction_json: dict,
-    billed_minutes: int,
-    credits_charged: float,
+    billed_minutes: Decimal | float,
+    credits_charged: Decimal | float,
+    budget_amount: Decimal | float,
     usage: dict,
     transcript: list[dict],
     extraction_model: str | None,
@@ -222,7 +224,10 @@ async def _finalize_call_log_and_settle_budget(
     campaign_id: UUID,
     client_id: UUID,
     call_log: dict | None,
-) -> None:
+    skip_settle: bool = False,
+    setup_charge: Decimal | float | None = None,
+    duration_charge: Decimal | float | None = None,
+) -> bool:
     prior_outcome = (call_log or {}).get("outcome")
     prior_charged = (call_log or {}).get("credits_charged")
     already_settled = (
@@ -242,14 +247,16 @@ async def _finalize_call_log_and_settle_budget(
         transcript=transcript,
         extraction_model=extraction_model,
         extraction_error=extraction_error,
+        setup_charge=setup_charge,
+        duration_charge=duration_charge,
     )
-    if already_settled:
-        return
+    if already_settled or skip_settle:
+        return False
     reserved = pg_db.budget_reserved_from_call_data(
         call_log.get("call_data") if call_log else None
     )
-    await pg_db.settle_call_budget(
-        conn, campaign_id, client_id, credits_charged, reserved
+    return await pg_db.settle_call_budget(
+        conn, campaign_id, client_id, budget_amount, reserved
     )
 
 
@@ -361,6 +368,198 @@ async def recover_abandoned_session(
         return False
 
 
+
+async def process_event_post_call(
+    pool: asyncpg.Pool,
+    session_call_id: str,
+    lead_id: UUID,
+    event_id: UUID,
+    client_id: UUID,
+    bot_config_id: UUID,
+    duration_seconds: int,
+    transcript: list[dict],
+    extraction_json: dict,
+    *,
+    usage: dict | None = None,
+    extraction_model: str | None = None,
+    extraction_error: str | None = None,
+) -> None:
+    """
+    Post-call processing for Event leads.
+
+    Event calls do not belong to a Campaign. Their next bot is determined
+    by event_outcome_bot_mappings. If no mapping exists for the outcome,
+    the lead becomes terminal.
+    """
+    usage = usage or {}
+
+    event = await pg_db.get_event(pool, event_id, client_id)
+    bot_config = await pg_db.get_bot_config(pool, bot_config_id, client_id)
+    lead = await pg_db.get_event_lead(pool, event_id, lead_id)
+
+    if not event or not bot_config or not lead:
+        logger.error(
+            "event post_call missing event/bot/lead: event={} lead={}",
+            event_id,
+            lead_id,
+        )
+        return
+
+    call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
+
+    call_data = (call_log or {}).get("call_data")
+
+    if pg_db.is_test_call_data(call_data):
+        billed_minutes = Decimal("0")
+        credits_charged = Decimal("0")
+        setup_charge = Decimal("0")
+        duration_charge = Decimal("0")
+        skip_settle = True
+    else:
+        rate, setup = pg_db.billing_rates_from_call_data(call_data)
+
+        if rate is None:
+            rate = Decimal(str(bot_config["credits_per_minute"]))
+
+        if setup is None:
+            setup = Decimal(str(bot_config["fixed_start_credits"]))
+
+        charge = compute_call_charge(
+            duration_seconds,
+            rate,
+            setup,
+        )
+
+        billed_minutes = charge["billed_minutes"]
+        credits_charged = charge["credits_charged"]
+        setup_charge = charge["setup_charge"]
+        duration_charge = charge["duration_charge"]
+        skip_settle = False
+
+    outcome = (extraction_json or {}).get(
+        "intent_status",
+        "Unknown",
+    )
+
+    outcome = validate_interested_outcome(
+        outcome,
+        transcript,
+    )
+
+    extraction_json = dict(extraction_json or {})
+    extraction_json["intent_status"] = outcome
+
+    mapping = await pg_db.get_event_bot_for_outcome(
+        pool,
+        event_id,
+        outcome,
+        client_id,
+    )
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            active = await pg_db.fetch_active_event_lead_for_post_call(
+                conn,
+                lead_id,
+                event_id,
+                client_id,
+            )
+
+            if active is None:
+                logger.debug(
+                    "Event post_call skipped inactive lead={} call={}",
+                    lead_id,
+                    session_call_id,
+                )
+
+                await pg_db.finalize_event_call_log(
+                    conn,
+                    session_call_id=session_call_id,
+                    duration_seconds=duration_seconds,
+                    outcome=outcome,
+                    extraction_json=extraction_json,
+                    billed_minutes=billed_minutes,
+                    credits_charged=credits_charged,
+                    usage=usage,
+                    transcript=transcript,
+                    extraction_model=extraction_model,
+                    extraction_error=extraction_error,
+                    skip_settle=skip_settle,
+                    setup_charge=setup_charge,
+                    duration_charge=duration_charge,
+                    client_id=client_id,
+                    event_id=event_id,
+                )
+                return
+
+            if mapping is None:
+                new_status = "completed"
+                next_at = None
+                scheduled_callback_at = None
+
+                logger.info(
+                    "Event lead {} terminalized after outcome '{}' "
+                    "(no bot mapping)",
+                    lead_id,
+                    outcome,
+                )
+            else:
+                new_status = "bot_follow_up"
+                next_at = datetime.now(timezone.utc)
+                scheduled_callback_at = None
+
+                logger.info(
+                    "Event lead {} outcome '{}' mapped to bot {}",
+                    lead_id,
+                    outcome,
+                    mapping["bot_config_id"],
+                )
+
+            updated = await pg_db.update_event_lead_post_call(
+                conn,
+                lead_id,
+                event_id,
+                client_id,
+                active["status"],
+                new_status,
+                outcome,
+                extraction_json,
+                int(active.get("attempts") or 0),
+                next_at,
+                scheduled_callback_at,
+            )
+
+            if not updated:
+                logger.warning(
+                    "Event lead post-call update lost race: lead={} call={}",
+                    lead_id,
+                    session_call_id,
+                )
+                return
+
+            await pg_db.finalize_event_call_log(
+                conn,
+                session_call_id=session_call_id,
+                duration_seconds=duration_seconds,
+                outcome=outcome,
+                extraction_json=extraction_json,
+                billed_minutes=billed_minutes,
+                credits_charged=credits_charged,
+                usage=usage,
+                transcript=transcript,
+                extraction_model=extraction_model,
+                extraction_error=extraction_error,
+                skip_settle=skip_settle,
+                setup_charge=setup_charge,
+                duration_charge=duration_charge,
+                client_id=client_id,
+                event_id=event_id,
+            )
+
+
+            
+
+
 async def process_post_call(
     pool: asyncpg.Pool,
     session_call_id: str,
@@ -389,16 +588,33 @@ async def process_post_call(
         logger.error("post_call_processor missing campaign/bot/lead")
         return
 
-    credits_per_minute = float(bot_config["credits_per_minute"])
-    _MIN_BILLABLE_DURATION_S = 0
-    billed_minutes = math.ceil(duration_seconds / 60) if duration_seconds > _MIN_BILLABLE_DURATION_S else 0
-    credits_charged = billed_minutes * credits_per_minute
+    call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
+    call_data = (call_log or {}).get("call_data")
+    skip_settle = False
+    if pg_db.is_test_call_data(call_data):
+        billed_minutes: Decimal | float = Decimal("0")
+        credits_charged: Decimal | float = Decimal("0")
+        budget_amount: Decimal | float = Decimal("0")
+        setup_charge: Decimal | float = Decimal("0")
+        duration_charge: Decimal | float = Decimal("0")
+        skip_settle = True
+    else:
+        rate, setup = pg_db.billing_rates_from_call_data(call_data)
+        if rate is None:
+            rate = Decimal(str(bot_config["credits_per_minute"]))
+        if setup is None:
+            setup = Decimal(str(bot_config["fixed_start_credits"]))
+        charge = compute_call_charge(duration_seconds, rate, setup)
+        billed_minutes = charge["billed_minutes"]
+        credits_charged = charge["credits_charged"]
+        budget_amount = charge["budget_amount"]
+        setup_charge = charge["setup_charge"]
+        duration_charge = charge["duration_charge"]
 
     attempts = int(lead.get("attempts") or 0)
     max_attempts = int(lead.get("max_attempts") or campaign.get("max_attempts") or 3)
     retry_delay = int(campaign.get("retry_delay_minutes") or 120)
 
-    call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
     if post_call_snapshot is None and call_log:
         from script_runtime import parse_post_call_snapshot
 
@@ -435,6 +651,7 @@ async def process_post_call(
     fire_webhook = False
     applied = False
     just_completed = False
+    overspent = False
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -446,7 +663,7 @@ async def process_post_call(
                     conn, lead_id, client_id, session_call_id
                 )
             if active is None:
-                await _finalize_call_log_and_settle_budget(
+                overspent = await _finalize_call_log_and_settle_budget(
                     conn,
                     session_call_id=session_call_id,
                     duration_seconds=duration_seconds,
@@ -454,6 +671,7 @@ async def process_post_call(
                     extraction_json=extraction_json or {},
                     billed_minutes=billed_minutes,
                     credits_charged=credits_charged,
+                    budget_amount=budget_amount,
                     usage=usage,
                     transcript=transcript,
                     extraction_model=extraction_model,
@@ -461,6 +679,9 @@ async def process_post_call(
                     campaign_id=campaign_id,
                     client_id=client_id,
                     call_log=call_log,
+                    skip_settle=skip_settle,
+                    setup_charge=setup_charge,
+                    duration_charge=duration_charge,
                 )
                 logger.debug(
                     "post_call skipped lead/counters (not active) lead={} call={}",
@@ -518,7 +739,7 @@ async def process_post_call(
                     sched_cb,
                 )
                 if not updated:
-                    await _finalize_call_log_and_settle_budget(
+                    overspent = await _finalize_call_log_and_settle_budget(
                         conn,
                         session_call_id=session_call_id,
                         duration_seconds=duration_seconds,
@@ -526,6 +747,7 @@ async def process_post_call(
                         extraction_json=extraction_json or {},
                         billed_minutes=billed_minutes,
                         credits_charged=credits_charged,
+                        budget_amount=budget_amount,
                         usage=usage,
                         transcript=transcript,
                         extraction_model=extraction_model,
@@ -533,6 +755,9 @@ async def process_post_call(
                         campaign_id=campaign_id,
                         client_id=client_id,
                         call_log=call_log,
+                        skip_settle=skip_settle,
+                        setup_charge=setup_charge,
+                        duration_charge=duration_charge,
                     )
                     logger.debug(
                         "post_call lead status race lead={} call={}",
@@ -540,7 +765,7 @@ async def process_post_call(
                         session_call_id,
                     )
                 else:
-                    await _finalize_call_log_and_settle_budget(
+                    overspent = await _finalize_call_log_and_settle_budget(
                         conn,
                         session_call_id=session_call_id,
                         duration_seconds=duration_seconds,
@@ -548,6 +773,7 @@ async def process_post_call(
                         extraction_json=extraction_json or {},
                         billed_minutes=billed_minutes,
                         credits_charged=credits_charged,
+                        budget_amount=budget_amount,
                         usage=usage,
                         transcript=transcript,
                         extraction_model=extraction_model,
@@ -555,6 +781,9 @@ async def process_post_call(
                         campaign_id=campaign_id,
                         client_id=client_id,
                         call_log=call_log,
+                        skip_settle=skip_settle,
+                        setup_charge=setup_charge,
+                        duration_charge=duration_charge,
                     )
                     await pg_db.increment_campaign_counters(
                         conn, campaign_id, from_status=from_status, to_status=new_status
@@ -566,6 +795,13 @@ async def process_post_call(
                         conn, campaign_id, client_id
                     )
                     applied = True
+
+    if overspent:
+        from dialer.concurrent_dialer import pause_campaign
+
+        await pause_campaign(
+            pool, campaign_id, client_id, reason="budget_exhausted"
+        )
 
     if applied and just_completed:
         from n8n_webhook import fire_campaign_completed_webhook
@@ -589,8 +825,8 @@ async def process_post_call(
                     campaign=campaign,
                     extraction=extraction_json or {},
                     duration_seconds=duration_seconds,
-                    billed_minutes=billed_minutes,
-                    credits_charged=credits_charged,
+                    billed_minutes=float(billed_minutes),
+                    credits_charged=float(credits_charged),
                     route=bot_config.get("route"),
                     recording_url=call_log.get("recording_url") if call_log else None,
                     bot_config_id=bot_config_id,

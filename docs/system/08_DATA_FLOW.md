@@ -89,7 +89,7 @@ Plivo GET /answer
 ```
 process_post_call(session_call_id, lead_id, campaign_id, ...)
   → load campaign, bot_config, lead, call_log
-  → billed_minutes = ceil(duration/60); credits_charged = billed_minutes * cpm
+  → billed_minutes = duration/60; credits_charged = setup + billed_minutes * rate
   → outcome = extraction.intent_status (+ Early_Disconnect policy if callee hung up <30s)
   → TRANSACTION:
        → lock lead (calling|callback_scheduled)

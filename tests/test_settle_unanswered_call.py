@@ -100,3 +100,108 @@ async def test_settle_unanswered_call_exhaustion():
     finally:
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM clients WHERE id = $1", client_id)
+
+
+@pytest.mark.skipif(not os.getenv("DATABASE_URL"), reason="DATABASE_URL not set")
+@pytest.mark.asyncio
+async def test_settle_unanswered_call_is_free_and_refunds_reservation():
+    import json
+    from decimal import Decimal
+
+    pool = pg_db.get_pool()
+    if not pool:
+        pytest.skip("No DB pool available")
+
+    client_id = uuid.uuid4()
+    bot_id = uuid.uuid4()
+    campaign_id = uuid.uuid4()
+    lead_id = uuid.uuid4()
+    call_id = uuid.uuid4()
+    call_data = {
+        "budget_reserved_credits": 5.6,
+        "credits_per_minute": 2.5,
+        "fixed_start_credits": 0.6,
+    }
+
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO clients (id, name, api_key_hash, balance_credits) VALUES ($1, 'Test', $2, 100)",
+                client_id,
+                str(client_id),
+            )
+            await conn.execute(
+                "INSERT INTO bot_configs (id, client_id, name, route, script_id, credits_per_minute) VALUES ($1, $2, 'Bot', 'sts', 'pyramid_hi', 2.5)",
+                bot_id,
+                client_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO campaigns (
+                    id, client_id, bot_config_id, name, status,
+                    max_attempts, retry_delay_minutes, budget_credits, budget_used_credits
+                ) VALUES ($1, $2, $3, 'Camp', 'running', 3, 10, 100, 5.60)
+                """,
+                campaign_id,
+                client_id,
+                bot_id,
+            )
+            await conn.execute(
+                "INSERT INTO leads (id, campaign_id, client_id, phone, status, attempts) VALUES ($1, $2, $3, '+1234567892', 'calling', 1)",
+                lead_id,
+                campaign_id,
+                client_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO call_logs (
+                    session_call_id, client_id, campaign_id, bot_config_id, lead_id,
+                    in_progress, call_data
+                ) VALUES ($1, $2, $3, $4, $5, TRUE, $6::jsonb)
+                """,
+                str(call_id),
+                client_id,
+                campaign_id,
+                bot_id,
+                lead_id,
+                call_data,
+            )
+
+        call_log = {
+            "session_call_id": str(call_id),
+            "lead_id": str(lead_id),
+            "campaign_id": str(campaign_id),
+            "client_id": str(client_id),
+            "call_data": call_data,
+        }
+        await pg_db.settle_unanswered_call(
+            pool,
+            call_log,
+            retry_delay_minutes=10,
+            base_outcome="Busy",
+            charge_setup=True,  # ignored — unanswered is always free
+        )
+
+        async with pool.acquire() as conn:
+            call_row = await conn.fetchrow(
+                "SELECT credits_charged, billed_minutes, call_data FROM call_logs WHERE session_call_id = $1",
+                str(call_id),
+            )
+            assert Decimal(str(call_row["credits_charged"])) == Decimal("0")
+            assert Decimal(str(call_row["billed_minutes"] or 0)) == Decimal("0")
+            data = call_row["call_data"] or {}
+            if isinstance(data, str):
+                data = json.loads(data)
+            assert isinstance(data, dict)
+            assert float(data.get("setup_charge") or 0) == 0.0
+            assert float(data.get("duration_charge") or 0) == 0.0
+            used = await conn.fetchval(
+                "SELECT budget_used_credits FROM campaigns WHERE id = $1",
+                campaign_id,
+            )
+            # reserved 5.60 refunded → used back to 0
+            assert Decimal(str(used)) == Decimal("0")
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM clients WHERE id = $1", client_id)
+

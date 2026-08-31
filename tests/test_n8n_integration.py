@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from integrations.n8n.config import N8nConfig
-from integrations.n8n.payload import PAYLOAD_FIELD_SOURCES, build_lead_qualified_payload, build_test_payload
+from integrations.n8n.payload import PAYLOAD_FIELD_SOURCES, build_connectivity_test_payload, build_lead_qualified_payload, build_test_payload
 from integrations.n8n.service import N8nService
 
 
@@ -122,6 +122,13 @@ def test_record_url_uses_public_base(monkeypatch):
     assert "Hi" in payload["fallback"]["whatsapp"]["message"]
     assert payload["fallback"]["email"]["subject"]
     assert payload["fallback"]["email"]["body"]
+
+
+def test_build_connectivity_test_payload():
+    payload = build_connectivity_test_payload()
+    assert payload["event"] == "connectivity_test"
+    assert payload["test"] is True
+    assert payload["source"] == "aakashvani_admin"
 
 
 def test_build_test_payload():

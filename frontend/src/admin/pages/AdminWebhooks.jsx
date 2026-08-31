@@ -1,17 +1,35 @@
 import React, { useState, useEffect } from 'react';
 import adminApi from '../../shared/api/admin';
 
+function N8nStatusBadge({ status, configured }) {
+  if (!configured) {
+    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-error/15 text-error">Not Connected</span>;
+  }
+  if (status === 'connected') {
+    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-secondary/15 text-secondary dark:bg-molten-success/15 dark:text-molten-success">Connected</span>;
+  }
+  if (status === 'failed') {
+    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-error/15 text-error">Connection Failed</span>;
+  }
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-surface-container-high text-on-surface-variant">Configured</span>;
+}
+
 export default function AdminWebhooks() {
   const [clients, setClients] = useState([]);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [webhooks, setWebhooks] = useState([]);
-  
-  // Form states
+
   const [formClientId, setFormClientId] = useState('');
   const [formEvent, setFormEvent] = useState('lead_qualified');
   const [formUrl, setFormUrl] = useState('');
   const [formSecret, setFormSecret] = useState('');
-  
+
+  const [n8nStatus, setN8nStatus] = useState(null);
+  const [n8nWebhookUrl, setN8nWebhookUrl] = useState('');
+  const [n8nSaving, setN8nSaving] = useState(false);
+  const [n8nTesting, setN8nTesting] = useState(false);
+  const [n8nTestMsg, setN8nTestMsg] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -30,8 +48,22 @@ export default function AdminWebhooks() {
     }
   };
 
+  const fetchN8n = async () => {
+    try {
+      const [statusRes, settingsRes] = await Promise.all([
+        adminApi.get('/internal/n8n/status'),
+        adminApi.get('/internal/n8n/settings'),
+      ]);
+      setN8nStatus(statusRes.data || null);
+      setN8nWebhookUrl(settingsRes.data?.webhook_url || '');
+    } catch (err) {
+      console.error('Failed to fetch n8n settings', err);
+    }
+  };
+
   useEffect(() => {
     fetchClients();
+    fetchN8n();
   }, []);
 
   const fetchWebhooks = async (clientId) => {
@@ -69,17 +101,15 @@ export default function AdminWebhooks() {
         client_id: formClientId,
         event: formEvent,
         url: formUrl,
-        secret: formSecret
+        secret: formSecret,
       });
 
       setSuccessMsg('Webhook configuration upserted successfully!');
-      
-      // If we just upserted a webhook for the currently selected client, refresh the list
+
       if (formClientId === selectedClientId) {
         fetchWebhooks(selectedClientId);
       }
 
-      // Reset url & secret fields
       setFormUrl('');
       setFormSecret('');
     } catch (err) {
@@ -88,24 +118,152 @@ export default function AdminWebhooks() {
     }
   };
 
+  const saveN8nWebhook = async (e) => {
+    e.preventDefault();
+    setN8nSaving(true);
+    setError('');
+    setSuccessMsg('');
+    setN8nTestMsg('');
+    try {
+      await adminApi.put('/internal/n8n/settings', {
+        webhook_url: n8nWebhookUrl.trim(),
+      });
+      setSuccessMsg('N8N follow-up webhook URL saved.');
+      await fetchN8n();
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      const msg = Array.isArray(detail)
+        ? detail.map((item) => item.msg || item).join(', ')
+        : (typeof detail === 'string' ? detail : (err.customErrorMessage || err.message || 'Failed to save n8n webhook'));
+      setError(msg);
+    } finally {
+      setN8nSaving(false);
+    }
+  };
+
+  const testN8nWebhook = async () => {
+    setN8nTesting(true);
+    setN8nTestMsg('');
+    setError('');
+    try {
+      const res = await adminApi.post('/internal/n8n/settings/test');
+      setN8nTestMsg(res.data?.message || 'Connected to n8n');
+      await fetchN8n();
+    } catch (err) {
+      setN8nTestMsg(err.response?.data?.detail || err.message || 'Unable to connect to n8n');
+    } finally {
+      setN8nTesting(false);
+    }
+  };
+
   const handleClientChange = (e) => {
     const val = e.target.value;
     setSelectedClientId(val);
-    setFormClientId(val); // Sync form client selection with view client selection by default
+    setFormClientId(val);
   };
 
   return (
     <div className="w-full flex flex-col gap-stack-lg">
       <div>
-        <h1 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text">General Event Webhooks</h1>
+        <h1 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text">Webhooks</h1>
         <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted mt-2">
-          Per-client outbound callbacks for CRM/automation (call and campaign events).
-          This is not the Mega_Workflow WhatsApp follow-up URL — configure that under Admin → WhatsApp → N8N Follow-up Workflow.
+          Configure CRM event callbacks and the global n8n follow-up workflow.
         </p>
       </div>
 
+      <div className="bg-arctic-surface dark:bg-[#1A1A24] p-stack-lg rounded-lg border border-outline-variant/30 dark:border-[#2A345E] shadow-arctic dark:shadow-none">
+        <h2 className="font-headline-sm text-headline-sm text-on-surface dark:text-molten-text font-semibold mb-1">
+          N8N Follow-up Workflow
+        </h2>
+        <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted mb-4">
+          This webhook receives qualified lead events and starts the configured n8n follow-up workflow.
+          It is separate from per-client CRM webhooks below.
+        </p>
+
+        {n8nStatus && (
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <N8nStatusBadge
+              status={n8nStatus.last_test_status}
+              configured={n8nStatus.configured}
+            />
+            {n8nStatus.webhook_host ? (
+              <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted">{n8nStatus.webhook_host}</span>
+            ) : null}
+            {n8nStatus.lead_webhook_url_source ? (
+              <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted">
+                Source: {n8nStatus.lead_webhook_url_source}
+              </span>
+            ) : null}
+            {n8nStatus.last_tested_at ? (
+              <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted">
+                Last tested {new Date(n8nStatus.last_tested_at).toLocaleString()}
+              </span>
+            ) : null}
+          </div>
+        )}
+
+        {n8nTestMsg && (
+          <div className={`mb-4 p-3 rounded-lg text-sm border ${
+            n8nTestMsg.toLowerCase().includes('connect')
+              ? 'bg-secondary/15 border-secondary/30 text-secondary dark:bg-molten-success/15 dark:text-molten-success'
+              : 'bg-arctic-error/15 border-arctic-error/30 text-arctic-error dark:text-molten-error'
+          }`}>
+            {n8nTestMsg}
+          </div>
+        )}
+
+        <form onSubmit={saveN8nWebhook} className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
+          <label className="flex-1 font-label-sm text-label-sm text-on-surface dark:text-molten-text">
+            N8N Webhook URL
+            <input
+              className="w-full mt-1 px-3 py-2 bg-background dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm focus:outline-none focus:border-primary dark:focus:border-molten-primary font-body-sm text-body-sm text-on-surface dark:text-molten-text"
+              type="url"
+              placeholder="https://n8n.bhuvisx.com/webhook/5879f520-d9b9-4dc9-ba95-3392c2f30792"
+              value={n8nWebhookUrl}
+              onChange={(e) => setN8nWebhookUrl(e.target.value)}
+              required
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={n8nSaving}
+            className="px-4 py-2.5 rounded-lg bg-primary dark:bg-molten-primary text-on-primary font-label-md text-label-md h-fit"
+          >
+            {n8nSaving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            type="button"
+            disabled={n8nTesting || !n8nWebhookUrl.trim()}
+            onClick={testN8nWebhook}
+            className="px-4 py-2.5 rounded-lg border border-outline-variant dark:border-[#2A345E] font-label-md text-label-md h-fit"
+          >
+            {n8nTesting ? 'Testing…' : 'Test Connection'}
+          </button>
+        </form>
+      </div>
+
+      <div>
+        <h2 className="font-headline-sm text-headline-sm text-on-surface dark:text-molten-text font-semibold mb-1">
+          CRM Event Webhooks
+        </h2>
+        <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted">
+          Per-client outbound callbacks for call and campaign events. These do not replace the n8n follow-up workflow above.
+        </p>
+      </div>
+
+      {error && (
+        <div className="p-3 bg-arctic-error/15 border border-arctic-error/30 text-arctic-error dark:text-molten-error rounded-lg text-sm">
+          {error}
+        </div>
+      )}
+
+      {successMsg && (
+        <div className="p-3 bg-secondary/15 border border-secondary/30 text-secondary dark:bg-molten-success/15 dark:text-molten-success rounded-lg text-sm">
+          {successMsg}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
-        {/* Left Side: Client Selector and Configured Webhooks List */}
         <div className="lg:col-span-2 flex flex-col gap-stack-md">
           <div className="bg-arctic-surface dark:bg-[#1A1A24] p-stack-md rounded-lg border border-outline-variant/30 dark:border-[#2A345E] shadow-arctic dark:shadow-none flex flex-col gap-4">
             <div>
@@ -172,7 +330,6 @@ export default function AdminWebhooks() {
           </div>
         </div>
 
-        {/* Right Side: Webhook Upsert Form */}
         <div className="bg-arctic-surface dark:bg-[#1A1A24] p-stack-lg rounded-lg border border-outline-variant/30 dark:border-[#2A345E] shadow-arctic dark:shadow-none flex flex-col gap-4">
           <h3 className="font-headline-sm text-headline-sm text-on-surface dark:text-molten-text font-semibold">
             Upsert Webhook Configuration
@@ -180,18 +337,6 @@ export default function AdminWebhooks() {
           <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted">
             Configure or update the endpoint URL and secret signature for the selected event.
           </p>
-
-          {error && (
-            <div className="p-3 bg-arctic-error/15 border border-arctic-error/30 text-arctic-error dark:text-molten-error rounded-lg text-sm">
-              {error}
-            </div>
-          )}
-
-          {successMsg && (
-            <div className="p-3 bg-secondary/15 border border-secondary/30 text-secondary dark:bg-molten-success/15 dark:text-molten-success rounded-lg text-sm">
-              {successMsg}
-            </div>
-          )}
 
           <form onSubmit={handleUpsertWebhook} className="space-y-4">
             <div>
