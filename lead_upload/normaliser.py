@@ -18,3 +18,12 @@ def normalise_phone(raw: str, default_region: str = "IN") -> str | None:
         )
     except phonenumbers.NumberParseException:
         return None
+
+
+def last10_digits(raw: str, default_region: str = "IN") -> str | None:
+    """Canonical last-10 national digits for India-centric lead matching."""
+    normalized = normalise_phone(raw, default_region)
+    digits = "".join(ch for ch in (normalized or raw or "") if ch.isdigit())
+    if len(digits) >= 10:
+        return digits[-10:]
+    return digits or None

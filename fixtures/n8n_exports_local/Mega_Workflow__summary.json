@@ -1,0 +1,210 @@
+{
+  "id": "KqatOjXcByX2rueK",
+  "name": "Mega_Workflow",
+  "active": false,
+  "node_count": 19,
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "disabled": false,
+      "parameters_keys": [
+        "httpMethod",
+        "options",
+        "path"
+      ]
+    },
+    {
+      "name": "Lead Context",
+      "type": "n8n-nodes-base.set",
+      "disabled": false,
+      "parameters_keys": [
+        "assignments",
+        "options"
+      ]
+    },
+    {
+      "name": "Add Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "disabled": false,
+      "parameters_keys": [
+        "columns",
+        "documentId",
+        "operation",
+        "options",
+        "sheetName"
+      ]
+    },
+    {
+      "name": "Generate Follow-up Email",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "disabled": false,
+      "parameters_keys": [
+        "hasOutputParser",
+        "options",
+        "promptType",
+        "text"
+      ]
+    },
+    {
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "disabled": false,
+      "parameters_keys": [
+        "jsonSchemaExample"
+      ]
+    },
+    {
+      "name": "Send a message",
+      "type": "n8n-nodes-base.gmail",
+      "disabled": false,
+      "parameters_keys": [
+        "emailType",
+        "message",
+        "options",
+        "sendTo",
+        "subject"
+      ]
+    },
+    {
+      "name": "Generate WhatsApp Message",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "disabled": false,
+      "parameters_keys": [
+        "hasOutputParser",
+        "options",
+        "promptType",
+        "text"
+      ]
+    },
+    {
+      "name": "Structured Output Parser1",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "disabled": false,
+      "parameters_keys": [
+        "jsonSchemaExample"
+      ]
+    },
+    {
+      "name": "Send message",
+      "type": "n8n-nodes-base.whatsApp",
+      "disabled": false,
+      "parameters_keys": [
+        "additionalFields",
+        "operation",
+        "phoneNumberId",
+        "recipientPhoneNumber",
+        "textBody"
+      ]
+    },
+    {
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "disabled": false,
+      "parameters_keys": [
+        "options",
+        "updates"
+      ]
+    },
+    {
+      "name": "Edit Fields",
+      "type": "n8n-nodes-base.set",
+      "disabled": false,
+      "parameters_keys": [
+        "assignments",
+        "options"
+      ]
+    },
+    {
+      "name": "If",
+      "type": "n8n-nodes-base.if",
+      "disabled": false,
+      "parameters_keys": [
+        "conditions",
+        "options"
+      ]
+    },
+    {
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "disabled": false,
+      "parameters_keys": [
+        "method",
+        "options",
+        "sendBody",
+        "specifyBody"
+      ]
+    },
+    {
+      "name": "Send template",
+      "type": "n8n-nodes-base.whatsApp",
+      "disabled": false,
+      "parameters_keys": [
+        "phoneNumberId",
+        "recipientPhoneNumber",
+        "template"
+      ]
+    },
+    {
+      "name": "If1",
+      "type": "n8n-nodes-base.if",
+      "disabled": false,
+      "parameters_keys": [
+        "conditions",
+        "options"
+      ]
+    },
+    {
+      "name": "Edit Fields1",
+      "type": "n8n-nodes-base.set",
+      "disabled": false,
+      "parameters_keys": [
+        "assignments",
+        "options"
+      ]
+    },
+    {
+      "name": "Google Gemini Chat Model1",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "disabled": false,
+      "parameters_keys": [
+        "options"
+      ]
+    },
+    {
+      "name": "Simple Memory1",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "disabled": false,
+      "parameters_keys": [
+        "sessionIdType",
+        "sessionKey"
+      ]
+    },
+    {
+      "name": "Google Gemini Chat Model2",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "disabled": false,
+      "parameters_keys": [
+        "options"
+      ]
+    }
+  ],
+  "connection_keys": [
+    "Webhook",
+    "Lead Context",
+    "Structured Output Parser",
+    "Generate Follow-up Email",
+    "Structured Output Parser1",
+    "Generate WhatsApp Message",
+    "WhatsApp Trigger",
+    "Edit Fields",
+    "If",
+    "Send message",
+    "If1",
+    "Edit Fields1",
+    "Send template",
+    "Google Gemini Chat Model1",
+    "Simple Memory1",
+    "Google Gemini Chat Model2"
+  ]
+}

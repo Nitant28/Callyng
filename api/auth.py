@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 from typing import Annotated
@@ -15,14 +16,46 @@ from db import postgres as pg_db
 load_dotenv(override=True)
 
 
+def n8n_callback_token() -> str | None:
+    """Stable token n8n can pass as ?token= so Code nodes never need $env."""
+    secret = (
+        (os.getenv("N8N_WEBHOOK_SECRET") or "").strip()
+        or (os.getenv("ADMIN_API_KEY") or "").strip()
+    )
+    if not secret:
+        return None
+    return hashlib.sha256(f"record::{secret}".encode("utf-8")).hexdigest()
+
+
 async def require_admin(
+    request: Request,
     x_admin_key: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
 ) -> None:
     expected = (os.getenv("ADMIN_API_KEY") or "").strip()
     if not expected:
         raise HTTPException(503, "ADMIN_API_KEY not configured")
-    if not x_admin_key or not hmac.compare_digest(x_admin_key.strip(), expected):
+    provided = (x_admin_key or request.headers.get("x-admin-key") or "").strip()
+    if not provided or not hmac.compare_digest(provided, expected):
         raise HTTPException(403, "Invalid or missing admin key")
+
+
+async def require_admin_or_n8n_token(
+    request: Request,
+    x_admin_key: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
+) -> None:
+    """Admin key, or the same record token embedded in aakashvani.context_url."""
+    expected_admin = (os.getenv("ADMIN_API_KEY") or "").strip()
+    provided_key = (x_admin_key or request.headers.get("x-admin-key") or "").strip()
+    if expected_admin and provided_key and hmac.compare_digest(provided_key, expected_admin):
+        return
+    token = (
+        (request.query_params.get("token") or "").strip()
+        or (request.headers.get("X-Aakashvani-Record-Token") or "").strip()
+    )
+    expected_token = n8n_callback_token()
+    if expected_token and token and hmac.compare_digest(token, expected_token):
+        return
+    raise HTTPException(403, "Invalid or missing admin key")
 
 
 def _pool_from_request(request: Request):

@@ -14,11 +14,33 @@ import {
   resetDialerQueues,
   reconcileDialerQueues,
   flattenDialerQueues,
-  filterFlattenedQueue,
   isLiveLeadRow,
 } from '../utils/leadsDisplayQueue';
+import MultiSelectFilter, { joinFilterParam } from '../components/MultiSelectFilter';
 
-/** Friendly labels for canonical backend outcomes (call_outcomes.py / ┬º1.2). */
+const STATUS_FILTER_OPTIONS = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'calling', label: 'Calling' },
+  { value: 'callback_scheduled', label: 'Callback Due' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'failed', label: 'Failed' },
+];
+
+const TURNS_FILTER_OPTIONS = [
+  { value: '0', label: '0' },
+  { value: '1-3', label: '1–3' },
+  { value: '4-8', label: '4–8' },
+  { value: '9+', label: '9+' },
+];
+
+const ATTEMPTS_FILTER_OPTIONS = [
+  { value: '1', label: '1' },
+  { value: '2', label: '2' },
+  { value: '3', label: '3' },
+  { value: '4+', label: '4+' },
+];
+
+/** Friendly labels for canonical backend outcomes (call_outcomes.py / §1.2). */
 const OUTCOME_LABELS = {
   Interested: 'Interested',
   Not_Interested: 'Not Interested',
@@ -106,11 +128,13 @@ const CampaignDetail = () => {
   const [leadsLimit, setLeadsLimit] = useState(50);
   const [leadsOffset, setLeadsOffset] = useState(0);
   const [leadsSearch, setLeadsSearch] = useState('');
-  const [leadsStatusFilter, setLeadsStatusFilter] = useState('');
-  const [leadsOutcomeFilter, setLeadsOutcomeFilter] = useState('');
+  const [leadFilters, setLeadFilters] = useState({
+    status: [],
+    outcome: [],
+    turns: [],
+    attempts: [],
+  });
   const [outcomes, setOutcomes] = useState([]);
-  const [leadsAttemptsFilter, setLeadsAttemptsFilter] = useState('');
-  const [leadsTurnsFilter, setLeadsTurnsFilter] = useState('');
 
   const [loading, setLoading] = useState(true);
   const [leadsLoading, setLeadsLoading] = useState(false);
@@ -131,6 +155,9 @@ const CampaignDetail = () => {
   // Edit Lead Modal State
   const [isEditLeadOpen, setIsEditLeadOpen] = useState(false);
   const [editLeadData, setEditLeadData] = useState(null);
+
+  // Manual follow-up per lead (id -> { loading, whatsapp, email, lastSent, error })
+  const [followUpByLead, setFollowUpByLead] = useState({});
 
   // Ticking calling counter animation state
   const [liveCallingCount, setLiveCallingCount] = useState(0);
@@ -307,9 +334,11 @@ const CampaignDetail = () => {
         params: {
           limit: leadsLimit,
           offset: leadsOffset,
-          status: leadsStatusFilter || undefined,
+          status: joinFilterParam(leadFilters.status),
           search: leadsSearch || undefined,
-          outcome: leadsOutcomeFilter || undefined,
+          outcome: joinFilterParam(leadFilters.outcome),
+          turns: joinFilterParam(leadFilters.turns),
+          attempts: joinFilterParam(leadFilters.attempts),
         },
       });
 
@@ -350,9 +379,8 @@ const CampaignDetail = () => {
     id,
     leadsLimit,
     leadsOffset,
-    leadsStatusFilter,
+    leadFilters,
     leadsSearch,
-    leadsOutcomeFilter,
     campaign?.status,
     campaign?.calling_leads,
     campaign?.max_concurrent_calls,
@@ -388,7 +416,7 @@ const CampaignDetail = () => {
 
   useEffect(() => {
     setLeadsOffset(0);
-  }, [leadsOutcomeFilter, leadsStatusFilter, leadsAttemptsFilter, leadsTurnsFilter, leadsSearch, leadsLimit]);
+  }, [leadFilters, leadsSearch, leadsLimit]);
 
   const turnsIndex = useMemo(
     () => buildTurnsByLead((dashboardCalls || []).filter((c) => String(c.campaign_id) === String(id))),
@@ -478,15 +506,8 @@ const CampaignDetail = () => {
     setIsTranscriptOpen(true);
   };
 
-  // Filters never strip active slots; order = activeSlots + side queues
-  const sortedLeads = useMemo(
-    () => filterFlattenedQueue(displayQueue, {
-      attemptsFilter: leadsAttemptsFilter,
-      turnsFilter: leadsTurnsFilter,
-      getTurns: (l) => getLeadTurns(l, turnsIndex),
-    }),
-    [displayQueue, leadsAttemptsFilter, leadsTurnsFilter, turnsIndex],
-  );
+  // Server applies status/outcome/turns/attempts; dialer queue order is preserved.
+  const sortedLeads = displayQueue;
 
   const handleToggleState = async () => {
     if (!campaign) return;
@@ -717,6 +738,60 @@ const CampaignDetail = () => {
     }
   };
 
+  const handleSendFollowUp = async (lead) => {
+    const leadId = lead.id;
+    const current = followUpByLead[leadId];
+    if (current?.loading) return;
+    if (!lead.phone) {
+      showToast('This lead has no phone number.', 'error');
+      return;
+    }
+    const label = lead.name || lead.phone;
+    if (!window.confirm(`Send WhatsApp and email follow-up to ${label}?`)) return;
+
+    setFollowUpByLead((prev) => ({
+      ...prev,
+      [leadId]: { ...prev[leadId], loading: true, error: null },
+    }));
+
+    try {
+      const response = await clientApi.post(`/api/leads/${leadId}/follow-up`, {});
+      const data = response.data || {};
+      setFollowUpByLead((prev) => ({
+        ...prev,
+        [leadId]: {
+          loading: false,
+          whatsapp: data.whatsapp,
+          email: data.email,
+          deduplicated: data.deduplicated,
+          lastSent: data.sent_at || new Date().toISOString(),
+          error: null,
+        },
+      }));
+      const wa = data.whatsapp === 'queued' || data.whatsapp === 'already_sent';
+      const em = data.email === 'queued' || data.email === 'already_sent';
+      if (data.deduplicated) {
+        showToast('Follow-up already sent recently.', 'info');
+      } else if (wa && (em || data.email === 'unavailable')) {
+        showToast(
+          data.email === 'unavailable'
+            ? 'WhatsApp follow-up queued. Email unavailable (no address).'
+            : 'Follow-up queued on WhatsApp and email.',
+          'success',
+        );
+      } else {
+        showToast('Follow-up request submitted.', 'success');
+      }
+    } catch (err) {
+      const msg = err.customErrorMessage || err.response?.data?.detail || 'Follow-up failed';
+      setFollowUpByLead((prev) => ({
+        ...prev,
+        [leadId]: { ...prev[leadId], loading: false, error: msg },
+      }));
+      showToast(msg, 'error');
+    }
+  };
+
   const handleExport = async () => {
     try {
       const response = await clientApi.get(
@@ -724,8 +799,10 @@ const CampaignDetail = () => {
         {
           params: {
             search: leadsSearch || undefined,
-            status: leadsStatusFilter || undefined,
-            outcome: leadsOutcomeFilter || undefined,
+            status: joinFilterParam(leadFilters.status),
+            outcome: joinFilterParam(leadFilters.outcome),
+            turns: joinFilterParam(leadFilters.turns),
+            attempts: joinFilterParam(leadFilters.attempts),
           },
           responseType: 'blob',
         },
@@ -852,9 +929,26 @@ const CampaignDetail = () => {
 
   const totalPages = Math.max(1, Math.ceil(totalLeadsCount / leadsLimit));
   const currentPage = Math.floor(leadsOffset / leadsLimit) + 1;
-  const hasClientFilters = Boolean(leadsAttemptsFilter || leadsTurnsFilter);
+  const hasActiveLeadFilters = Boolean(
+    leadFilters.status.length
+    || leadFilters.outcome.length
+    || leadFilters.turns.length
+    || leadFilters.attempts.length,
+  );
   const rangeStart = totalLeadsCount === 0 ? 0 : leadsOffset + 1;
   const rangeEnd = Math.min(leadsOffset + sortedLeads.length, totalLeadsCount);
+
+  const outcomeFilterOptions = useMemo(
+    () => outcomes.map((outcome) => ({
+      value: outcome,
+      label: friendlyOutcome(outcome),
+    })),
+    [outcomes],
+  );
+
+  const setFilterValues = (key, values) => {
+    setLeadFilters((prev) => ({ ...prev, [key]: values }));
+  };
 
   return (
     <>
@@ -939,7 +1033,7 @@ const CampaignDetail = () => {
               {renderKpiCard('Total Leads', total.toLocaleString(), `${(campaign.completed_leads || 0).toLocaleString()} completed`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-blue', 'groups')}
               {renderKpiCard('Interested', (campaign.interested_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.interested_leads || 0) / total * 100).toFixed(1) : 0}% conversion`, total > 0 ? ((campaign.interested_leads || 0) / total) * 100 : 0, 'icon-green', 'thumb_up')}
               {renderKpiCard('On Call', liveCallingCount.toLocaleString(), liveCallingCount > 0 ? 'Active right now' : 'Idle', total > 0 ? (liveCallingCount / total) * 100 : 0, 'icon-purple', 'ring_volume')}
-              {renderKpiCard('Answered', (campaign.answered_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.answered_leads || 0) / total * 100).toFixed(1) : 0}% answer rate`, total > 0 ? ((campaign.answered_leads || 0) / total) * 100 : 0, 'icon-teal', 'call')}
+              {renderKpiCard('Completed', (campaign.completed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.completed_leads || 0) / total * 100).toFixed(1) : 0}% completion rate`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-teal', 'task_alt')}
               {renderKpiCard('Pending', (campaign.pending_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.pending_leads || 0) / total * 100).toFixed(1) : 0}% remaining`, total > 0 ? ((campaign.pending_leads || 0) / total) * 100 : 0, 'icon-orange', 'pending')}
             </div>
             <button
@@ -956,10 +1050,10 @@ const CampaignDetail = () => {
 
           {showMoreStats && (
             <div className="campaign-kpi-grid campaign-kpi-grid--secondary animate-fade-in">
-              {renderKpiCard('Not Answered', (campaign.no_answer_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.no_answer_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.no_answer_leads || 0) / total) * 100 : 0, 'icon-orange', 'call_missed')}
+              {renderKpiCard('Answered', (campaign.answered_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.answered_leads || 0) / total * 100).toFixed(1) : 0}% answer rate`, total > 0 ? ((campaign.answered_leads || 0) / total) * 100 : 0, 'icon-green', 'call')}
+              {renderKpiCard('Not Answered', (campaign.not_answered_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.not_answered_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.not_answered_leads || 0) / total) * 100 : 0, 'icon-orange', 'call_missed')}
               {renderKpiCard('Failed', (campaign.failed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.failed_leads || 0) / total * 100).toFixed(1) : 0}% rate`, total > 0 ? ((campaign.failed_leads || 0) / total) * 100 : 0, 'icon-red', 'cancel')}
               {renderKpiCard('Callback', (campaign.callback_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.callback_leads || 0) / total * 100).toFixed(1) : 0}% scheduled`, total > 0 ? ((campaign.callback_leads || 0) / total) * 100 : 0, 'icon-blue', 'event_available')}
-              {renderKpiCard('Completed', (campaign.completed_leads || 0).toLocaleString(), `${total > 0 ? ((campaign.completed_leads || 0) / total * 100).toFixed(1) : 0}% done`, total > 0 ? ((campaign.completed_leads || 0) / total) * 100 : 0, 'icon-green', 'task_alt')}
               {renderKpiCard('Budget Used', `₹${(campaign.budget_used_credits || 0).toLocaleString()}`, `of ₹${(campaign.budget_credits || 0).toLocaleString()} allocated`, campaign.budget_credits > 0 ? ((campaign.budget_used_credits || 0) / campaign.budget_credits) * 100 : 0, 'icon-purple', 'monetization_on')}
             </div>
           )}
@@ -1044,13 +1138,15 @@ const CampaignDetail = () => {
                       />
                     </div>
                     <div className="flex flex-nowrap gap-2 items-center flex-shrink-0 ml-auto">
-                      {(leadsOutcomeFilter || leadsStatusFilter || leadsAttemptsFilter || leadsTurnsFilter) && (
+                      {hasActiveLeadFilters && (
                         <button
                           onClick={() => {
-                            setLeadsOutcomeFilter('');
-                            setLeadsStatusFilter('');
-                            setLeadsAttemptsFilter('');
-                            setLeadsTurnsFilter('');
+                            setLeadFilters({
+                              status: [],
+                              outcome: [],
+                              turns: [],
+                              attempts: [],
+                            });
                           }}
                           className="cl-btn cl-btn--secondary cl-btn--sm"
                           title="Reset filters"
@@ -1132,78 +1228,42 @@ const CampaignDetail = () => {
                         <th>Name</th>
                         <th>Phone</th>
                         <th>
-                          <div className="cl-th-filter">
-                            <span>Status</span>
-                            <select
-                              value={leadsStatusFilter}
-                              onChange={(e) => setLeadsStatusFilter(e.target.value)}
-                              className="cl-th-filter__select"
-                              aria-label="Filter by status"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <option value="">All</option>
-                              <option value="pending">Pending</option>
-                              <option value="calling">Calling</option>
-                              <option value="callback_scheduled">Callback Due</option>
-                              <option value="completed">Completed</option>
-                              <option value="failed">Failed</option>
-                            </select>
-                          </div>
+                          <MultiSelectFilter
+                            label="Status"
+                            ariaLabel="Filter by status"
+                            options={STATUS_FILTER_OPTIONS}
+                            value={leadFilters.status}
+                            onChange={(values) => setFilterValues('status', values)}
+                          />
                         </th>
                         <th>
-                          <div className="cl-th-filter">
-                            <span>Outcome</span>
-                            <select
-                              value={leadsOutcomeFilter}
-                              onChange={(e) => setLeadsOutcomeFilter(e.target.value)}
-                              className="cl-th-filter__select"
-                              aria-label="Filter by outcome"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <option value="">All</option>
-                              {outcomes.map((outcome) => (
-                                <option key={outcome} value={outcome}>
-                                  {friendlyOutcome(outcome)}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
+                          <MultiSelectFilter
+                            label="Outcome"
+                            ariaLabel="Filter by outcome"
+                            options={outcomeFilterOptions}
+                            value={leadFilters.outcome}
+                            onChange={(values) => setFilterValues('outcome', values)}
+                          />
                         </th>
                         <th className="cl-th--numeric">
-                          <div className="cl-th-filter cl-th-filter--center">
-                            <span>Turns</span>
-                            <select
-                              value={leadsTurnsFilter}
-                              onChange={(e) => setLeadsTurnsFilter(e.target.value)}
-                              className="cl-th-filter__select"
-                              aria-label="Filter by turns"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <option value="">All</option>
-                              <option value="0">0</option>
-                              <option value="1-3">1–3</option>
-                              <option value="4-8">4–8</option>
-                              <option value="9+">9+</option>
-                            </select>
-                          </div>
+                          <MultiSelectFilter
+                            label="Turns"
+                            ariaLabel="Filter by turns"
+                            className="cl-th-filter--center"
+                            options={TURNS_FILTER_OPTIONS}
+                            value={leadFilters.turns}
+                            onChange={(values) => setFilterValues('turns', values)}
+                          />
                         </th>
                         <th className="cl-th--numeric">
-                          <div className="cl-th-filter cl-th-filter--center">
-                            <span>Attempts</span>
-                            <select
-                              value={leadsAttemptsFilter}
-                              onChange={(e) => setLeadsAttemptsFilter(e.target.value)}
-                              className="cl-th-filter__select"
-                              aria-label="Filter by attempts"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <option value="">All</option>
-                              <option value="1">1</option>
-                              <option value="2">2</option>
-                              <option value="3">3</option>
-                              <option value="4+">4+</option>
-                            </select>
-                          </div>
+                          <MultiSelectFilter
+                            label="Attempts"
+                            ariaLabel="Filter by attempts"
+                            className="cl-th-filter--center"
+                            options={ATTEMPTS_FILTER_OPTIONS}
+                            value={leadFilters.attempts}
+                            onChange={(values) => setFilterValues('attempts', values)}
+                          />
                         </th>
                         <th className="text-right">Actions</th>
                       </tr>
@@ -1246,7 +1306,22 @@ const CampaignDetail = () => {
                             <td className="cl-td--numeric">{getLeadTurns(lead, turnsIndex)}</td>
                             <td className="cl-td--numeric">{lead.attempts || 0}</td>
                             <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex justify-end gap-2.5 flex-wrap">
+                              <div className="flex justify-end gap-2.5 flex-wrap items-center">
+                                {(() => {
+                                  const fu = followUpByLead[lead.id];
+                                  const fuDisabled = fu?.loading || lead.status === 'calling';
+                                  return (
+                                    <button
+                                      type="button"
+                                      className="cl-btn cl-btn--secondary cl-btn--sm"
+                                      disabled={fuDisabled}
+                                      onClick={() => handleSendFollowUp(lead)}
+                                      title={fu?.lastSent ? `Last sent ${new Date(fu.lastSent).toLocaleString()}` : 'Send WhatsApp + email follow-up'}
+                                    >
+                                      {fu?.loading ? 'Sending…' : 'Send Follow-up'}
+                                    </button>
+                                  );
+                                })()}
                                 <button
                                   className="cl-btn cl-btn--secondary cl-btn--icon cl-btn--sm"
                                   onClick={() => {
@@ -1282,16 +1357,7 @@ const CampaignDetail = () => {
                 <div className="cl-leads-footer">
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="text-xs text-muted">
-                      {hasClientFilters ? (
-                        <>
-                          {sortedLeads.length} match{sortedLeads.length === 1 ? '' : 'es'} on this page
-                          <span> (of {totalLeadsCount.toLocaleString()} total)</span>
-                        </>
-                      ) : (
-                        <>
-                          Showing {rangeStart.toLocaleString()}–{rangeEnd.toLocaleString()} of {totalLeadsCount.toLocaleString()} leads
-                        </>
-                      )}
+                      Showing {rangeStart.toLocaleString()}–{rangeEnd.toLocaleString()} of {totalLeadsCount.toLocaleString()} leads
                     </span>
                     <label className="flex items-center gap-2 text-xs text-muted">
                       Per page

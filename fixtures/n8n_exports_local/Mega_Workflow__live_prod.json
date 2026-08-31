@@ -1,0 +1,1648 @@
+{
+  "updatedAt": "2026-08-23T07:45:13.301Z",
+  "createdAt": "2026-07-31T08:11:13.270Z",
+  "id": "4xarbWK3DXLbENzC",
+  "name": "Mega_Workflow",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "5879f520-d9b9-4dc9-ba95-3392c2f30792",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -624,
+        448
+      ],
+      "id": "e53146de-80f1-48fe-84b2-91d89872ec20",
+      "name": "Webhook",
+      "webhookId": "5879f520-d9b9-4dc9-ba95-3392c2f30792"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2746bcca-9d6b-46e7-874f-c7daaf9fae78",
+              "name": "name",
+              "value": "={{ $json.body.lead.name }}",
+              "type": "string"
+            },
+            {
+              "id": "9bc65e71-5af4-4585-9abf-393433eecd8c",
+              "name": "phone",
+              "value": "={{ $json.body.lead.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "50780ef9-2663-4c0c-97d9-20f39751be81",
+              "name": "lead_type",
+              "value": "={{ $json.body.lead.lead_type }}",
+              "type": "string"
+            },
+            {
+              "id": "aa908bde-0b2b-40bf-ba51-d4b699edc7c9",
+              "name": "intent_status",
+              "value": "={{ $json.body.extraction.intent_status }}",
+              "type": "string"
+            },
+            {
+              "id": "06f468b5-5de6-4fb1-8419-a3e95ff50bbc",
+              "name": "bhk_preference",
+              "value": "={{ $json.body.extraction.bhk_preference }}",
+              "type": "string"
+            },
+            {
+              "id": "6e13c0eb-7fd3-4305-a315-678ddd01fbcb",
+              "name": "location_preference",
+              "value": "={{ $json.body.extraction.location_preference }}",
+              "type": "string"
+            },
+            {
+              "id": "69589042-fdc3-4c9e-be2c-ff5253bbd9f9",
+              "name": "budget",
+              "value": "={{ $json.body.extraction.budget }}",
+              "type": "string"
+            },
+            {
+              "id": "bffe381f-dfd1-4463-9114-1bbb7ec4a226",
+              "name": "callback_time",
+              "value": "={{ $json.body.extraction.callback_time }}",
+              "type": "string"
+            },
+            {
+              "id": "12616d9b-b3eb-4f3b-92df-71286ed52af2",
+              "name": "summary",
+              "value": "={{ $json.body.extraction.summary }}",
+              "type": "string"
+            },
+            {
+              "id": "28214750-a00f-40ec-9e89-b9d309c9b16b",
+              "name": "campaign_id",
+              "value": "={{ $json.body.campaign.id }}",
+              "type": "string"
+            },
+            {
+              "id": "ee911fc1-8c85-4f3c-a558-d6e1b076d3a4",
+              "name": "campaign_name",
+              "value": "={{ $json.body.campaign.name }}",
+              "type": "string"
+            },
+            {
+              "id": "17c78911-77df-421d-b0ff-2f5e2d5edaa2",
+              "name": "client_id",
+              "value": "={{ $json.body.client.id }}",
+              "type": "string"
+            },
+            {
+              "id": "6d709129-5088-4bd0-9277-f2cb39d52afc",
+              "name": "client_name",
+              "value": "={{ $json.body.client.name }}",
+              "type": "string"
+            },
+            {
+              "id": "35089ec3-38c8-42b0-855b-00645aa55b1a",
+              "name": "client_industry",
+              "value": "={{ $json.body.client.industry }}",
+              "type": "string"
+            },
+            {
+              "id": "85132b58-75df-4c39-814a-555cd3e42a95",
+              "name": "recording_url",
+              "value": "={{ $json.body.call.recording_url }}",
+              "type": "string"
+            },
+            {
+              "id": "24b3b0cb-4ca7-41a9-8ecd-dad012b2c1c5",
+              "name": "session_call_id",
+              "value": "={{ $json.body.call.session_call_id }}",
+              "type": "string"
+            },
+            {
+              "id": "790616ab-2643-49d0-ba55-cb35af612b4e",
+              "name": "lead_city",
+              "value": "={{ $json.body.lead.metadata.lead_city }}",
+              "type": "string"
+            },
+            {
+              "id": "3ff34c96-d373-4ea4-ad41-94ad9930ba91",
+              "name": "email",
+              "value": "={{ $json.body.lead.email }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -384,
+        448
+      ],
+      "id": "301abc52-a75a-4d9c-8415-50d63813461e",
+      "name": "Lead Context"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an email assistant for Aakashvani.\n\nGenerate a professional follow-up email for a lead after an AI voice call.\n\nUse the provided lead information.\n\nRules:\n- Write a clear subject.\n- Write a friendly and professional email.\n- Mention the customer's preferences naturally.\n- Thank the customer for their time.\n- Tell them that a representative will contact them shortly.\n- Do not invent information.\nReturn only valid JSON.\nDo not wrap it inside markdown.\nDo not add ```json.\nThe response must have exactly these keys:\n\n{\n \"subject\": \"\",\n \"body\": \"\"\n}\n\nUse the following information:\n\n\nLead Name: {{ $json.name }}\nClient Name: {{ $json.client_name }}\nSummary: {{ $json.summary }}\nBHK Preference: {{ $json.bhk_preference }}\nLocation Preference: {{ $json.location_preference }}\nBudget: {{ $json.budget }}\n\nReturn ONLY valid JSON.\n\nDo NOT wrap the response inside ```json.\nDo NOT include markdown.\nDo NOT use placeholders like [Lead Name].\nUse the actual values provided.",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e4c724e0-ba91-4c26-ba02-253497a84564",
+      "name": "Generate Follow-up Email"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"subject\": \"Following Up On Your Inquiry - Prowave Consultants\",\n  \"body\": \"Dear Aditya,\\n\\nThank you for your interest. Our sales team will contact you shortly.\\n\\nRegards,\\nProwave Consultants\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        192,
+        208
+      ],
+      "id": "60b46b4e-46d5-402d-932b-b4663c167970",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        -64,
+        208
+      ],
+      "id": "f4bfe156-691f-4bef-b1e6-1884dd18c0b0",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "MSan1NcJu1Xvfkc1",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Lead Context').item.json.email }}",
+        "subject": "={{ $json.output.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.output.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        320,
+        0
+      ],
+      "id": "ba7a4d71-87d6-4aa1-a540-795c3521c3ea",
+      "name": "Send a message",
+      "webhookId": "26a10472-3f47-49ca-97f0-ec5bd8bbcbbf",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "CLid9w5AptnuW0jb",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an AI Sales Assistant for Aakashvani.\n\nYou communicate with leads on behalf of {{$json.client_name || \"our client\"}}.\n\nIMPORTANT:\nUse ONLY information present in the incoming JSON.\nNever invent, assume, or fabricate lead information.\n\nThe incoming data may come from either:\n1. An initial post-call follow-up.\n2. An inbound WhatsApp customer reply.\n\n----------------------------------------\nMODE 1: INITIAL FOLLOW-UP\n----------------------------------------\n\nIf {{$json.summary}} exists and is not empty:\n\nThis is the first WhatsApp message after an AI voice call.\n\nAvailable information:\n\nName: {{$json.name || \"\"}}\nSummary: {{$json.summary || \"\"}}\nClient: {{$json.client_name || \"\"}}\nIndustry: {{$json.client_industry || \"\"}}\nProperty Preference: {{$json.bhk_preference || \"\"}}\nLocation: {{$json.location_preference || \"\"}}\nBudget: {{$json.budget || \"\"}}\nCity: {{$json.lead_city || \"\"}}\n\nGenerate a professional WhatsApp message.\n\nRequirements:\n- Thank the customer for speaking with the AI assistant.\n- Mention only information actually available.\n- Never invent missing details.\n- Sound natural and human.\n- 80\u2013150 words.\n- Maximum 2 emojis.\n- End with a clear call-to-action.\n- Do not mention internal systems, workflows, n8n, memory, JSON, or automation.\n\n----------------------------------------\nMODE 2: CONTINUE CHAT\n----------------------------------------\n\nIf {{$json.summary}} is empty or does not exist:\n\nThis is an inbound WhatsApp reply from the customer.\n\nCustomer Name:\n{{$json.name || \"\"}}\n\nLatest Customer Message:\n{{$json.message || \"\"}}\n\nUse the conversation history available through memory.\n\nRequirements:\n- Continue the existing conversation naturally.\n- Answer the customer's latest message.\n- Use previous conversation context when relevant.\n- Do not ask for information that is already known.\n- Never invent property details, prices, availability, or company information.\n- If you do not know something, politely say that a human representative can assist.\n- Keep the response under 120 words.\n- Maximum 1 emoji.\n- Sound like a professional human sales assistant.\n- Do not mention memory, AI, n8n, workflows, JSON, or internal systems.\n\n----------------------------------------\nOUTPUT\n----------------------------------------\n\nReturn ONLY valid JSON.\n\n{\n  \"message\": \"your WhatsApp reply\"\n}",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -64,
+        784
+      ],
+      "id": "d5700b45-4338-408c-805b-a8790de8ec86",
+      "name": "Generate WhatsApp Message"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"message\": \"Hi Tejas, thank you for speaking with our AI assistant today. We look forward to helping you.\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        224,
+        1152
+      ],
+      "id": "d7e7352f-820f-4198-8996-38f54287f635",
+      "name": "Structured Output Parser1"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        -144,
+        1152
+      ],
+      "id": "d07824ac-eb1a-4272-81a1-447d451c83f6",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "MSan1NcJu1Xvfkc1",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "1184950391375570",
+        "recipientPhoneNumber": "+917397867643",
+        "textBody": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        608
+      ],
+      "id": "96837a25-2da6-41fb-9bb0-b7286b8588f4",
+      "name": "Send message",
+      "webhookId": "adcbaf72-48ab-433e-8fb7-95cc9e1c5343",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "rVE6HlTGG4Q5kSJT",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        -784,
+        896
+      ],
+      "id": "2be149ff-0d20-4570-87e1-e0cf463cacb6",
+      "name": "WhatsApp Trigger",
+      "webhookId": "34664d3e-4506-4e47-9aca-17653d2ec0a6",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "xqkpxxwjQWPnJSKP",
+          "name": "WhatsApp OAuth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{$json.phone}}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        48,
+        1168
+      ],
+      "id": "7e2173cf-efcc-4ef8-bd4e-7e6cf114cc61",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c3bba436-576f-4751-9d58-7c3d512ae515",
+              "name": "name",
+              "value": "={{$json.contacts[0].profile.name}}",
+              "type": "string"
+            },
+            {
+              "id": "f25b71eb-7865-466c-84ff-b60292b2f396",
+              "name": "phone",
+              "value": "={{$json.messages[0].from}}",
+              "type": "string"
+            },
+            {
+              "id": "87ded361-4da7-4aed-91e0-21efe71a9270",
+              "name": "message",
+              "value": "={{$json.messages[0].text.body}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -592,
+        896
+      ],
+      "id": "f55693f9-7706-47ee-9478-9e153e0df99e",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7ad14a24-bdc7-4b35-a411-861425fae94c",
+              "leftValue": "={{ $json.phone }}",
+              "rightValue": "null",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "a82e541f-89c1-4fff-b584-bba4c6df1d57",
+              "leftValue": "={{ $json.message }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -352,
+        896
+      ],
+      "id": "1e9711e1-d582-46f7-9e63-0cd7a0ac4e9d",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://dexterity-footman-poise.ngrok-free.dev/internal/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Admin-Key",
+              "value": "dev-admin-key-123"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"client_id\": \"00000000-0000-4000-8000-000000000001\",\n  \"to_phone\": \"+917397867643\",\n  \"text\": \"Test message from n8n\",\n  \"force_message_type\": \"text\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1168,
+        704
+      ],
+      "id": "9d78116c-69c6-4cbe-bebf-9f40b0fdea3b",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "phoneNumberId": "1184950391375570",
+        "recipientPhoneNumber": "+917397867643",
+        "template": "3p_direct_integration_test_template|en_US"
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        928
+      ],
+      "id": "51b9f5ba-11a0-4184-9aad-132ee0d9cd6a",
+      "name": "Send template",
+      "webhookId": "2e072271-4e76-45f8-8aa7-b0e9445997f9",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "rVE6HlTGG4Q5kSJT",
+          "name": "WhatsApp account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "50de5bac-49c4-4065-bcd6-14df9cb5da87",
+              "leftValue": "",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        592,
+        784
+      ],
+      "id": "10797332-2852-4bd5-b1bf-2769aac5627b",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7e4f1b26-3734-4aa0-850e-916842e5bcbc",
+              "name": "name",
+              "value": "={{ $('Edit Fields').item.json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "f5e0fc8a-6ed7-47a3-89e8-85ad5407b8d1",
+              "name": "phone",
+              "value": "={{ $('Edit Fields').item.json.phone }}",
+              "type": "string"
+            },
+            {
+              "id": "6c87867a-9b52-4ed9-9493-d10f4f85c899",
+              "name": "lead_type",
+              "value": "={{ $('Edit Fields').item.json.lead_type }}",
+              "type": "string"
+            },
+            {
+              "id": "6a51d534-6b07-4ba8-8bdd-45b5fa9b88a1",
+              "name": "campaign_id",
+              "value": "={{ $('Edit Fields').item.json.campaign_id }}",
+              "type": "string"
+            },
+            {
+              "id": "17c4d46f-df93-444d-954c-26ee4a6b613f",
+              "name": "client_id",
+              "value": "={{ $('Edit Fields').item.json.client_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15ad17ac-d019-41b0-b67a-20be10f2cc4c",
+              "name": "client_name",
+              "value": "={{ $('Edit Fields').item.json.client_name }}",
+              "type": "string"
+            },
+            {
+              "id": "2c045847-d15a-4955-bc6d-44a0d88c2c57",
+              "name": "email",
+              "value": "={{ $('Edit Fields').item.json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "404934a4-d0dc-4735-8aeb-8ce8308b8c73",
+              "name": "lead_city",
+              "value": "={{ $('Edit Fields').item.json.lead_city }}",
+              "type": "string"
+            },
+            {
+              "id": "4d9fb5cb-f7fd-4565-a97d-c9282ab194cd",
+              "name": "output.message",
+              "value": "={{ $json.output.message }}",
+              "type": "string"
+            },
+            {
+              "id": "3a4dc75c-49d8-4b78-8703-c12422c099e6",
+              "name": "template",
+              "value": "this n8n",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        352,
+        784
+      ],
+      "id": "f6b7ad49-c7f9-4647-8675-dc4d67c5ed09",
+      "name": "Edit Fields1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        256
+      ],
+      "id": "a401c024-fa78-4728-a230-34dec04df0d7",
+      "name": "When clicking \u2018Execute workflow\u2019"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Lead Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Context": {
+      "main": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Follow-up Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Generate Follow-up Email",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Follow-up Email": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Follow-up Email",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate WhatsApp Message": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Send a message": {
+      "main": [
+        []
+      ]
+    },
+    "Send message": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Send template",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send template": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking \u2018Execute workflow\u2019": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "6eb05ed0-c155-4d6e-85d4-71a0d3b852ae",
+  "activeVersionId": "71ba08db-be07-4544-8c2f-3e8b4ac6ead8",
+  "versionCounter": 285,
+  "triggerCount": 2,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-31T08:11:13.275Z",
+      "createdAt": "2026-07-31T08:11:13.275Z",
+      "role": "workflow:owner",
+      "workflowId": "4xarbWK3DXLbENzC",
+      "projectId": "NGF5pbXXFrfYLzVQ",
+      "project": {
+        "updatedAt": "2026-07-31T08:10:12.056Z",
+        "createdAt": "2026-07-31T05:14:19.458Z",
+        "id": "NGF5pbXXFrfYLzVQ",
+        "name": "BhuvisX Aakashvani <bhuvisxmain@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "922e73be-2cd0-4e91-af65-f22dfb9ded88"
+      }
+    }
+  ],
+  "tags": [],
+  "parentFolder": null,
+  "activeVersion": {
+    "updatedAt": "2026-08-23T07:33:56.000Z",
+    "createdAt": "2026-08-23T07:33:42.390Z",
+    "versionId": "71ba08db-be07-4544-8c2f-3e8b4ac6ead8",
+    "workflowId": "4xarbWK3DXLbENzC",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "5879f520-d9b9-4dc9-ba95-3392c2f30792",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          -624,
+          448
+        ],
+        "id": "e53146de-80f1-48fe-84b2-91d89872ec20",
+        "name": "Webhook",
+        "webhookId": "5879f520-d9b9-4dc9-ba95-3392c2f30792"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "2746bcca-9d6b-46e7-874f-c7daaf9fae78",
+                "name": "name",
+                "value": "={{ $json.body.lead.name }}",
+                "type": "string"
+              },
+              {
+                "id": "9bc65e71-5af4-4585-9abf-393433eecd8c",
+                "name": "phone",
+                "value": "={{ $json.body.lead.phone }}",
+                "type": "string"
+              },
+              {
+                "id": "50780ef9-2663-4c0c-97d9-20f39751be81",
+                "name": "lead_type",
+                "value": "={{ $json.body.lead.lead_type }}",
+                "type": "string"
+              },
+              {
+                "id": "aa908bde-0b2b-40bf-ba51-d4b699edc7c9",
+                "name": "intent_status",
+                "value": "={{ $json.body.extraction.intent_status }}",
+                "type": "string"
+              },
+              {
+                "id": "06f468b5-5de6-4fb1-8419-a3e95ff50bbc",
+                "name": "bhk_preference",
+                "value": "={{ $json.body.extraction.bhk_preference }}",
+                "type": "string"
+              },
+              {
+                "id": "6e13c0eb-7fd3-4305-a315-678ddd01fbcb",
+                "name": "location_preference",
+                "value": "={{ $json.body.extraction.location_preference }}",
+                "type": "string"
+              },
+              {
+                "id": "69589042-fdc3-4c9e-be2c-ff5253bbd9f9",
+                "name": "budget",
+                "value": "={{ $json.body.extraction.budget }}",
+                "type": "string"
+              },
+              {
+                "id": "bffe381f-dfd1-4463-9114-1bbb7ec4a226",
+                "name": "callback_time",
+                "value": "={{ $json.body.extraction.callback_time }}",
+                "type": "string"
+              },
+              {
+                "id": "12616d9b-b3eb-4f3b-92df-71286ed52af2",
+                "name": "summary",
+                "value": "={{ $json.body.extraction.summary }}",
+                "type": "string"
+              },
+              {
+                "id": "28214750-a00f-40ec-9e89-b9d309c9b16b",
+                "name": "campaign_id",
+                "value": "={{ $json.body.campaign.id }}",
+                "type": "string"
+              },
+              {
+                "id": "ee911fc1-8c85-4f3c-a558-d6e1b076d3a4",
+                "name": "campaign_name",
+                "value": "={{ $json.body.campaign.name }}",
+                "type": "string"
+              },
+              {
+                "id": "17c78911-77df-421d-b0ff-2f5e2d5edaa2",
+                "name": "client_id",
+                "value": "={{ $json.body.client.id }}",
+                "type": "string"
+              },
+              {
+                "id": "6d709129-5088-4bd0-9277-f2cb39d52afc",
+                "name": "client_name",
+                "value": "={{ $json.body.client.name }}",
+                "type": "string"
+              },
+              {
+                "id": "35089ec3-38c8-42b0-855b-00645aa55b1a",
+                "name": "client_industry",
+                "value": "={{ $json.body.client.industry }}",
+                "type": "string"
+              },
+              {
+                "id": "85132b58-75df-4c39-814a-555cd3e42a95",
+                "name": "recording_url",
+                "value": "={{ $json.body.call.recording_url }}",
+                "type": "string"
+              },
+              {
+                "id": "24b3b0cb-4ca7-41a9-8ecd-dad012b2c1c5",
+                "name": "session_call_id",
+                "value": "={{ $json.body.call.session_call_id }}",
+                "type": "string"
+              },
+              {
+                "id": "790616ab-2643-49d0-ba55-cb35af612b4e",
+                "name": "lead_city",
+                "value": "={{ $json.body.lead.metadata.lead_city }}",
+                "type": "string"
+              },
+              {
+                "id": "3ff34c96-d373-4ea4-ad41-94ad9930ba91",
+                "name": "email",
+                "value": "={{ $json.body.lead.email }}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          -384,
+          448
+        ],
+        "id": "301abc52-a75a-4d9c-8415-50d63813461e",
+        "name": "Lead Context"
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=You are an email assistant for Aakashvani.\n\nGenerate a professional follow-up email for a lead after an AI voice call.\n\nUse the provided lead information.\n\nRules:\n- Write a clear subject.\n- Write a friendly and professional email.\n- Mention the customer's preferences naturally.\n- Thank the customer for their time.\n- Tell them that a representative will contact them shortly.\n- Do not invent information.\nReturn only valid JSON.\nDo not wrap it inside markdown.\nDo not add ```json.\nThe response must have exactly these keys:\n\n{\n \"subject\": \"\",\n \"body\": \"\"\n}\n\nUse the following information:\n\n\nLead Name: {{ $json.name }}\nClient Name: {{ $json.client_name }}\nSummary: {{ $json.summary }}\nBHK Preference: {{ $json.bhk_preference }}\nLocation Preference: {{ $json.location_preference }}\nBudget: {{ $json.budget }}\n\nReturn ONLY valid JSON.\n\nDo NOT wrap the response inside ```json.\nDo NOT include markdown.\nDo NOT use placeholders like [Lead Name].\nUse the actual values provided.",
+          "hasOutputParser": true,
+          "options": {}
+        },
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 3.1,
+        "position": [
+          0,
+          0
+        ],
+        "id": "e4c724e0-ba91-4c26-ba02-253497a84564",
+        "name": "Generate Follow-up Email"
+      },
+      {
+        "parameters": {
+          "jsonSchemaExample": "{\n  \"subject\": \"Following Up On Your Inquiry - Prowave Consultants\",\n  \"body\": \"Dear Aditya,\\n\\nThank you for your interest. Our sales team will contact you shortly.\\n\\nRegards,\\nProwave Consultants\"\n}"
+        },
+        "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+        "typeVersion": 1.3,
+        "position": [
+          192,
+          208
+        ],
+        "id": "60b46b4e-46d5-402d-932b-b4663c167970",
+        "name": "Structured Output Parser"
+      },
+      {
+        "parameters": {
+          "modelName": "models/gemini-3.5-flash",
+          "options": {}
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+        "typeVersion": 1.1,
+        "position": [
+          -64,
+          208
+        ],
+        "id": "f4bfe156-691f-4bef-b1e6-1884dd18c0b0",
+        "name": "Google Gemini Chat Model",
+        "credentials": {
+          "googlePalmApi": {
+            "id": "MSan1NcJu1Xvfkc1",
+            "name": "Google Gemini(PaLM) Api account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "sendTo": "={{ $('Lead Context').item.json.email }}",
+          "subject": "={{ $json.output.subject }}",
+          "emailType": "text",
+          "message": "={{ $json.output.body }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.gmail",
+        "typeVersion": 2.2,
+        "position": [
+          320,
+          0
+        ],
+        "id": "ba7a4d71-87d6-4aa1-a540-795c3521c3ea",
+        "name": "Send a message",
+        "webhookId": "26a10472-3f47-49ca-97f0-ec5bd8bbcbbf",
+        "credentials": {
+          "gmailOAuth2": {
+            "id": "CLid9w5AptnuW0jb",
+            "name": "Gmail account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=You are an AI Sales Assistant for Aakashvani.\n\nYou communicate with leads on behalf of {{$json.client_name || \"our client\"}}.\n\nIMPORTANT:\nUse ONLY information present in the incoming JSON.\nNever invent, assume, or fabricate lead information.\n\nThe incoming data may come from either:\n1. An initial post-call follow-up.\n2. An inbound WhatsApp customer reply.\n\n----------------------------------------\nMODE 1: INITIAL FOLLOW-UP\n----------------------------------------\n\nIf {{$json.summary}} exists and is not empty:\n\nThis is the first WhatsApp message after an AI voice call.\n\nAvailable information:\n\nName: {{$json.name || \"\"}}\nSummary: {{$json.summary || \"\"}}\nClient: {{$json.client_name || \"\"}}\nIndustry: {{$json.client_industry || \"\"}}\nProperty Preference: {{$json.bhk_preference || \"\"}}\nLocation: {{$json.location_preference || \"\"}}\nBudget: {{$json.budget || \"\"}}\nCity: {{$json.lead_city || \"\"}}\n\nGenerate a professional WhatsApp message.\n\nRequirements:\n- Thank the customer for speaking with the AI assistant.\n- Mention only information actually available.\n- Never invent missing details.\n- Sound natural and human.\n- 80\u2013150 words.\n- Maximum 2 emojis.\n- End with a clear call-to-action.\n- Do not mention internal systems, workflows, n8n, memory, JSON, or automation.\n\n----------------------------------------\nMODE 2: CONTINUE CHAT\n----------------------------------------\n\nIf {{$json.summary}} is empty or does not exist:\n\nThis is an inbound WhatsApp reply from the customer.\n\nCustomer Name:\n{{$json.name || \"\"}}\n\nLatest Customer Message:\n{{$json.message || \"\"}}\n\nUse the conversation history available through memory.\n\nRequirements:\n- Continue the existing conversation naturally.\n- Answer the customer's latest message.\n- Use previous conversation context when relevant.\n- Do not ask for information that is already known.\n- Never invent property details, prices, availability, or company information.\n- If you do not know something, politely say that a human representative can assist.\n- Keep the response under 120 words.\n- Maximum 1 emoji.\n- Sound like a professional human sales assistant.\n- Do not mention memory, AI, n8n, workflows, JSON, or internal systems.\n\n----------------------------------------\nOUTPUT\n----------------------------------------\n\nReturn ONLY valid JSON.\n\n{\n  \"message\": \"your WhatsApp reply\"\n}",
+          "hasOutputParser": true,
+          "options": {}
+        },
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 3.1,
+        "position": [
+          -64,
+          784
+        ],
+        "id": "d5700b45-4338-408c-805b-a8790de8ec86",
+        "name": "Generate WhatsApp Message"
+      },
+      {
+        "parameters": {
+          "jsonSchemaExample": "{\n  \"message\": \"Hi Tejas, thank you for speaking with our AI assistant today. We look forward to helping you.\"\n}"
+        },
+        "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+        "typeVersion": 1.3,
+        "position": [
+          224,
+          1152
+        ],
+        "id": "d7e7352f-820f-4198-8996-38f54287f635",
+        "name": "Structured Output Parser1"
+      },
+      {
+        "parameters": {
+          "modelName": "models/gemini-3.5-flash-lite",
+          "options": {}
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+        "typeVersion": 1.1,
+        "position": [
+          -144,
+          1152
+        ],
+        "id": "d07824ac-eb1a-4272-81a1-447d451c83f6",
+        "name": "Google Gemini Chat Model1",
+        "credentials": {
+          "googlePalmApi": {
+            "id": "MSan1NcJu1Xvfkc1",
+            "name": "Google Gemini(PaLM) Api account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "operation": "send",
+          "phoneNumberId": "1184950391375570",
+          "recipientPhoneNumber": "+917397867643",
+          "textBody": "=Hello Nitant, this is a test message from BhuvisX.",
+          "additionalFields": {}
+        },
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1.1,
+        "position": [
+          880,
+          608
+        ],
+        "id": "96837a25-2da6-41fb-9bb0-b7286b8588f4",
+        "name": "Send message",
+        "webhookId": "adcbaf72-48ab-433e-8fb7-95cc9e1c5343",
+        "credentials": {
+          "whatsAppApi": {
+            "id": "rVE6HlTGG4Q5kSJT",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "updates": [
+            "messages"
+          ],
+          "options": {}
+        },
+        "type": "n8n-nodes-base.whatsAppTrigger",
+        "typeVersion": 1,
+        "position": [
+          -784,
+          896
+        ],
+        "id": "2be149ff-0d20-4570-87e1-e0cf463cacb6",
+        "name": "WhatsApp Trigger",
+        "webhookId": "34664d3e-4506-4e47-9aca-17653d2ec0a6",
+        "credentials": {
+          "whatsAppTriggerApi": {
+            "id": "xqkpxxwjQWPnJSKP",
+            "name": "WhatsApp OAuth account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{$json.phone}}"
+        },
+        "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+        "typeVersion": 1.4,
+        "position": [
+          48,
+          1168
+        ],
+        "id": "7e2173cf-efcc-4ef8-bd4e-7e6cf114cc61",
+        "name": "Simple Memory"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "c3bba436-576f-4751-9d58-7c3d512ae515",
+                "name": "name",
+                "value": "={{$json.contacts[0].profile.name}}",
+                "type": "string"
+              },
+              {
+                "id": "f25b71eb-7865-466c-84ff-b60292b2f396",
+                "name": "phone",
+                "value": "={{$json.messages[0].from}}",
+                "type": "string"
+              },
+              {
+                "id": "87ded361-4da7-4aed-91e0-21efe71a9270",
+                "name": "message",
+                "value": "={{$json.messages[0].text.body}}",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          -592,
+          896
+        ],
+        "id": "f55693f9-7706-47ee-9478-9e153e0df99e",
+        "name": "Edit Fields"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 3
+            },
+            "conditions": [
+              {
+                "id": "7ad14a24-bdc7-4b35-a411-861425fae94c",
+                "leftValue": "={{ $json.phone }}",
+                "rightValue": "null",
+                "operator": {
+                  "type": "string",
+                  "operation": "exists",
+                  "singleValue": true
+                }
+              },
+              {
+                "id": "a82e541f-89c1-4fff-b584-bba4c6df1d57",
+                "leftValue": "={{ $json.message }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "exists",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          -352,
+          896
+        ],
+        "id": "1e9711e1-d582-46f7-9e63-0cd7a0ac4e9d",
+        "name": "If"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://dexterity-footman-poise.ngrok-free.dev/internal/messages/send",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-Admin-Key",
+                "value": "dev-admin-key-123"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"client_id\": \"00000000-0000-4000-8000-000000000001\",\n  \"to_phone\": \"+917397867643\",\n  \"text\": \"Test message from n8n\",\n  \"force_message_type\": \"text\"\n}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1168,
+          704
+        ],
+        "id": "9d78116c-69c6-4cbe-bebf-9f40b0fdea3b",
+        "name": "HTTP Request"
+      },
+      {
+        "parameters": {
+          "phoneNumberId": "1184950391375570",
+          "recipientPhoneNumber": "+917397867643",
+          "template": "3p_direct_integration_test_template|en_US"
+        },
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1.1,
+        "position": [
+          880,
+          928
+        ],
+        "id": "51b9f5ba-11a0-4184-9aad-132ee0d9cd6a",
+        "name": "Send template",
+        "webhookId": "2e072271-4e76-45f8-8aa7-b0e9445997f9",
+        "credentials": {
+          "whatsAppApi": {
+            "id": "rVE6HlTGG4Q5kSJT",
+            "name": "WhatsApp account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 3
+            },
+            "conditions": [
+              {
+                "id": "50de5bac-49c4-4065-bcd6-14df9cb5da87",
+                "leftValue": "",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals",
+                  "name": "filter.operator.equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.3,
+        "position": [
+          592,
+          784
+        ],
+        "id": "10797332-2852-4bd5-b1bf-2769aac5627b",
+        "name": "If1"
+      },
+      {
+        "parameters": {
+          "assignments": {
+            "assignments": [
+              {
+                "id": "7e4f1b26-3734-4aa0-850e-916842e5bcbc",
+                "name": "name",
+                "value": "={{ $('Edit Fields').item.json.name }}",
+                "type": "string"
+              },
+              {
+                "id": "f5e0fc8a-6ed7-47a3-89e8-85ad5407b8d1",
+                "name": "phone",
+                "value": "={{ $('Edit Fields').item.json.phone }}",
+                "type": "string"
+              },
+              {
+                "id": "6c87867a-9b52-4ed9-9493-d10f4f85c899",
+                "name": "lead_type",
+                "value": "={{ $('Edit Fields').item.json.lead_type }}",
+                "type": "string"
+              },
+              {
+                "id": "6a51d534-6b07-4ba8-8bdd-45b5fa9b88a1",
+                "name": "campaign_id",
+                "value": "={{ $('Edit Fields').item.json.campaign_id }}",
+                "type": "string"
+              },
+              {
+                "id": "17c4d46f-df93-444d-954c-26ee4a6b613f",
+                "name": "client_id",
+                "value": "={{ $('Edit Fields').item.json.client_id }}",
+                "type": "string"
+              },
+              {
+                "id": "15ad17ac-d019-41b0-b67a-20be10f2cc4c",
+                "name": "client_name",
+                "value": "={{ $('Edit Fields').item.json.client_name }}",
+                "type": "string"
+              },
+              {
+                "id": "2c045847-d15a-4955-bc6d-44a0d88c2c57",
+                "name": "email",
+                "value": "={{ $('Edit Fields').item.json.email }}",
+                "type": "string"
+              },
+              {
+                "id": "404934a4-d0dc-4735-8aeb-8ce8308b8c73",
+                "name": "lead_city",
+                "value": "={{ $('Edit Fields').item.json.lead_city }}",
+                "type": "string"
+              },
+              {
+                "id": "4d9fb5cb-f7fd-4565-a97d-c9282ab194cd",
+                "name": "output.message",
+                "value": "={{ $json.output.message }}",
+                "type": "string"
+              },
+              {
+                "id": "3a4dc75c-49d8-4b78-8703-c12422c099e6",
+                "name": "template",
+                "value": "this n8n",
+                "type": "string"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.set",
+        "typeVersion": 3.4,
+        "position": [
+          352,
+          784
+        ],
+        "id": "f6b7ad49-c7f9-4647-8675-dc4d67c5ed09",
+        "name": "Edit Fields1"
+      },
+      {
+        "parameters": {},
+        "type": "n8n-nodes-base.manualTrigger",
+        "typeVersion": 1,
+        "position": [
+          -720,
+          256
+        ],
+        "id": "a401c024-fa78-4728-a230-34dec04df0d7",
+        "name": "When clicking \u2018Execute workflow\u2019"
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Lead Context",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Lead Context": {
+        "main": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Generate Follow-up Email",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Structured Output Parser": {
+        "ai_outputParser": [
+          [
+            {
+              "node": "Generate Follow-up Email",
+              "type": "ai_outputParser",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate Follow-up Email": {
+        "main": [
+          [
+            {
+              "node": "Send a message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Google Gemini Chat Model": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Generate Follow-up Email",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Structured Output Parser1": {
+        "ai_outputParser": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "ai_outputParser",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Google Gemini Chat Model1": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate WhatsApp Message": {
+        "main": [
+          [
+            {
+              "node": "Edit Fields1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "WhatsApp Trigger": {
+        "main": [
+          [
+            {
+              "node": "Edit Fields",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Simple Memory": {
+        "ai_memory": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "ai_memory",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Edit Fields": {
+        "main": [
+          [
+            {
+              "node": "If",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "If": {
+        "main": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Send a message": {
+        "main": [
+          []
+        ]
+      },
+      "Send message": {
+        "main": [
+          [
+            {
+              "node": "HTTP Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "If1": {
+        "main": [
+          [
+            {
+              "node": "Send template",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Send message",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Edit Fields1": {
+        "main": [
+          [
+            {
+              "node": "If1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send template": {
+        "main": [
+          [
+            {
+              "node": "HTTP Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "When clicking \u2018Execute workflow\u2019": {
+        "main": [
+          []
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "BhuvisX Aakashvani",
+    "name": "Version 71ba08db",
+    "description": "",
+    "autosaved": true,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-23T07:33:56.647Z",
+        "id": 133,
+        "workflowId": "4xarbWK3DXLbENzC",
+        "versionId": "71ba08db-be07-4544-8c2f-3e8b4ac6ead8",
+        "event": "activated",
+        "userId": "922e73be-2cd0-4e91-af65-f22dfb9ded88"
+      }
+    ]
+  },
+  "scopes": [
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:import",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "6af043d1e661733814e245ede78a53f64e6db88620ca3f2f2bcc6eb14d73fab9"
+}

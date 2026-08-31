@@ -523,16 +523,33 @@ async def health():
 
 
 def _register_api_routes() -> None:
-    from api.routes import calls, campaigns, client_leads, credits, dashboard, internal, internal_script_configs, leads
+    from api.routes import (
+        calls,
+        campaigns,
+        client_leads,
+        credits,
+        dashboard,
+        internal,
+        internal_messages,
+        internal_n8n,
+        internal_leads,
+        internal_script_configs,
+        leads,
+        messages,
+    )
 
     app.include_router(internal.router)
     app.include_router(internal_script_configs.router)
+    app.include_router(internal_messages.router)
+    app.include_router(internal_n8n.router)
+    app.include_router(internal_leads.router)
     app.include_router(campaigns.router)
     app.include_router(leads.router)
     app.include_router(client_leads.router)
     app.include_router(calls.router)
     app.include_router(credits.router)
     app.include_router(dashboard.router)
+    app.include_router(messages.router)
 
 
 _register_api_routes()

@@ -23,6 +23,7 @@ import AdminCalls from './admin/pages/AdminCalls';
 import AdminCampaigns from './admin/pages/AdminCampaigns';
 import AdminDiagnostics from './admin/pages/AdminDiagnostics';
 import AdminWebhooks from './admin/pages/AdminWebhooks';
+import AdminWhatsApp from './admin/pages/AdminWhatsApp';
 import AdminScriptConfigs from './admin/pages/AdminScriptConfigs';
 
 import { ToastProvider } from './contexts/ToastContext';
@@ -30,6 +31,7 @@ import { AdminAuthProvider } from './admin/contexts/AdminAuthContext';
 import { AdminDataProvider } from './admin/contexts/AdminDataContext';
 
 import ClientCampaignDetail from './pages/client/CampaignDetail';
+import ClientMessages from './client/pages/Messages';
 
 const ClientShell = ({ children }) => (
   <Suspense fallback={null}>
@@ -72,6 +74,16 @@ function App() {
             <ClientGuard>
               <ClientShell>
                 <ClientCampaignDetail />
+              </ClientShell>
+            </ClientGuard>
+          }
+        />
+        <Route
+          path="/app/messages"
+          element={
+            <ClientGuard>
+              <ClientShell>
+                <ClientMessages />
               </ClientShell>
             </ClientGuard>
           }
@@ -158,6 +170,16 @@ function App() {
             <AdminGuard>
               <AdminLayout>
                 <AdminWebhooks />
+              </AdminLayout>
+            </AdminGuard>
+          }
+        />
+        <Route
+          path="/admin/whatsapp"
+          element={
+            <AdminGuard>
+              <AdminLayout>
+                <AdminWhatsApp />
               </AdminLayout>
             </AdminGuard>
           }

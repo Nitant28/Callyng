@@ -13,7 +13,7 @@ const LeadAnalyticsRow = ({ campaign, total }) => {
     { title: 'Interested', value: (campaign.interested_leads || 0).toLocaleString(), pct: total > 0 ? ((campaign.interested_leads || 0) / total) * 100 : 0 },
     { title: 'Not Interested', value: (campaign.not_interested_leads || 0).toLocaleString(), pct: total > 0 ? ((campaign.not_interested_leads || 0) / total) * 100 : 0 },
     { title: 'Answered', value: (campaign.answered_leads || 0).toLocaleString(), pct: total > 0 ? ((campaign.answered_leads || 0) / total) * 100 : 0 },
-    { title: 'Not Answered', value: (campaign.no_answer_leads || 0).toLocaleString(), pct: total > 0 ? ((campaign.no_answer_leads || 0) / total) * 100 : 0 }
+    { title: 'Not Answered', value: (campaign.not_answered_leads || 0).toLocaleString(), pct: total > 0 ? ((campaign.not_answered_leads || 0) / total) * 100 : 0 }
   ];
 
   return (

@@ -1,0 +1,33 @@
+{
+  "id": "eguONgBlaCmBb0zC",
+  "name": "Transcript Catch",
+  "active": true,
+  "node_count": 2,
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "disabled": false,
+      "parameters_keys": [
+        "httpMethod",
+        "options",
+        "path"
+      ]
+    },
+    {
+      "name": "Append or update row in sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "disabled": false,
+      "parameters_keys": [
+        "columns",
+        "documentId",
+        "operation",
+        "options",
+        "sheetName"
+      ]
+    }
+  ],
+  "connection_keys": [
+    "Webhook"
+  ]
+}

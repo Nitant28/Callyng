@@ -15,4 +15,12 @@ export const SIDEBAR_NAV = [
     enabled: true,
     match: (path) => path.startsWith('/app/campaigns'),
   },
+  {
+    id: 'messages',
+    label: 'Messages',
+    path: '/app/messages',
+    icon: 'chat',
+    enabled: true,
+    match: (path) => path.startsWith('/app/messages'),
+  },
 ];

@@ -1,0 +1,44 @@
+{
+  "id": "Aq6zt9mNXeSeb0K9",
+  "name": "My workflow",
+  "active": false,
+  "node_count": 3,
+  "nodes": [
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "disabled": false,
+      "parameters_keys": [
+        "httpMethod",
+        "options",
+        "path"
+      ]
+    },
+    {
+      "name": "If",
+      "type": "n8n-nodes-base.if",
+      "disabled": false,
+      "parameters_keys": [
+        "conditions",
+        "options"
+      ]
+    },
+    {
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "disabled": false,
+      "parameters_keys": [
+        "jsonBody",
+        "method",
+        "options",
+        "sendBody",
+        "specifyBody",
+        "url"
+      ]
+    }
+  ],
+  "connection_keys": [
+    "Webhook",
+    "If"
+  ]
+}

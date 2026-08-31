@@ -1,0 +1,141 @@
+{
+  "id": "ND8uIqQRXfL9twZh",
+  "name": "Prowave Customer Acquizition Automation",
+  "active": true,
+  "node_count": 12,
+  "nodes": [
+    {
+      "name": "When clicking \u2018Execute workflow\u2019",
+      "type": "n8n-nodes-base.manualTrigger",
+      "disabled": false,
+      "parameters_keys": []
+    },
+    {
+      "name": "Language Seggregation",
+      "type": "n8n-nodes-base.httpRequest",
+      "disabled": false,
+      "parameters_keys": [
+        "jsonBody",
+        "method",
+        "options",
+        "sendBody",
+        "specifyBody",
+        "url"
+      ]
+    },
+    {
+      "name": "Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "disabled": false,
+      "parameters_keys": [
+        "documentId",
+        "filtersUI",
+        "options",
+        "sheetName"
+      ]
+    },
+    {
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "disabled": false,
+      "parameters_keys": [
+        "options"
+      ]
+    },
+    {
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "disabled": false,
+      "parameters_keys": [
+        "amount"
+      ]
+    },
+    {
+      "name": "If",
+      "type": "n8n-nodes-base.if",
+      "disabled": false,
+      "parameters_keys": [
+        "conditions",
+        "looseTypeValidation",
+        "options"
+      ]
+    },
+    {
+      "name": "HTTP Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "disabled": false,
+      "parameters_keys": [
+        "options",
+        "url"
+      ]
+    },
+    {
+      "name": "If1",
+      "type": "n8n-nodes-base.if",
+      "disabled": false,
+      "parameters_keys": [
+        "conditions",
+        "options"
+      ]
+    },
+    {
+      "name": "VaniAi API",
+      "type": "n8n-nodes-base.httpRequest",
+      "disabled": false,
+      "parameters_keys": [
+        "jsonBody",
+        "jsonHeaders",
+        "method",
+        "options",
+        "sendBody",
+        "sendHeaders",
+        "specifyBody",
+        "specifyHeaders",
+        "url"
+      ]
+    },
+    {
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "disabled": false,
+      "parameters_keys": [
+        "httpMethod",
+        "options",
+        "path"
+      ]
+    },
+    {
+      "name": "Webhook1",
+      "type": "n8n-nodes-base.webhook",
+      "disabled": false,
+      "parameters_keys": [
+        "options",
+        "path"
+      ]
+    },
+    {
+      "name": "Append or update row in sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "disabled": false,
+      "parameters_keys": [
+        "columns",
+        "documentId",
+        "operation",
+        "options",
+        "sheetName"
+      ]
+    }
+  ],
+  "connection_keys": [
+    "Google Sheets",
+    "Loop Over Items",
+    "Wait",
+    "If",
+    "HTTP Request",
+    "If1",
+    "When clicking \u2018Execute workflow\u2019",
+    "VaniAi API",
+    "Webhook",
+    "Append or update row in sheet"
+  ]
+}

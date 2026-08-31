@@ -20,6 +20,7 @@ export default function Sidebar() {
     { to: '/admin/bot-configs',   label: 'Bot Configuration',icon: 'settings' },
     { to: '/admin/script-configs',label: 'Script Templates', icon: 'integration_instructions' },
     { to: '/admin/webhooks',      label: 'Webhooks',         icon: 'webhook' },
+    { to: '/admin/whatsapp',      label: 'WhatsApp',         icon: 'chat' },
     { to: '/admin/diagnostics',   label: 'Diagnostics',      icon: 'monitor_heart' },
   ];
 

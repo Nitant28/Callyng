@@ -2389,29 +2389,150 @@ async def get_lead(
     return record_to_dict(row)
 
 
+async def find_lead_by_phone(
+    pool: asyncpg.Pool,
+    phone: str,
+    *,
+    client_id: UUID | None = None,
+) -> dict | None:
+    """Find the most recently updated lead for a phone, matching E.164 variants."""
+    from lead_upload.normaliser import last10_digits
+
+    last10 = last10_digits(str(phone or ""))
+    if not last10:
+        return None
+    if client_id:
+        row = await pool.fetchrow(
+            """
+            SELECT l.*, c.name AS campaign_name
+            FROM leads l
+            LEFT JOIN campaigns c ON c.id = l.campaign_id
+            WHERE l.client_id = $1
+              AND regexp_replace(l.phone, '\\D', '', 'g') LIKE '%' || $2
+            ORDER BY l.last_attempted_at DESC NULLS LAST, l.created_at DESC
+            LIMIT 1
+            """,
+            client_id,
+            last10,
+        )
+    else:
+        row = await pool.fetchrow(
+            """
+            SELECT l.*, c.name AS campaign_name
+            FROM leads l
+            LEFT JOIN campaigns c ON c.id = l.campaign_id
+            WHERE regexp_replace(l.phone, '\\D', '', 'g') LIKE '%' || $1
+            ORDER BY l.last_attempted_at DESC NULLS LAST, l.created_at DESC
+            LIMIT 1
+            """,
+            last10,
+        )
+    return record_to_dict(row) if row else None
+
+
+def _normalize_filter_list(value: str | list[str] | None) -> list[str]:
+    """Normalize a single value, comma-separated string, or list into unique tokens."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        raw_parts = value
+    else:
+        raw_parts = str(value).split(",")
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in raw_parts:
+        token = str(part).strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def _append_in_filter(
+    *,
+    column_sql: str,
+    values: list[str],
+    query: str,
+    count_query: str,
+    args: list[Any],
+    idx: int,
+) -> tuple[str, str, list[Any], int]:
+    """Append parameterized ``column = ANY($n)`` (OR-within-filter via array)."""
+    if not values:
+        return query, count_query, args, idx
+    query += f" AND {column_sql} = ANY(${idx}::text[])"
+    # count_query may use unqualified column names; callers pass matching SQL
+    count_col = column_sql.replace("l.", "")
+    count_query += f" AND {count_col} = ANY(${idx}::text[])"
+    args.append(values)
+    return query, count_query, args, idx + 1
+
+
+def _attempts_or_clause(tokens: list[str], args: list[Any], idx: int) -> tuple[str, list[Any], int]:
+    """Build OR clause for attempts multi-select (exact ints or ``4+``)."""
+    parts: list[str] = []
+    for token in tokens:
+        if token == "4+":
+            parts.append("l.attempts >= 4")
+        elif token.isdigit():
+            parts.append(f"l.attempts = ${idx}")
+            args.append(int(token))
+            idx += 1
+    if not parts:
+        return "", args, idx
+    return "(" + " OR ".join(parts) + ")", args, idx
+
+
+def _turns_or_clause(tokens: list[str], turns_sql: str, args: list[Any], idx: int) -> tuple[str, list[Any], int]:
+    """Build OR clause for turns multi-select (buckets and/or exact ints)."""
+    parts: list[str] = []
+    for token in tokens:
+        if token == "0":
+            parts.append(f"({turns_sql}) = 0")
+        elif token == "1-3":
+            parts.append(f"({turns_sql}) BETWEEN 1 AND 3")
+        elif token == "4-8":
+            parts.append(f"({turns_sql}) BETWEEN 4 AND 8")
+        elif token == "9+":
+            parts.append(f"({turns_sql}) >= 9")
+        elif token.isdigit():
+            parts.append(f"({turns_sql}) = ${idx}")
+            args.append(int(token))
+            idx += 1
+    if not parts:
+        return "", args, idx
+    return "(" + " OR ".join(parts) + ")", args, idx
+
+
 async def list_campaign_leads(
     pool: asyncpg.Pool,
     campaign_id: UUID,
     client_id: UUID,
     limit: int = 50,
     offset: int = 0,
-    status: str | None = None,
+    status: str | list[str] | None = None,
     search: str | None = None,
-    outcome: str | None = None,
+    outcome: str | list[str] | None = None,
+    turns: str | list[str] | None = None,
+    attempts: str | list[str] | None = None,
 ) -> tuple[list[dict], int]:
-    """Return a paginated list of leads for a campaign, plus total count."""
+    """Return a paginated list of leads for a campaign, plus total count.
+
+    Filter semantics:
+    - Within one category (status/outcome/turns/attempts): OR (``IN`` / range OR).
+    - Across categories: AND.
+    - Empty / omitted category: no restriction.
+    ``status`` / ``outcome`` accept a single value or comma-separated list (backward compatible).
+    """
+    status_vals = _normalize_filter_list(status)
+    outcome_vals = _normalize_filter_list(outcome)
+    turns_vals = _normalize_filter_list(turns)
+    attempts_vals = _normalize_filter_list(attempts)
+
     turns_expr = _TRANSCRIPT_TURNS_EXPR.format(alias="call_logs").strip()
-    query = f"""
-        SELECT l.*,
-               lc.session_call_id,
-               lc.duration_seconds AS last_call_duration_seconds,
-               lc.outcome AS last_call_outcome,
-               lc.ended_at AS last_call_ended_at,
-               lc.in_progress AS last_call_in_progress,
-               lc.transcript_turns,
-               lc.plivo_hangup_json->>'hangup_source' AS last_hangup_source,
-               COALESCE(lc.turn_count, 0) AS turns
-        FROM leads l
+    turns_sql = "COALESCE(lc.turn_count, 0)"
+    lateral_join = f"""
         LEFT JOIN LATERAL (
             SELECT session_call_id, duration_seconds, outcome, ended_at, plivo_hangup_json, in_progress,
                    {turns_expr} AS transcript_turns,
@@ -2421,30 +2542,70 @@ async def list_campaign_leads(
             ORDER BY started_at DESC NULLS LAST
             LIMIT 1
         ) lc ON TRUE
+    """
+    query = f"""
+        SELECT l.*,
+               lc.session_call_id,
+               lc.duration_seconds AS last_call_duration_seconds,
+               lc.outcome AS last_call_outcome,
+               lc.ended_at AS last_call_ended_at,
+               lc.in_progress AS last_call_in_progress,
+               lc.transcript_turns,
+               lc.plivo_hangup_json->>'hangup_source' AS last_hangup_source,
+               {turns_sql} AS turns
+        FROM leads l
+        {lateral_join}
         WHERE l.campaign_id = $1 AND l.client_id = $2
     """
-    count_query = "SELECT COUNT(*) FROM leads WHERE campaign_id = $1 AND client_id = $2"
+    # Count needs the lateral join only when filtering by turns.
+    if turns_vals:
+        count_query = f"""
+            SELECT COUNT(*) FROM leads l
+            {lateral_join}
+            WHERE l.campaign_id = $1 AND l.client_id = $2
+        """
+    else:
+        count_query = "SELECT COUNT(*) FROM leads l WHERE l.campaign_id = $1 AND l.client_id = $2"
+
     args: list[Any] = [campaign_id, client_id]
     idx = 3
 
-    if status:
-        query += f" AND l.status = ${idx}"
-        count_query += f" AND status = ${idx}"
-        args.append(status)
-        idx += 1
+    if status_vals:
+        query, count_query, args, idx = _append_in_filter(
+            column_sql="l.status",
+            values=status_vals,
+            query=query,
+            count_query=count_query,
+            args=args,
+            idx=idx,
+        )
 
     if search:
         search_pattern = f"%{search}%"
         query += f" AND (l.name ILIKE ${idx} OR l.phone ILIKE ${idx})"
-        count_query += f" AND (name ILIKE ${idx} OR phone ILIKE ${idx})"
+        count_query += f" AND (l.name ILIKE ${idx} OR l.phone ILIKE ${idx})"
         args.append(search_pattern)
         idx += 1
 
-    if outcome:
-        query += f" AND l.outcome = ${idx}"
-        count_query += f" AND outcome = ${idx}"
-        args.append(outcome)
-        idx += 1
+    if outcome_vals:
+        query, count_query, args, idx = _append_in_filter(
+            column_sql="l.outcome",
+            values=outcome_vals,
+            query=query,
+            count_query=count_query,
+            args=args,
+            idx=idx,
+        )
+
+    attempts_clause, args, idx = _attempts_or_clause(attempts_vals, args, idx)
+    if attempts_clause:
+        query += f" AND {attempts_clause}"
+        count_query += f" AND {attempts_clause}"
+
+    turns_clause, args, idx = _turns_or_clause(turns_vals, turns_sql, args, idx)
+    if turns_clause:
+        query += f" AND {turns_clause}"
+        count_query += f" AND {turns_clause}"
 
     total_count = await pool.fetchval(count_query, *args)
     query += (
@@ -2464,9 +2625,11 @@ async def list_campaign_leads_for_export(
     pool: asyncpg.Pool,
     campaign_id: UUID,
     client_id: UUID,
-    status: str | None = None,
+    status: str | list[str] | None = None,
     search: str | None = None,
-    outcome: str | None = None,
+    outcome: str | list[str] | None = None,
+    turns: str | list[str] | None = None,
+    attempts: str | list[str] | None = None,
 ) -> list[dict]:
     """Return all leads for a campaign export (no pagination)."""
     rows, _ = await list_campaign_leads(
@@ -2478,6 +2641,8 @@ async def list_campaign_leads_for_export(
         status=status,
         search=search,
         outcome=outcome,
+        turns=turns,
+        attempts=attempts,
     )
     return rows
 

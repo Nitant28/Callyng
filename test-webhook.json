@@ -1,0 +1,44 @@
+{
+  "event": "lead_qualified",
+  "event_type": "INTERESTED_LEAD",
+  "flow_type": "INITIAL_FOLLOWUP",
+  "interested": true,
+  "interested": true,
+  "event_id": "test-call-001:00000000-0000-4000-8000-000000000011",
+  "client_id": "00000000-0000-4000-8000-000000000001",
+  "lead": {
+    "id": "00000000-0000-4000-8000-000000000011",
+    "name": "Nitant",
+    "phone": "917397867643",
+    "email": "singhnitant28@gmail.com",
+    "lead_type": "interested",
+    "metadata": { "lead_city": "Pune" }
+  },
+  "extraction": {
+    "intent_status": "hot",
+    "bhk_preference": "2 BHK",
+    "location_preference": "Pune",
+    "budget": "8000000",
+    "callback_time": "tomorrow",
+    "summary": "Customer is interested in a 2 BHK property in Pune."
+  },
+  "campaign": {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "name": "Aakashvani Test"
+  },
+  "client": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "name": "Dev Client",
+    "industry": "real_estate"
+  },
+  "call": {
+    "recording_url": "",
+    "session_call_id": "test-call-001"
+  },
+  "follow_up": {
+    "channel": "whatsapp",
+    "action": "send",
+    "stage": 1,
+    "idempotency_key": "n8n_test-call-001_wa_1"
+  }
+}

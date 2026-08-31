@@ -1,0 +1,2021 @@
+{
+  "updatedAt": "2026-08-25T10:34:59.797Z",
+  "createdAt": "2026-07-31T08:11:13.270Z",
+  "id": "4xarbWK3DXLbENzC",
+  "name": "Mega_Workflow",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "5879f520-d9b9-4dc9-ba95-3392c2f30792",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -976,
+        224
+      ],
+      "id": "e53146de-80f1-48fe-84b2-91d89872ec20",
+      "name": "Webhook",
+      "webhookId": "5879f520-d9b9-4dc9-ba95-3392c2f30792",
+      "notes": "Aakashvani posts lead_qualified here after an interested call."
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction pick() {\n  for (let i = 0; i < arguments.length; i++) {\n    const v = arguments[i];\n    if (v !== undefined && v !== null && String(v).trim() !== '') return v;\n  }\n  return '';\n}\nfunction unwrap(j) {\n  if (!j || typeof j !== 'object') return {};\n  if (j.lead) return j;\n  if (j.body && j.body.lead) return j.body;\n  if (typeof j.body === 'string') {\n    try { return unwrap(JSON.parse(j.body)); } catch (e) {}\n  }\n  if (j.body && typeof j.body === 'object') return unwrap(j.body);\n  if (j.json && typeof j.json === 'object') return unwrap(j.json);\n  return j;\n}\nconst payload = unwrap($input.first().json || {});\nconst lead = leadOr(payload);\nfunction leadOr(p) { return p.lead || {}; }\nconst extraction = payload.extraction || {};\nconst campaign = payload.campaign || {};\nconst client = payload.client || {};\nconst call = payload.call || {};\nconst meta = lead.metadata || {};\nconst aak = payload.aakashvani || {};\nconst follow = payload.follow_up || {};\nconst qualification = payload.qualification || {};\nreturn [{\n  json: {\n    name: pick(lead.name),\n    phone: pick(lead.phone),\n    email: pick(lead.email, meta.email),\n    lead_type: pick(lead.lead_type),\n    intent_status: pick(extraction.intent_status, qualification.status),\n    bhk_preference: pick(extraction.bhk_preference),\n    location_preference: pick(extraction.location_preference),\n    budget: pick(extraction.budget),\n    callback_time: pick(extraction.callback_time),\n    summary: pick(extraction.summary),\n    campaign_id: pick(campaign.id, payload.campaign_id),\n    campaign_name: pick(campaign.name),\n    client_id: pick(client.id, payload.client_id),\n    client_name: pick(client.name),\n    client_industry: pick(client.industry),\n    recording_url: pick(call.recording_url),\n    session_call_id: pick(call.session_call_id),\n    lead_city: pick(meta.lead_city),\n    lead_id: pick(lead.id),\n    event: pick(payload.event),\n    record_url: pick(aak.record_url),\n    idempotency_key: pick(follow.idempotency_key),\n    interested: payload.interested === true || String(payload.interested) === 'true',\n    debug_keys: Object.keys(payload),\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        224
+      ],
+      "id": "301abc52-a75a-4d9c-8415-50d63813461e",
+      "name": "Lead Context",
+      "notes": "Unwrap webhook body in code so lead/phone/email always populate."
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst staticData = $getWorkflowStaticData('global');\nstaticData.leads = staticData.leads || {};\n\nfunction digits(p) {\n  return String(p || '').replace(/\\D/g, '');\n}\nfunction keysFor(p) {\n  const d = digits(p);\n  const out = new Set();\n  if (!d) return out;\n  out.add(d);\n  if (d.length === 10) out.add('91' + d);\n  if (d.startsWith('91') && d.length === 12) out.add(d.slice(2));\n  if (d.startsWith('0') && d.length === 11) {\n    out.add(d.slice(1));\n    out.add('91' + d.slice(1));\n  }\n  return out;\n}\n\nconst item = $input.first().json;\nconst ks = keysFor(item.phone);\nconst record = {\n  ...item,\n  flow_type: item.flow_type || 'INITIAL_FOLLOWUP',\n  lead_found: true,\n  stored_at: new Date().toISOString(),\n};\nfor (const k of ks) staticData.leads[k] = record;\nreturn [{ json: { ...record, phone_keys: [...ks] } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        224
+      ],
+      "id": "11f5db37-f136-4e0a-af6c-1199247e2267",
+      "name": "Store Lead",
+      "notes": "Remember this lead by phone so WhatsApp replies can find it."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "int-hot",
+              "leftValue": "={{ ($json.intent_status || '').toLowerCase() }}",
+              "rightValue": "hot",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "int-interested-status",
+              "leftValue": "={{ ($json.intent_status || '').toLowerCase() }}",
+              "rightValue": "interested",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "int-lead-type",
+              "leftValue": "={{ ($json.lead_type || '').toLowerCase() }}",
+              "rightValue": "interested",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "int-event",
+              "leftValue": "={{ ($json.event || '').toLowerCase() }}",
+              "rightValue": "lead_qualified",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "int-flag",
+              "leftValue": "={{ $json.interested }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -80,
+        224
+      ],
+      "id": "b89154bb-57f1-409a-8fc5-35ce2ca42177",
+      "name": "If Interested"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "email-not-empty-001",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "email-has-at-002",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "@",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "8cdf3f3a-e5ba-4471-8c45-a4e8612d194d",
+      "name": "If Has Email"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parseOut(v) {\n  if (v === undefined || v === null) return {};\n  if (typeof v === 'object') return v;\n  if (typeof v === 'string') {\n    const s = v.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();\n    try { return JSON.parse(s); } catch (e) { return { body: v }; }\n  }\n  return {};\n}\nconst ai = $input.first().json || {};\nconst src = $('If Has Email').first().json || {};\nconst base = { ...src, ...ai };\nconst aiOut = parseOut(ai.output !== undefined ? ai.output : (ai.text !== undefined ? ai.text : ai.response));\nconst name = base.name || 'there';\nconst client = base.client_name || 'our team';\nconst summary = base.summary || '';\nconst bhk = base.bhk_preference || '';\nconst loc = base.location_preference || base.lead_city || '';\nconst budget = base.budget || '';\nconst about = [bhk, loc, budget ? ('budget ' + budget) : ''].filter(Boolean).join(', ');\nconst aiSubject = String((aiOut && aiOut.subject) || '').trim();\nconst aiBody = String((aiOut && aiOut.body) || '').trim();\nconst subject = aiSubject || ('Follow-up from ' + client);\nconst body = aiBody || [\n  'Hi ' + name + ',',\n  '',\n  'Thank you for speaking with us' + (about ? ' about ' + about : '') + '.',\n  summary ? ('Call summary: ' + summary) : '',\n  'A representative will contact you shortly. You can also reply to our WhatsApp message.',\n  '',\n  'Regards,',\n  client,\n].filter(Boolean).join('\\n');\nreturn [{ json: {\n  ...base,\n  output: { subject, body },\n  email: base.email,\n  ai_generated: Boolean(aiSubject && aiBody),\n} }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        0
+      ],
+      "id": "build-email-0001-0002-0003-0004",
+      "name": "Build Email",
+      "notes": "Always builds subject/body from lead fields. No Gemini."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.output.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.output.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1120,
+        0
+      ],
+      "id": "ba7a4d71-87d6-4aa1-a540-795c3521c3ea",
+      "name": "Send Email",
+      "webhookId": "26a10472-3f47-49ca-97f0-ec5bd8bbcbbf",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "CLid9w5AptnuW0jb",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst j = $input.first().json || {};\nif (!j.flow_type) {\n  j.flow_type = j.message && !j.summary ? 'CONTINUE_CHAT' : 'INITIAL_FOLLOWUP';\n}\nreturn [{ json: j }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        224
+      ],
+      "id": "f254f6b2-7426-4c48-9e33-b4138680c6ae",
+      "name": "Lead Payload",
+      "notes": "Pass-through contract for outbound and inbound."
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parseOut(v) {\n  if (v === undefined || v === null) return {};\n  if (typeof v === 'object') return v;\n  if (typeof v === 'string') {\n    const s = v.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();\n    try { return JSON.parse(s); } catch (e) { return { message: v }; }\n  }\n  return {};\n}\nconst ai = $input.first().json || {};\nconst src = $('Lead Payload').first().json || {};\nconst base = { ...src, ...ai };\nconst mode = String(base.flow_type || '').trim().toUpperCase();\nconst isContinue = mode === 'CONTINUE_CHAT' || mode === 'INBOUND_REPLY';\nconst parsed = parseOut(ai.output !== undefined ? ai.output : (ai.text !== undefined ? ai.text : ai.response));\nlet raw = String((parsed && parsed.message) || '').trim();\nconst inbound = String(src.message || '').trim();\nif (raw && inbound && raw === inbound) raw = '';\nconst name = src.name || 'there';\nconst bhk = src.bhk_preference || '';\nconst loc = src.location_preference || src.lead_city || '';\nconst about = [bhk, loc].filter(Boolean).join(' in ');\nconst client = src.client_name || 'our team';\nlet message = raw;\nif (!message && isContinue) {\n  message = 'Hi ' + name + ', thanks for your message. A specialist from ' + client + ' will continue this conversation here shortly.';\n}\nif (!message) {\n  message = 'Hi ' + name + '! Thanks for speaking with ' + client + (about ? ' about ' + about : '') + '. Reply on this WhatsApp chat and we will help with the next steps.';\n}\nreturn [{ json: { ...base, output: { message }, message, ai_generated: Boolean(raw) } }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        224
+      ],
+      "id": "ensure-wa-text-0001-0002-0003-0004",
+      "name": "Ensure WhatsApp Text",
+      "notes": "Always produces WhatsApp text. Does not depend on Gemini."
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst src = $('Lead Payload').first().json || {};\nconst upstream = $input.first().json || {};\nconst p = String(src.phone || upstream.phone || '').trim();\nconst d = p.replace(/\\D/g, '');\nlet e164 = '';\nif (p.startsWith('+')) e164 = '+' + d;\nelse if (d.length === 10) e164 = '+91' + d;\nelse if (d.length === 12 && d.startsWith('91')) e164 = '+' + d;\nelse if (d) e164 = '+' + d;\nconst message = String(\n  (upstream.output && upstream.output.message) || upstream.message || ''\n).trim();\nreturn [{ json: {\n  ...src,\n  phone_e164: e164,\n  message,\n  customer_name: src.name || '',\n  ai_generated: Boolean(upstream.ai_generated),\n} }];\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        224
+      ],
+      "id": "11a242b6-250a-43ab-b778-9e1ca9f99f9a",
+      "name": "Prepare Send",
+      "notes": "Builds E.164 + final WhatsApp text."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d5a75d80-0d6f-4f79-aa38-bfebd88befef",
+              "leftValue": "={{ $json.message }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "c5e7ec81-d115-4007-857f-076457e440b8",
+              "leftValue": "={{ $json.phone_e164 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1392,
+        224
+      ],
+      "id": "c8043b41-db49-4094-b3e9-500d00da3063",
+      "name": "If Has WhatsApp Text"
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "1184950391375570",
+        "recipientPhoneNumber": "={{ $json.phone_e164 }}",
+        "textBody": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [
+        1664,
+        224
+      ],
+      "id": "96837a25-2da6-41fb-9bb0-b7286b8588f4",
+      "name": "Send WhatsApp",
+      "webhookId": "adcbaf72-48ab-433e-8fb7-95cc9e1c5343",
+      "credentials": {
+        "whatsAppApi": {
+          "id": "rVE6HlTGG4Q5kSJT",
+          "name": "WhatsApp account"
+        }
+      },
+      "notes": "Sends via BhuvisX WhatsApp credential. Recipient is dynamic."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Prepare Send').first().json.record_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ client_id: $('Prepare Send').first().json.client_id, to_phone: $('Prepare Send').first().json.phone_e164, text: $('Prepare Send').first().json.message, lead_id: $('Prepare Send').first().json.lead_id || null, campaign_id: $('Prepare Send').first().json.campaign_id, customer_name: $('Prepare Send').first().json.customer_name, idempotency_key: $('Prepare Send').first().json.idempotency_key, direction: 'outgoing', status: 'sent' }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1952,
+        224
+      ],
+      "id": "9d78116c-69c6-4cbe-bebf-9f40b0fdea3b",
+      "name": "Record in Aakashvani",
+      "onError": "continueRegularOutput",
+      "notes": "Writes the follow-up into Aakashvani Messages for that campaign/client."
+    },
+    {
+      "parameters": {
+        "updates": [
+          "messages"
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [
+        -976,
+        560
+      ],
+      "id": "2be149ff-0d20-4570-87e1-e0cf463cacb6",
+      "name": "WhatsApp Trigger",
+      "webhookId": "34664d3e-4506-4e47-9aca-17653d2ec0a6",
+      "credentials": {
+        "whatsAppTriggerApi": {
+          "id": "xqkpxxwjQWPnJSKP",
+          "name": "WhatsApp OAuth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction first(v) { return Array.isArray(v) ? v[0] : v; }\nconst j = $input.first().json;\nconst value = (j.messages ? j : (j.entry && j.entry[0] && j.entry[0].changes && j.entry[0].changes[0] && j.entry[0].changes[0].value)) || j;\nconst messages = value.messages || j.messages || [];\nconst contacts = value.contacts || j.contacts || [];\nconst statuses = value.statuses || j.statuses || [];\nconst metadata = value.metadata || j.metadata || {};\nconst msg = first(messages) || {};\nconst contact = first(contacts) || {};\nconst from = msg.from || contact.wa_id || '';\nconst text = (msg.text && msg.text.body) || (msg.button && msg.button.text) || '';\nconst display = String(metadata.display_phone_number || '').replace(/\\D/g, '');\nconst fromDigits = String(from).replace(/\\D/g, '');\nconst isStatusOnly = !messages.length && statuses.length;\nconst isSelf = Boolean(display && fromDigits && (fromDigits === display || fromDigits.endsWith(display) || display.endsWith(fromDigits)));\nconst skip = Boolean(isStatusOnly || isSelf || !from || !text);\nreturn [{ json: {\n  name: (contact.profile && contact.profile.name) || '',\n  phone: from,\n  message: text,\n  message_id: msg.id || '',\n  message_type: msg.type || '',\n  display_phone_number: metadata.display_phone_number || '',\n  is_status_only: Boolean(isStatusOnly),\n  is_self: Boolean(isSelf),\n  skip,\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        560
+      ],
+      "id": "44643a47-a0f3-4449-b2c2-39ba92b15ec5",
+      "name": "Normalize Inbound"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ba80aeb5-7a61-448e-8b61-891e8e2ea9c0",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "false"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -400,
+        560
+      ],
+      "id": "ef010640-6335-4b0f-b3cd-bb7d62c12d40",
+      "name": "If Customer Message",
+      "notes": "Drop delivery receipts, empty messages, and our own echoes."
+    },
+    {
+      "parameters": {
+        "jsCode": "const incoming = $input.first().json;\nconst base = ($env.AAKASHVANI_PUBLIC_URL || $env.NGROK_URL || '').replace(/\\/$/, '');\nconst adminKey = $env.AAKASHVANI_ADMIN_KEY || $env.ADMIN_API_KEY || '';\n\nfunction fallback(reason) {\n  return [{\n    json: {\n      ...incoming,\n      flow_type: 'CONTINUE_CHAT',\n      lead_found: false,\n      lookup_error: reason,\n      message: incoming.message,\n      phone: incoming.phone,\n      name: incoming.name || '',\n    },\n  }];\n}\n\nif (!base || !adminKey) {\n  return fallback('backend_env_missing');\n}\n\nconst phone = encodeURIComponent(String(incoming.phone || ''));\nconst msg = encodeURIComponent(String(incoming.message || ''));\nconst url = `${base}/internal/leads/context?phone=${phone}&flow_type=CONTINUE_CHAT&inbound_message=${msg}`;\n\nlet resp;\ntry {\n  resp = await this.helpers.httpRequest({\n    method: 'GET',\n    url,\n    headers: { 'X-Admin-Key': adminKey, 'Accept': 'application/json' },\n    json: true,\n    timeout: 15000,\n  });\n} catch (e) {\n  return fallback(String(e.message || e));\n}\n\nif (!resp || !resp.ok || !resp.payload) {\n  return fallback(resp?.error || 'lead_not_found');\n}\n\nconst p = resp.payload;\nconst lead = p.lead || {};\nconst ext = p.extraction || {};\nconst meta = lead.metadata || {};\n\nreturn [{\n  json: {\n    ...incoming,\n    ...p,\n    name: lead.name || incoming.name || '',\n    phone: lead.phone || incoming.phone,\n    email: lead.email || meta.email || '',\n    client_id: p.client_id || (p.client && p.client.id),\n    client_name: (p.client && p.client.name) || '',\n    summary: ext.summary || '',\n    bhk_preference: ext.bhk_preference || meta.bhk_preference || '',\n    location_preference: ext.location_preference || meta.location_preference || '',\n    budget: ext.budget || meta.budget || '',\n    lead_city: meta.lead_city || '',\n    campaign_id: (p.campaign && p.campaign.id) || p.metadata?.campaign_id,\n    campaign_name: (p.campaign && p.campaign.name) || '',\n    lead_id: lead.id,\n    flow_type: 'CONTINUE_CHAT',\n    lead_found: true,\n    message: incoming.message,\n    inbound_name: incoming.name || '',\n    message_id: incoming.message_id || '',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        560
+      ],
+      "id": "803462b4-72b0-43ed-8d34-ba508481ca40",
+      "name": "Lookup Lead",
+      "notes": "Fetch full lead context from AakashVani GET /internal/leads/context (requires AAKASHVANI_PUBLIC_URL + AAKASHVANI_ADMIN_KEY in n8n env)."
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an email assistant for Aakashvani, writing for {{$json.client_name || \"our client\"}}.\nUse ONLY these fields. Do not invent facts.\nName: {{$json.name}}\nEmail: {{$json.email}}\nSummary: {{$json.summary}}\nBHK: {{$json.bhk_preference}}\nLocation: {{$json.location_preference}}\nBudget: {{$json.budget}}\nCity: {{$json.lead_city}}\nReturn ONLY JSON: {\"subject\":\"\",\"body\":\"\"}\n",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You write short, warm, factual follow-up emails for a real-estate sales team. Use only the facts given to you. Never invent prices, availability, or promises. Respond with JSON only, matching the requested schema."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        512,
+        0
+      ],
+      "id": "e4c724e0-ba91-4c26-ba02-253497a84564",
+      "name": "Generate Follow-up Email",
+      "onError": "continueRegularOutput",
+      "notes": "AI email. If it fails, Build Email still sends.",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\"subject\":\"Follow-up\",\"body\":\"Thank you for your time.\"}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        752,
+        160
+      ],
+      "id": "60b46b4e-46d5-402d-932b-b4663c167970",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.7-flash",
+        "options": {
+          "temperature": 0.4,
+          "maxOutputTokens": 8192
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        512,
+        160
+      ],
+      "id": "f4bfe156-691f-4bef-b1e6-1884dd18c0b0",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "MSan1NcJu1Xvfkc1",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a WhatsApp sales assistant for {{$json.client_name || \"our client\"}}.\nUse ONLY provided fields. Never invent prices or inventory.\nMODE={{$json.flow_type}}\nName={{$json.name}} Summary={{$json.summary}} BHK={{$json.bhk_preference}} Location={{$json.location_preference}} Budget={{$json.budget}} City={{$json.lead_city}}\nIf MODE is INITIAL_FOLLOWUP (or legacy initial_followup): thank them for the call, 80-150 words, max 2 emojis, clear CTA.\nIf MODE is CONTINUE_CHAT (or legacy inbound_reply): answer Latest message={{$json.message}} using memory, under 120 words, max 1 emoji. If lead_found is false, be generic and offer a human.\nReturn ONLY JSON: {\"message\":\"\"}\n",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You write concise WhatsApp messages for a real-estate sales team. Use only the facts given to you. Never invent prices, inventory, or promises. Respond with JSON only, matching the requested schema."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        512,
+        224
+      ],
+      "id": "d5700b45-4338-408c-805b-a8790de8ec86",
+      "name": "Generate WhatsApp Message",
+      "onError": "continueRegularOutput",
+      "notes": "AI WhatsApp. If it fails, Ensure WhatsApp Text still sends.",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\"message\":\"Thanks for speaking with us.\"}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        752,
+        400
+      ],
+      "id": "d7e7352f-820f-4198-8996-38f54287f635",
+      "name": "Structured Output Parser1"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.7-flash",
+        "options": {
+          "temperature": 0.4,
+          "maxOutputTokens": 8192
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        512,
+        400
+      ],
+      "id": "d07824ac-eb1a-4272-81a1-447d451c83f6",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "MSan1NcJu1Xvfkc1",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ ($json.client_id || 'global') + ':' + ($json.phone || $json.lead_id || 'unknown') }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        992,
+        400
+      ],
+      "id": "7e2173cf-efcc-4ef8-bd4e-7e6cf114cc61",
+      "name": "Simple Memory",
+      "notes": "Per-customer memory keyed by phone."
+    },
+    {
+      "parameters": {
+        "content": "## 1. After interested call",
+        "height": 300,
+        "width": 1180,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1024,
+        112
+      ],
+      "id": "note-call",
+      "name": "Note Call"
+    },
+    {
+      "parameters": {
+        "content": "## 2. Email (AI then fallback)",
+        "height": 220,
+        "width": 1120,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        192,
+        -80
+      ],
+      "id": "note-email",
+      "name": "Note Email"
+    },
+    {
+      "parameters": {
+        "content": "## 3. WhatsApp (AI then fallback + memory)",
+        "height": 340,
+        "width": 1960,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        192,
+        112
+      ],
+      "id": "note-wa",
+      "name": "Note WhatsApp"
+    },
+    {
+      "parameters": {
+        "content": "## 4. Customer reply \u2192 lookup original lead \u2192 same WhatsApp path",
+        "height": 220,
+        "width": 1180,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1024,
+        480
+      ],
+      "id": "note-reply",
+      "name": "Note Reply"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Lead Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Context": {
+      "main": [
+        [
+          {
+            "node": "Store Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Lead": {
+      "main": [
+        [
+          {
+            "node": "If Interested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Interested": {
+      "main": [
+        [
+          {
+            "node": "Lead Payload",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If Has Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "If Has Email": {
+      "main": [
+        [
+          {
+            "node": "Generate Follow-up Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Generate Follow-up Email": {
+      "main": [
+        [
+          {
+            "node": "Build Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Follow-up Email",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Generate Follow-up Email",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Payload": {
+      "main": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate WhatsApp Message": {
+      "main": [
+        [
+          {
+            "node": "Ensure WhatsApp Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure WhatsApp Text": {
+      "main": [
+        [
+          {
+            "node": "Prepare Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Send": {
+      "main": [
+        [
+          {
+            "node": "If Has WhatsApp Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Has WhatsApp Text": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Send WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Record in Aakashvani",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Generate WhatsApp Message",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Inbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Inbound": {
+      "main": [
+        [
+          {
+            "node": "If Customer Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Customer Message": {
+      "main": [
+        [
+          {
+            "node": "Lookup Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Lookup Lead": {
+      "main": [
+        [
+          {
+            "node": "Lead Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": {
+    "global": {
+      "leads": {
+        "917397867643": {
+          "name": "Nitant",
+          "phone": "917397867643",
+          "email": "singhnitant28@gmail.com",
+          "lead_type": "interested",
+          "intent_status": "hot",
+          "bhk_preference": "2 BHK",
+          "location_preference": "Pune",
+          "budget": "8000000",
+          "callback_time": "tomorrow",
+          "summary": "Customer is interested in a 2 BHK property in Pune.",
+          "campaign_id": "00000000-0000-4000-8000-000000000003",
+          "campaign_name": "Aakashvani Test",
+          "client_id": "00000000-0000-4000-8000-000000000001",
+          "client_name": "Dev Client",
+          "client_industry": "real_estate",
+          "recording_url": "",
+          "session_call_id": "test-call-001",
+          "lead_city": "Pune",
+          "lead_id": "00000000-0000-4000-8000-000000000011",
+          "event": "lead_qualified",
+          "record_url": "",
+          "idempotency_key": "n8n_test-call-001_wa_1",
+          "interested": true,
+          "debug_keys": [
+            "event",
+            "event_type",
+            "flow_type",
+            "interested",
+            "event_id",
+            "client_id",
+            "lead",
+            "extraction",
+            "campaign",
+            "client",
+            "call",
+            "follow_up"
+          ],
+          "flow_type": "INITIAL_FOLLOWUP",
+          "lead_found": true,
+          "stored_at": "2026-08-25T11:13:24.683Z"
+        },
+        "7397867643": {
+          "name": "Nitant",
+          "phone": "917397867643",
+          "email": "singhnitant28@gmail.com",
+          "lead_type": "interested",
+          "intent_status": "hot",
+          "bhk_preference": "2 BHK",
+          "location_preference": "Pune",
+          "budget": "8000000",
+          "callback_time": "tomorrow",
+          "summary": "Customer is interested in a 2 BHK property in Pune.",
+          "campaign_id": "00000000-0000-4000-8000-000000000003",
+          "campaign_name": "Aakashvani Test",
+          "client_id": "00000000-0000-4000-8000-000000000001",
+          "client_name": "Dev Client",
+          "client_industry": "real_estate",
+          "recording_url": "",
+          "session_call_id": "test-call-001",
+          "lead_city": "Pune",
+          "lead_id": "00000000-0000-4000-8000-000000000011",
+          "event": "lead_qualified",
+          "record_url": "",
+          "idempotency_key": "n8n_test-call-001_wa_1",
+          "interested": true,
+          "debug_keys": [
+            "event",
+            "event_type",
+            "flow_type",
+            "interested",
+            "event_id",
+            "client_id",
+            "lead",
+            "extraction",
+            "campaign",
+            "client",
+            "call",
+            "follow_up"
+          ],
+          "flow_type": "INITIAL_FOLLOWUP",
+          "lead_found": true,
+          "stored_at": "2026-08-25T11:13:24.683Z"
+        },
+        "919359210080": {
+          "name": "Nitant",
+          "phone": "919359210080",
+          "email": "getin2grave@gmail.com",
+          "lead_type": "interested",
+          "intent_status": "hot",
+          "bhk_preference": "2 BHK",
+          "location_preference": "Pune",
+          "budget": "8000000",
+          "callback_time": "tomorrow",
+          "summary": "Customer is interested in a 2 BHK property in Pune.",
+          "campaign_id": "00000000-0000-4000-8000-000000000003",
+          "campaign_name": "Aakashvani Test",
+          "client_id": "00000000-0000-4000-8000-000000000001",
+          "client_name": "Dev Client",
+          "client_industry": "real_estate",
+          "recording_url": "",
+          "session_call_id": "test-call-001",
+          "lead_city": "Pune",
+          "lead_id": "00000000-0000-4000-8000-000000000011",
+          "event": "lead_qualified",
+          "record_url": "",
+          "idempotency_key": "n8n_test-call-001_wa_1",
+          "interested": true,
+          "debug_keys": [
+            "event",
+            "event_type",
+            "flow_type",
+            "interested",
+            "event_id",
+            "client_id",
+            "lead",
+            "extraction",
+            "campaign",
+            "client",
+            "call",
+            "follow_up"
+          ],
+          "flow_type": "initial_followup",
+          "lead_found": true,
+          "stored_at": "2026-08-25T09:21:38.041Z"
+        },
+        "9359210080": {
+          "name": "Nitant",
+          "phone": "919359210080",
+          "email": "getin2grave@gmail.com",
+          "lead_type": "interested",
+          "intent_status": "hot",
+          "bhk_preference": "2 BHK",
+          "location_preference": "Pune",
+          "budget": "8000000",
+          "callback_time": "tomorrow",
+          "summary": "Customer is interested in a 2 BHK property in Pune.",
+          "campaign_id": "00000000-0000-4000-8000-000000000003",
+          "campaign_name": "Aakashvani Test",
+          "client_id": "00000000-0000-4000-8000-000000000001",
+          "client_name": "Dev Client",
+          "client_industry": "real_estate",
+          "recording_url": "",
+          "session_call_id": "test-call-001",
+          "lead_city": "Pune",
+          "lead_id": "00000000-0000-4000-8000-000000000011",
+          "event": "lead_qualified",
+          "record_url": "",
+          "idempotency_key": "n8n_test-call-001_wa_1",
+          "interested": true,
+          "debug_keys": [
+            "event",
+            "event_type",
+            "flow_type",
+            "interested",
+            "event_id",
+            "client_id",
+            "lead",
+            "extraction",
+            "campaign",
+            "client",
+            "call",
+            "follow_up"
+          ],
+          "flow_type": "initial_followup",
+          "lead_found": true,
+          "stored_at": "2026-08-25T09:21:38.041Z"
+        }
+      }
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "627ba6e4-764a-4c0f-acdb-2d4077d981a6",
+  "activeVersionId": "627ba6e4-764a-4c0f-acdb-2d4077d981a6",
+  "versionCounter": 350,
+  "triggerCount": 2,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-07-31T08:11:13.275Z",
+      "createdAt": "2026-07-31T08:11:13.275Z",
+      "role": "workflow:owner",
+      "workflowId": "4xarbWK3DXLbENzC",
+      "projectId": "NGF5pbXXFrfYLzVQ",
+      "project": {
+        "updatedAt": "2026-07-31T08:10:12.056Z",
+        "createdAt": "2026-07-31T05:14:19.458Z",
+        "id": "NGF5pbXXFrfYLzVQ",
+        "name": "BhuvisX Aakashvani <bhuvisxmain@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "922e73be-2cd0-4e91-af65-f22dfb9ded88"
+      }
+    }
+  ],
+  "tags": [],
+  "parentFolder": null,
+  "activeVersion": {
+    "updatedAt": "2026-08-25T10:57:41.000Z",
+    "createdAt": "2026-08-25T10:34:59.799Z",
+    "versionId": "627ba6e4-764a-4c0f-acdb-2d4077d981a6",
+    "workflowId": "4xarbWK3DXLbENzC",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "5879f520-d9b9-4dc9-ba95-3392c2f30792",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2.1,
+        "position": [
+          -976,
+          224
+        ],
+        "id": "e53146de-80f1-48fe-84b2-91d89872ec20",
+        "name": "Webhook",
+        "webhookId": "5879f520-d9b9-4dc9-ba95-3392c2f30792",
+        "notes": "Aakashvani posts lead_qualified here after an interested call."
+      },
+      {
+        "parameters": {
+          "jsCode": "\nfunction pick() {\n  for (let i = 0; i < arguments.length; i++) {\n    const v = arguments[i];\n    if (v !== undefined && v !== null && String(v).trim() !== '') return v;\n  }\n  return '';\n}\nfunction unwrap(j) {\n  if (!j || typeof j !== 'object') return {};\n  if (j.lead) return j;\n  if (j.body && j.body.lead) return j.body;\n  if (typeof j.body === 'string') {\n    try { return unwrap(JSON.parse(j.body)); } catch (e) {}\n  }\n  if (j.body && typeof j.body === 'object') return unwrap(j.body);\n  if (j.json && typeof j.json === 'object') return unwrap(j.json);\n  return j;\n}\nconst payload = unwrap($input.first().json || {});\nconst lead = leadOr(payload);\nfunction leadOr(p) { return p.lead || {}; }\nconst extraction = payload.extraction || {};\nconst campaign = payload.campaign || {};\nconst client = payload.client || {};\nconst call = payload.call || {};\nconst meta = lead.metadata || {};\nconst aak = payload.aakashvani || {};\nconst follow = payload.follow_up || {};\nconst qualification = payload.qualification || {};\nreturn [{\n  json: {\n    name: pick(lead.name),\n    phone: pick(lead.phone),\n    email: pick(lead.email, meta.email),\n    lead_type: pick(lead.lead_type),\n    intent_status: pick(extraction.intent_status, qualification.status),\n    bhk_preference: pick(extraction.bhk_preference),\n    location_preference: pick(extraction.location_preference),\n    budget: pick(extraction.budget),\n    callback_time: pick(extraction.callback_time),\n    summary: pick(extraction.summary),\n    campaign_id: pick(campaign.id, payload.campaign_id),\n    campaign_name: pick(campaign.name),\n    client_id: pick(client.id, payload.client_id),\n    client_name: pick(client.name),\n    client_industry: pick(client.industry),\n    recording_url: pick(call.recording_url),\n    session_call_id: pick(call.session_call_id),\n    lead_city: pick(meta.lead_city),\n    lead_id: pick(lead.id),\n    event: pick(payload.event),\n    record_url: pick(aak.record_url),\n    idempotency_key: pick(follow.idempotency_key),\n    interested: payload.interested === true || String(payload.interested) === 'true',\n    debug_keys: Object.keys(payload),\n  }\n}];\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -704,
+          224
+        ],
+        "id": "301abc52-a75a-4d9c-8415-50d63813461e",
+        "name": "Lead Context",
+        "notes": "Unwrap webhook body in code so lead/phone/email always populate."
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst staticData = $getWorkflowStaticData('global');\nstaticData.leads = staticData.leads || {};\n\nfunction digits(p) {\n  return String(p || '').replace(/\\D/g, '');\n}\nfunction keysFor(p) {\n  const d = digits(p);\n  const out = new Set();\n  if (!d) return out;\n  out.add(d);\n  if (d.length === 10) out.add('91' + d);\n  if (d.startsWith('91') && d.length === 12) out.add(d.slice(2));\n  if (d.startsWith('0') && d.length === 11) {\n    out.add(d.slice(1));\n    out.add('91' + d.slice(1));\n  }\n  return out;\n}\n\nconst item = $input.first().json;\nconst ks = keysFor(item.phone);\nconst record = {\n  ...item,\n  flow_type: item.flow_type || 'INITIAL_FOLLOWUP',\n  lead_found: true,\n  stored_at: new Date().toISOString(),\n};\nfor (const k of ks) staticData.leads[k] = record;\nreturn [{ json: { ...record, phone_keys: [...ks] } }];\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -400,
+          224
+        ],
+        "id": "11f5db37-f136-4e0a-af6c-1199247e2267",
+        "name": "Store Lead",
+        "notes": "Remember this lead by phone so WhatsApp replies can find it."
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "int-hot",
+                "leftValue": "={{ ($json.intent_status || '').toLowerCase() }}",
+                "rightValue": "hot",
+                "operator": {
+                  "type": "string",
+                  "operation": "contains"
+                }
+              },
+              {
+                "id": "int-interested-status",
+                "leftValue": "={{ ($json.intent_status || '').toLowerCase() }}",
+                "rightValue": "interested",
+                "operator": {
+                  "type": "string",
+                  "operation": "contains"
+                }
+              },
+              {
+                "id": "int-lead-type",
+                "leftValue": "={{ ($json.lead_type || '').toLowerCase() }}",
+                "rightValue": "interested",
+                "operator": {
+                  "type": "string",
+                  "operation": "contains"
+                }
+              },
+              {
+                "id": "int-event",
+                "leftValue": "={{ ($json.event || '').toLowerCase() }}",
+                "rightValue": "lead_qualified",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              },
+              {
+                "id": "int-flag",
+                "leftValue": "={{ $json.interested }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true"
+                }
+              }
+            ],
+            "combinator": "or"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          -80,
+          224
+        ],
+        "id": "b89154bb-57f1-409a-8fc5-35ce2ca42177",
+        "name": "If Interested"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "email-not-empty-001",
+                "leftValue": "={{ $json.email }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEmpty"
+                }
+              },
+              {
+                "id": "email-has-at-002",
+                "leftValue": "={{ $json.email }}",
+                "rightValue": "@",
+                "operator": {
+                  "type": "string",
+                  "operation": "contains"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          224,
+          0
+        ],
+        "id": "8cdf3f3a-e5ba-4471-8c45-a4e8612d194d",
+        "name": "If Has Email"
+      },
+      {
+        "parameters": {
+          "jsCode": "\nfunction parseOut(v) {\n  if (v === undefined || v === null) return {};\n  if (typeof v === 'object') return v;\n  if (typeof v === 'string') {\n    const s = v.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();\n    try { return JSON.parse(s); } catch (e) { return { body: v }; }\n  }\n  return {};\n}\nconst ai = $input.first().json || {};\nconst src = $('If Has Email').first().json || {};\nconst base = { ...src, ...ai };\nconst aiOut = parseOut(ai.output !== undefined ? ai.output : (ai.text !== undefined ? ai.text : ai.response));\nconst name = base.name || 'there';\nconst client = base.client_name || 'our team';\nconst summary = base.summary || '';\nconst bhk = base.bhk_preference || '';\nconst loc = base.location_preference || base.lead_city || '';\nconst budget = base.budget || '';\nconst about = [bhk, loc, budget ? ('budget ' + budget) : ''].filter(Boolean).join(', ');\nconst aiSubject = String((aiOut && aiOut.subject) || '').trim();\nconst aiBody = String((aiOut && aiOut.body) || '').trim();\nconst subject = aiSubject || ('Follow-up from ' + client);\nconst body = aiBody || [\n  'Hi ' + name + ',',\n  '',\n  'Thank you for speaking with us' + (about ? ' about ' + about : '') + '.',\n  summary ? ('Call summary: ' + summary) : '',\n  'A representative will contact you shortly. You can also reply to our WhatsApp message.',\n  '',\n  'Regards,',\n  client,\n].filter(Boolean).join('\\n');\nreturn [{ json: {\n  ...base,\n  output: { subject, body },\n  email: base.email,\n  ai_generated: Boolean(aiSubject && aiBody),\n} }];\n",
+          "mode": "runOnceForAllItems"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          832,
+          0
+        ],
+        "id": "build-email-0001-0002-0003-0004",
+        "name": "Build Email",
+        "notes": "Always builds subject/body from lead fields. No Gemini."
+      },
+      {
+        "parameters": {
+          "sendTo": "={{ $json.email }}",
+          "subject": "={{ $json.output.subject }}",
+          "emailType": "text",
+          "message": "={{ $json.output.body }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.gmail",
+        "typeVersion": 2.2,
+        "position": [
+          1120,
+          0
+        ],
+        "id": "ba7a4d71-87d6-4aa1-a540-795c3521c3ea",
+        "name": "Send Email",
+        "webhookId": "26a10472-3f47-49ca-97f0-ec5bd8bbcbbf",
+        "credentials": {
+          "gmailOAuth2": {
+            "id": "CLid9w5AptnuW0jb",
+            "name": "Gmail account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst j = $input.first().json || {};\nif (!j.flow_type) {\n  j.flow_type = j.message && !j.summary ? 'CONTINUE_CHAT' : 'INITIAL_FOLLOWUP';\n}\nreturn [{ json: j }];\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          224,
+          224
+        ],
+        "id": "f254f6b2-7426-4c48-9e33-b4138680c6ae",
+        "name": "Lead Payload",
+        "notes": "Pass-through contract for outbound and inbound."
+      },
+      {
+        "parameters": {
+          "jsCode": "\nfunction parseOut(v) {\n  if (v === undefined || v === null) return {};\n  if (typeof v === 'object') return v;\n  if (typeof v === 'string') {\n    const s = v.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();\n    try { return JSON.parse(s); } catch (e) { return { message: v }; }\n  }\n  return {};\n}\nconst ai = $input.first().json || {};\nconst src = $('Lead Payload').first().json || {};\nconst base = { ...src, ...ai };\nconst mode = String(base.flow_type || '').trim().toUpperCase();\nconst isContinue = mode === 'CONTINUE_CHAT' || mode === 'INBOUND_REPLY';\nconst parsed = parseOut(ai.output !== undefined ? ai.output : (ai.text !== undefined ? ai.text : ai.response));\nlet raw = String((parsed && parsed.message) || '').trim();\nconst inbound = String(src.message || '').trim();\nif (raw && inbound && raw === inbound) raw = '';\nconst name = src.name || 'there';\nconst bhk = src.bhk_preference || '';\nconst loc = src.location_preference || src.lead_city || '';\nconst about = [bhk, loc].filter(Boolean).join(' in ');\nconst client = src.client_name || 'our team';\nlet message = raw;\nif (!message && isContinue) {\n  message = 'Hi ' + name + ', thanks for your message. A specialist from ' + client + ' will continue this conversation here shortly.';\n}\nif (!message) {\n  message = 'Hi ' + name + '! Thanks for speaking with ' + client + (about ? ' about ' + about : '') + '. Reply on this WhatsApp chat and we will help with the next steps.';\n}\nreturn [{ json: { ...base, output: { message }, message, ai_generated: Boolean(raw) } }];\n",
+          "mode": "runOnceForAllItems"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          832,
+          224
+        ],
+        "id": "ensure-wa-text-0001-0002-0003-0004",
+        "name": "Ensure WhatsApp Text",
+        "notes": "Always produces WhatsApp text. Does not depend on Gemini."
+      },
+      {
+        "parameters": {
+          "jsCode": "\nconst src = $('Lead Payload').first().json || {};\nconst upstream = $input.first().json || {};\nconst p = String(src.phone || upstream.phone || '').trim();\nconst d = p.replace(/\\D/g, '');\nlet e164 = '';\nif (p.startsWith('+')) e164 = '+' + d;\nelse if (d.length === 10) e164 = '+91' + d;\nelse if (d.length === 12 && d.startsWith('91')) e164 = '+' + d;\nelse if (d) e164 = '+' + d;\nconst message = String(\n  (upstream.output && upstream.output.message) || upstream.message || ''\n).trim();\nreturn [{ json: {\n  ...src,\n  phone_e164: e164,\n  message,\n  customer_name: src.name || '',\n  ai_generated: Boolean(upstream.ai_generated),\n} }];\n",
+          "mode": "runOnceForAllItems"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1104,
+          224
+        ],
+        "id": "11a242b6-250a-43ab-b778-9e1ca9f99f9a",
+        "name": "Prepare Send",
+        "notes": "Builds E.164 + final WhatsApp text."
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "d5a75d80-0d6f-4f79-aa38-bfebd88befef",
+                "leftValue": "={{ $json.message }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEmpty"
+                }
+              },
+              {
+                "id": "c5e7ec81-d115-4007-857f-076457e440b8",
+                "leftValue": "={{ $json.phone_e164 }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEmpty"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1392,
+          224
+        ],
+        "id": "c8043b41-db49-4094-b3e9-500d00da3063",
+        "name": "If Has WhatsApp Text"
+      },
+      {
+        "parameters": {
+          "operation": "send",
+          "phoneNumberId": "1184950391375570",
+          "recipientPhoneNumber": "={{ $json.phone_e164 }}",
+          "textBody": "={{ $json.message }}",
+          "additionalFields": {}
+        },
+        "type": "n8n-nodes-base.whatsApp",
+        "typeVersion": 1.1,
+        "position": [
+          1664,
+          224
+        ],
+        "id": "96837a25-2da6-41fb-9bb0-b7286b8588f4",
+        "name": "Send WhatsApp",
+        "webhookId": "adcbaf72-48ab-433e-8fb7-95cc9e1c5343",
+        "credentials": {
+          "whatsAppApi": {
+            "id": "rVE6HlTGG4Q5kSJT",
+            "name": "WhatsApp account"
+          }
+        },
+        "notes": "Sends via BhuvisX WhatsApp credential. Recipient is dynamic."
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $('Prepare Send').first().json.record_url }}",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ client_id: $('Prepare Send').first().json.client_id, to_phone: $('Prepare Send').first().json.phone_e164, text: $('Prepare Send').first().json.message, lead_id: $('Prepare Send').first().json.lead_id || null, campaign_id: $('Prepare Send').first().json.campaign_id, customer_name: $('Prepare Send').first().json.customer_name, idempotency_key: $('Prepare Send').first().json.idempotency_key, direction: 'outgoing', status: 'sent' }) }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.4,
+        "position": [
+          1952,
+          224
+        ],
+        "id": "9d78116c-69c6-4cbe-bebf-9f40b0fdea3b",
+        "name": "Record in Aakashvani",
+        "onError": "continueRegularOutput",
+        "notes": "Writes the follow-up into Aakashvani Messages for that campaign/client."
+      },
+      {
+        "parameters": {
+          "updates": [
+            "messages"
+          ],
+          "options": {}
+        },
+        "type": "n8n-nodes-base.whatsAppTrigger",
+        "typeVersion": 1,
+        "position": [
+          -976,
+          560
+        ],
+        "id": "2be149ff-0d20-4570-87e1-e0cf463cacb6",
+        "name": "WhatsApp Trigger",
+        "webhookId": "34664d3e-4506-4e47-9aca-17653d2ec0a6",
+        "credentials": {
+          "whatsAppTriggerApi": {
+            "id": "xqkpxxwjQWPnJSKP",
+            "name": "WhatsApp OAuth account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "\nfunction first(v) { return Array.isArray(v) ? v[0] : v; }\nconst j = $input.first().json;\nconst value = (j.messages ? j : (j.entry && j.entry[0] && j.entry[0].changes && j.entry[0].changes[0] && j.entry[0].changes[0].value)) || j;\nconst messages = value.messages || j.messages || [];\nconst contacts = value.contacts || j.contacts || [];\nconst statuses = value.statuses || j.statuses || [];\nconst metadata = value.metadata || j.metadata || {};\nconst msg = first(messages) || {};\nconst contact = first(contacts) || {};\nconst from = msg.from || contact.wa_id || '';\nconst text = (msg.text && msg.text.body) || (msg.button && msg.button.text) || '';\nconst display = String(metadata.display_phone_number || '').replace(/\\D/g, '');\nconst fromDigits = String(from).replace(/\\D/g, '');\nconst isStatusOnly = !messages.length && statuses.length;\nconst isSelf = Boolean(display && fromDigits && (fromDigits === display || fromDigits.endsWith(display) || display.endsWith(fromDigits)));\nconst skip = Boolean(isStatusOnly || isSelf || !from || !text);\nreturn [{ json: {\n  name: (contact.profile && contact.profile.name) || '',\n  phone: from,\n  message: text,\n  message_id: msg.id || '',\n  message_type: msg.type || '',\n  display_phone_number: metadata.display_phone_number || '',\n  is_status_only: Boolean(isStatusOnly),\n  is_self: Boolean(isSelf),\n  skip,\n} }];\n"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -704,
+          560
+        ],
+        "id": "44643a47-a0f3-4449-b2c2-39ba92b15ec5",
+        "name": "Normalize Inbound"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "ba80aeb5-7a61-448e-8b61-891e8e2ea9c0",
+                "leftValue": "={{ $json.skip }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "false"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          -400,
+          560
+        ],
+        "id": "ef010640-6335-4b0f-b3cd-bb7d62c12d40",
+        "name": "If Customer Message",
+        "notes": "Drop delivery receipts, empty messages, and our own echoes."
+      },
+      {
+        "parameters": {
+          "jsCode": "const incoming = $input.first().json;\nconst base = ($env.AAKASHVANI_PUBLIC_URL || $env.NGROK_URL || '').replace(/\\/$/, '');\nconst adminKey = $env.AAKASHVANI_ADMIN_KEY || $env.ADMIN_API_KEY || '';\n\nfunction fallback(reason) {\n  return [{\n    json: {\n      ...incoming,\n      flow_type: 'CONTINUE_CHAT',\n      lead_found: false,\n      lookup_error: reason,\n      message: incoming.message,\n      phone: incoming.phone,\n      name: incoming.name || '',\n    },\n  }];\n}\n\nif (!base || !adminKey) {\n  return fallback('backend_env_missing');\n}\n\nconst phone = encodeURIComponent(String(incoming.phone || ''));\nconst msg = encodeURIComponent(String(incoming.message || ''));\nconst url = `${base}/internal/leads/context?phone=${phone}&flow_type=CONTINUE_CHAT&inbound_message=${msg}`;\n\nlet resp;\ntry {\n  resp = await this.helpers.httpRequest({\n    method: 'GET',\n    url,\n    headers: { 'X-Admin-Key': adminKey, 'Accept': 'application/json' },\n    json: true,\n    timeout: 15000,\n  });\n} catch (e) {\n  return fallback(String(e.message || e));\n}\n\nif (!resp || !resp.ok || !resp.payload) {\n  return fallback(resp?.error || 'lead_not_found');\n}\n\nconst p = resp.payload;\nconst lead = p.lead || {};\nconst ext = p.extraction || {};\nconst meta = lead.metadata || {};\n\nreturn [{\n  json: {\n    ...incoming,\n    ...p,\n    name: lead.name || incoming.name || '',\n    phone: lead.phone || incoming.phone,\n    email: lead.email || meta.email || '',\n    client_id: p.client_id || (p.client && p.client.id),\n    client_name: (p.client && p.client.name) || '',\n    summary: ext.summary || '',\n    bhk_preference: ext.bhk_preference || meta.bhk_preference || '',\n    location_preference: ext.location_preference || meta.location_preference || '',\n    budget: ext.budget || meta.budget || '',\n    lead_city: meta.lead_city || '',\n    campaign_id: (p.campaign && p.campaign.id) || p.metadata?.campaign_id,\n    campaign_name: (p.campaign && p.campaign.name) || '',\n    lead_id: lead.id,\n    flow_type: 'CONTINUE_CHAT',\n    lead_found: true,\n    message: incoming.message,\n    inbound_name: incoming.name || '',\n    message_id: incoming.message_id || '',\n  },\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -80,
+          560
+        ],
+        "id": "803462b4-72b0-43ed-8d34-ba508481ca40",
+        "name": "Lookup Lead",
+        "notes": "Fetch full lead context from AakashVani GET /internal/leads/context (requires AAKASHVANI_PUBLIC_URL + AAKASHVANI_ADMIN_KEY in n8n env)."
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=You are an email assistant for Aakashvani, writing for {{$json.client_name || \"our client\"}}.\nUse ONLY these fields. Do not invent facts.\nName: {{$json.name}}\nEmail: {{$json.email}}\nSummary: {{$json.summary}}\nBHK: {{$json.bhk_preference}}\nLocation: {{$json.location_preference}}\nBudget: {{$json.budget}}\nCity: {{$json.lead_city}}\nReturn ONLY JSON: {\"subject\":\"\",\"body\":\"\"}\n",
+          "hasOutputParser": true,
+          "options": {
+            "systemMessage": "You write short, warm, factual follow-up emails for a real-estate sales team. Use only the facts given to you. Never invent prices, availability, or promises. Respond with JSON only, matching the requested schema."
+          }
+        },
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 3.1,
+        "position": [
+          512,
+          0
+        ],
+        "id": "e4c724e0-ba91-4c26-ba02-253497a84564",
+        "name": "Generate Follow-up Email",
+        "onError": "continueRegularOutput",
+        "notes": "AI email. If it fails, Build Email still sends.",
+        "retryOnFail": true,
+        "maxTries": 2,
+        "waitBetweenTries": 2000,
+        "alwaysOutputData": true
+      },
+      {
+        "parameters": {
+          "jsonSchemaExample": "{\"subject\":\"Follow-up\",\"body\":\"Thank you for your time.\"}"
+        },
+        "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+        "typeVersion": 1.3,
+        "position": [
+          752,
+          160
+        ],
+        "id": "60b46b4e-46d5-402d-932b-b4663c167970",
+        "name": "Structured Output Parser"
+      },
+      {
+        "parameters": {
+          "modelName": "models/gemini-3.7-flash",
+          "options": {
+            "temperature": 0.4,
+            "maxOutputTokens": 8192
+          }
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+        "typeVersion": 1.1,
+        "position": [
+          512,
+          160
+        ],
+        "id": "f4bfe156-691f-4bef-b1e6-1884dd18c0b0",
+        "name": "Google Gemini Chat Model",
+        "credentials": {
+          "googlePalmApi": {
+            "id": "MSan1NcJu1Xvfkc1",
+            "name": "Google Gemini(PaLM) Api account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 2000
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=You are a WhatsApp sales assistant for {{$json.client_name || \"our client\"}}.\nUse ONLY provided fields. Never invent prices or inventory.\nMODE={{$json.flow_type}}\nName={{$json.name}} Summary={{$json.summary}} BHK={{$json.bhk_preference}} Location={{$json.location_preference}} Budget={{$json.budget}} City={{$json.lead_city}}\nIf MODE is INITIAL_FOLLOWUP (or legacy initial_followup): thank them for the call, 80-150 words, max 2 emojis, clear CTA.\nIf MODE is CONTINUE_CHAT (or legacy inbound_reply): answer Latest message={{$json.message}} using memory, under 120 words, max 1 emoji. If lead_found is false, be generic and offer a human.\nReturn ONLY JSON: {\"message\":\"\"}\n",
+          "hasOutputParser": true,
+          "options": {
+            "systemMessage": "You write concise WhatsApp messages for a real-estate sales team. Use only the facts given to you. Never invent prices, inventory, or promises. Respond with JSON only, matching the requested schema."
+          }
+        },
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 3.1,
+        "position": [
+          512,
+          224
+        ],
+        "id": "d5700b45-4338-408c-805b-a8790de8ec86",
+        "name": "Generate WhatsApp Message",
+        "onError": "continueRegularOutput",
+        "notes": "AI WhatsApp. If it fails, Ensure WhatsApp Text still sends.",
+        "retryOnFail": true,
+        "maxTries": 2,
+        "waitBetweenTries": 2000,
+        "alwaysOutputData": true
+      },
+      {
+        "parameters": {
+          "jsonSchemaExample": "{\"message\":\"Thanks for speaking with us.\"}"
+        },
+        "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+        "typeVersion": 1.3,
+        "position": [
+          752,
+          400
+        ],
+        "id": "d7e7352f-820f-4198-8996-38f54287f635",
+        "name": "Structured Output Parser1"
+      },
+      {
+        "parameters": {
+          "modelName": "models/gemini-3.7-flash",
+          "options": {
+            "temperature": 0.4,
+            "maxOutputTokens": 8192
+          }
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+        "typeVersion": 1.1,
+        "position": [
+          512,
+          400
+        ],
+        "id": "d07824ac-eb1a-4272-81a1-447d451c83f6",
+        "name": "Google Gemini Chat Model1",
+        "credentials": {
+          "googlePalmApi": {
+            "id": "MSan1NcJu1Xvfkc1",
+            "name": "Google Gemini(PaLM) Api account"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 2000
+      },
+      {
+        "parameters": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ ($json.client_id || 'global') + ':' + ($json.phone || $json.lead_id || 'unknown') }}",
+          "contextWindowLength": 10
+        },
+        "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+        "typeVersion": 1.4,
+        "position": [
+          992,
+          400
+        ],
+        "id": "7e2173cf-efcc-4ef8-bd4e-7e6cf114cc61",
+        "name": "Simple Memory",
+        "notes": "Per-customer memory keyed by phone."
+      },
+      {
+        "parameters": {
+          "content": "## 1. After interested call",
+          "height": 300,
+          "width": 1180,
+          "color": 7
+        },
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          -1024,
+          112
+        ],
+        "id": "note-call",
+        "name": "Note Call"
+      },
+      {
+        "parameters": {
+          "content": "## 2. Email (AI then fallback)",
+          "height": 220,
+          "width": 1120,
+          "color": 5
+        },
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          192,
+          -80
+        ],
+        "id": "note-email",
+        "name": "Note Email"
+      },
+      {
+        "parameters": {
+          "content": "## 3. WhatsApp (AI then fallback + memory)",
+          "height": 340,
+          "width": 1960,
+          "color": 4
+        },
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          192,
+          112
+        ],
+        "id": "note-wa",
+        "name": "Note WhatsApp"
+      },
+      {
+        "parameters": {
+          "content": "## 4. Customer reply \u2192 lookup original lead \u2192 same WhatsApp path",
+          "height": 220,
+          "width": 1180,
+          "color": 6
+        },
+        "type": "n8n-nodes-base.stickyNote",
+        "typeVersion": 1,
+        "position": [
+          -1024,
+          480
+        ],
+        "id": "note-reply",
+        "name": "Note Reply"
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Lead Context",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Lead Context": {
+        "main": [
+          [
+            {
+              "node": "Store Lead",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Store Lead": {
+        "main": [
+          [
+            {
+              "node": "If Interested",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "If Interested": {
+        "main": [
+          [
+            {
+              "node": "Lead Payload",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "If Has Email",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "If Has Email": {
+        "main": [
+          [
+            {
+              "node": "Generate Follow-up Email",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Generate Follow-up Email": {
+        "main": [
+          [
+            {
+              "node": "Build Email",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build Email": {
+        "main": [
+          [
+            {
+              "node": "Send Email",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Google Gemini Chat Model": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Generate Follow-up Email",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Structured Output Parser": {
+        "ai_outputParser": [
+          [
+            {
+              "node": "Generate Follow-up Email",
+              "type": "ai_outputParser",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Lead Payload": {
+        "main": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate WhatsApp Message": {
+        "main": [
+          [
+            {
+              "node": "Ensure WhatsApp Text",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Ensure WhatsApp Text": {
+        "main": [
+          [
+            {
+              "node": "Prepare Send",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Prepare Send": {
+        "main": [
+          [
+            {
+              "node": "If Has WhatsApp Text",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "If Has WhatsApp Text": {
+        "main": [
+          [
+            {
+              "node": "Send WhatsApp",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Send WhatsApp": {
+        "main": [
+          [
+            {
+              "node": "Record in Aakashvani",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Google Gemini Chat Model1": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Structured Output Parser1": {
+        "ai_outputParser": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "ai_outputParser",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Simple Memory": {
+        "ai_memory": [
+          [
+            {
+              "node": "Generate WhatsApp Message",
+              "type": "ai_memory",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "WhatsApp Trigger": {
+        "main": [
+          [
+            {
+              "node": "Normalize Inbound",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Normalize Inbound": {
+        "main": [
+          [
+            {
+              "node": "If Customer Message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "If Customer Message": {
+        "main": [
+          [
+            {
+              "node": "Lookup Lead",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          []
+        ]
+      },
+      "Lookup Lead": {
+        "main": [
+          [
+            {
+              "node": "Lead Payload",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "BhuvisX Aakashvani",
+    "name": "Version 627ba6e4",
+    "description": "",
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-08-25T10:57:41.159Z",
+        "id": 175,
+        "workflowId": "4xarbWK3DXLbENzC",
+        "versionId": "627ba6e4-764a-4c0f-acdb-2d4077d981a6",
+        "event": "activated",
+        "userId": "922e73be-2cd0-4e91-af65-f22dfb9ded88"
+      }
+    ]
+  },
+  "scopes": [
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:import",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "44735447b023b3110e3c4ff355426928c75fccbabc6d610fd1485d7a9730580f"
+}

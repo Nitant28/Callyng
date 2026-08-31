@@ -579,17 +579,24 @@ async def process_post_call(
         )
         event = outcome_to_event(outcome, event_map=event_map)
         if event:
-            await fire_event_webhook(
-                pool,
-                client_id,
-                event,
-                session_call_id=session_call_id,
-                lead=lead,
-                campaign=campaign,
-                extraction=extraction_json or {},
-                duration_seconds=duration_seconds,
-                billed_minutes=billed_minutes,
-                credits_charged=credits_charged,
-                route=bot_config.get("route"),
-                recording_url=call_log.get("recording_url") if call_log else None,
-            )
+            try:
+                await fire_event_webhook(
+                    pool,
+                    client_id,
+                    event,
+                    session_call_id=session_call_id,
+                    lead=lead,
+                    campaign=campaign,
+                    extraction=extraction_json or {},
+                    duration_seconds=duration_seconds,
+                    billed_minutes=billed_minutes,
+                    credits_charged=credits_charged,
+                    route=bot_config.get("route"),
+                    recording_url=call_log.get("recording_url") if call_log else None,
+                    bot_config_id=bot_config_id,
+                    outcome=outcome,
+                )
+            except Exception:
+                logger.exception(
+                    "n8n follow-up dispatch failed after call settlement; ignoring"
+                )

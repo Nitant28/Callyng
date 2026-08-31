@@ -6,7 +6,7 @@ const METRICS = [
   { key: 'total_leads', label: 'Total Leads' },
   { key: 'interested_leads', label: 'Interested' },
   { key: 'not_interested_leads', label: 'Not Interested' },
-  { key: 'answered_leads', label: 'Answered' },
+  { key: 'completed_leads', label: 'Completed' },
   { key: 'busy_leads', label: 'Busy' },
   { key: 'pending_leads', label: 'Pending' },
   { key: 'calling_leads', label: 'On Call' },

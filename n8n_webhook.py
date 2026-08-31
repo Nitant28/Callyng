@@ -23,24 +23,28 @@ def sign_payload(payload: dict, secret: str) -> str:
 
 
 def outcome_to_event(outcome: str, event_map: dict[str, str] | None = None) -> str | None:
-    oc = outcome.casefold()
+    from followups.interested import canonicalize_intent, is_interested_outcome, is_negative_intent
+
+    oc = canonicalize_intent(outcome)
     if event_map:
         for k, v in event_map.items():
-            if k.casefold() == oc:
+            if canonicalize_intent(k) == oc:
                 return v
 
+    if is_negative_intent(oc):
+        return "lead_not_interested"
+    if is_interested_outcome(oc):
+        return "lead_qualified"
+
     mapping = {
-        "interested": "lead_qualified",
-        "not_interested": "lead_not_interested",
-        "callback_requested": "lead_callback",
-        "early_disconnect": "lead_callback",
+        "callback requested": "lead_callback",
+        "early disconnect": "lead_callback",
+        "busy": "lead_failed",
+        "unknown": "lead_failed",
+        "wrong requirement": "lead_failed",
+        "failed": "lead_failed",
     }
-    if oc in mapping:
-        return mapping[oc]
-        
-    if oc in ("busy", "unknown", "wrong_requirement", "failed"):
-        return "lead_failed"
-    return None
+    return mapping.get(oc)
 
 
 async def _post_signed(
@@ -112,17 +116,133 @@ async def fire_event_webhook(
     credits_charged: float,
     route: str | None,
     recording_url: str | None = None,
+    bot_config_id: UUID | None = None,
+    outcome: str | None = None,
 ) -> None:
     from db import postgres as pg_db
 
     cfg = await pg_db.get_webhook_config_for_event(pool, client_id, event)
+    if cfg:
+        meta = lead.get("metadata") or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except json.JSONDecodeError:
+                meta = {}
+        payload = {
+            "event": event,
+            "call": {
+                "session_call_id": session_call_id,
+                "duration_seconds": duration_seconds,
+                "billed_minutes": billed_minutes,
+                "credits_charged": credits_charged,
+                "route": route,
+                "recording_url": recording_url,
+            },
+            "lead": {
+                "phone": lead.get("phone"),
+                "name": lead.get("name"),
+                "lead_type": lead.get("lead_type"),
+                "metadata": meta,
+            },
+            "extraction": extraction,
+            "campaign": {
+                "id": str(campaign.get("id")),
+                "name": campaign.get("name"),
+            },
+        }
+        await _post_signed(
+            cfg["url"],
+            payload,
+            cfg.get("secret"),
+        )
+        # Generic Admin → Webhooks is a CRM fan-out. Interested follow-up
+        # still goes to Mega_Workflow below; other events stop here.
+        if event != "lead_qualified":
+            return
+
+    if event == "lead_qualified":
+        from integrations.n8n.config import N8nConfig
+        from integrations.n8n.payload import build_lead_qualified_payload
+        from integrations.n8n.service import N8nService
+        from followups import repository as followups_repo
+        from followups.service import record_auto_n8n_send
+
+        try:
+            n8n_cfg = await N8nConfig.resolve(pool)
+            service = N8nService(n8n_cfg, pool=pool)
+        except Exception as exc:
+            logger.exception("n8n follow-up setup failed; call settlement continues: {}", exc)
+            service = None
+        if service is not None and service.is_configured():
+            try:
+                client_row = None
+                if pool is not None:
+                    try:
+                        client_row = await pg_db.get_client(pool, client_id)
+                    except Exception as exc:
+                        logger.warning("n8n payload: could not load client {}: {}", client_id, exc)
+
+                lead_id = lead.get("id")
+                idem = f"auto:{session_call_id}:{lead_id}" if lead_id else None
+                if pool and idem:
+                    existing = await followups_repo.get_by_idempotency(pool, client_id, idem)
+                    if existing and existing.get("status") in ("queued", "sent", "accepted"):
+                        logger.info(
+                            "n8n auto follow-up deduplicated lead={} call={}",
+                            lead_id,
+                            session_call_id,
+                        )
+                        return
+
+                payload = build_lead_qualified_payload(
+                    client_id=client_id,
+                    lead=lead,
+                    session_call_id=session_call_id,
+                    duration_seconds=duration_seconds,
+                    extraction=extraction,
+                    campaign=campaign,
+                    outcome=outcome,
+                    bot_config_id=bot_config_id,
+                    billed_minutes=billed_minutes,
+                    credits_charged=credits_charged,
+                    route=route,
+                    recording_url=recording_url,
+                    client=client_row,
+                )
+                payload["flow_type"] = "INITIAL_FOLLOWUP"
+                payload["interested"] = True
+                payload["source"] = "auto"
+
+                from followups.enrichment import enrich_lead_payload
+
+                payload = await enrich_lead_payload(pool, payload, client_id=client_id)
+
+                result = await service.send_lead_qualified(payload)
+                if not result.skipped and pool:
+                    await record_auto_n8n_send(
+                        pool,
+                        client_id=client_id,
+                        lead=lead,
+                        campaign=campaign,
+                        session_call_id=session_call_id,
+                        ok=result.ok,
+                        error=result.error,
+                    )
+                if not result.skipped:
+                    return
+            except Exception:
+                logger.exception("n8n follow-up dispatch failed; call settlement continues")
+                return
+        # fall through to legacy URL only if Mega_Workflow is not configured
+
+    # Phase 0 fallback (legacy N8N_WEBHOOK_URL)
     meta = lead.get("metadata") or {}
     if isinstance(meta, str):
         try:
             meta = json.loads(meta)
         except json.JSONDecodeError:
             meta = {}
-
     payload = {
         "event": event,
         "call": {
@@ -145,16 +265,6 @@ async def fire_event_webhook(
             "name": campaign.get("name"),
         },
     }
-
-    if cfg:
-        await _post_signed(
-            cfg["url"],
-            payload,
-            cfg.get("secret"),
-        )
-        return
-
-    # Phase 0 fallback
     payload["event"] = "call_completed"
     await send_call_completed_webhook(payload)
 

@@ -27,6 +27,7 @@ def test_outcome_to_event_mapping():
     assert outcome_to_event("Interested") == "lead_qualified"
     assert outcome_to_event("Callback_Requested") == "lead_callback"
     assert outcome_to_event("Busy") == "lead_failed"
+    assert outcome_to_event("not interested") == "lead_not_interested"
 
 
 def test_outcome_to_event_early_disconnect():

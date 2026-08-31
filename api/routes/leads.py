@@ -169,10 +169,16 @@ async def list_leads(
     status: str | None = None,
     search: str | None = None,
     outcome: str | None = None,
+    turns: str | None = None,
+    attempts: str | None = None,
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
 ):
-    """Get a paginated list of leads for a campaign."""
+    """Get a paginated list of leads for a campaign.
+
+    Filter query params accept a single value or comma-separated values.
+    Within a filter category values are OR'd; across categories they are AND'd.
+    """
     cid = client_id_uuid(client)
     await _get_campaign_or_404(pool, campaign_id, cid)
 
@@ -185,8 +191,20 @@ async def list_leads(
         status=status,
         search=search,
         outcome=outcome,
+        turns=turns,
+        attempts=attempts,
     )
-    return {"leads": leads, "limit": limit, "offset": offset, "status": status, "search": search, "outcome": outcome, "total_count": total_count}
+    return {
+        "leads": leads,
+        "limit": limit,
+        "offset": offset,
+        "status": status,
+        "search": search,
+        "outcome": outcome,
+        "turns": turns,
+        "attempts": attempts,
+        "total_count": total_count,
+    }
 
 
 @router.get("/{campaign_id}/leads/export")
@@ -195,6 +213,8 @@ async def export_leads(
     status: str | None = None,
     search: str | None = None,
     outcome: str | None = None,
+    turns: str | None = None,
+    attempts: str | None = None,
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
 ):
@@ -210,6 +230,8 @@ async def export_leads(
         status=status,
         search=search,
         outcome=outcome,
+        turns=turns,
+        attempts=attempts,
     )
 
     bot = await pg_db.get_bot_config(

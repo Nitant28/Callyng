@@ -97,9 +97,10 @@ export default function AdminWebhooks() {
   return (
     <div className="w-full flex flex-col gap-stack-lg">
       <div>
-        <h1 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text">Webhook Integrations</h1>
+        <h1 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text">General Event Webhooks</h1>
         <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted mt-2">
-          Configure real-time HTTP callbacks for campaign lifecycle and lead events.
+          Per-client outbound callbacks for CRM/automation (call and campaign events).
+          This is not the Mega_Workflow WhatsApp follow-up URL — configure that under Admin → WhatsApp → N8N Follow-up Workflow.
         </p>
       </div>
 
