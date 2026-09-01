@@ -61,9 +61,10 @@ Admin UI routes under `/admin/*`. All API calls use `X-Admin-Key` against `/inte
 - **DB:** `campaigns` counters reconcile; `leads` status fixes.
 
 ### Webhooks (`/admin/webhooks`)
-- **APIs:** list clients, get client webhooks, `POST /internal/webhook-configs`.
-- **Actions:** upsert per-event n8n URL+secret.
-- **DB:** `webhook_configs`.
+- **N8N Follow-up Workflow:** global Mega_Workflow webhook URL (`PUT /internal/n8n/settings`), safe connectivity test (`POST /internal/n8n/settings/test`). Stored in `integration_settings.n8n_lead_webhook_url`.
+- **CRM event webhooks:** list clients, get client webhooks, `POST /internal/webhook-configs`.
+- **Actions:** upsert per-event CRM URL+secret (separate from n8n follow-up).
+- **DB:** `webhook_configs`, `integration_settings`.
 
 ---
 

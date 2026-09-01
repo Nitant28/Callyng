@@ -35,7 +35,7 @@
 - **messages/** — Python package with service, repository, credentials, providers.
 - **api/routes/internal_messages.py** — Admin/n8n-facing endpoints (auth via `X-Admin-Key`).
 - **api/routes/messages.py** — Client-facing read-only endpoints (auth via Bearer token).
-- **frontend/src/admin/pages/AdminWhatsApp.jsx** — Admin integration config UI.
+- **frontend/src/admin/pages/AdminWebhooks.jsx** — CRM webhooks + N8N Follow-up Workflow URL.
 - **frontend/src/client/pages/Messages.jsx** — Client inbox UI.
 
 ## Database tables

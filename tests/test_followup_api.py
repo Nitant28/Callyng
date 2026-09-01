@@ -16,11 +16,16 @@ CLIENT_ID = UUID("00000000-0000-4000-8000-000000000001")
 CAMPAIGN_ID = UUID("00000000-0000-4000-8000-000000000003")
 
 
+def _require_pool():
+    try:
+        return pg_db.get_pool()
+    except RuntimeError:
+        pytest.skip("PostgreSQL not available")
+
+
 @pytest_asyncio.fixture(scope="session")
 async def dev_auth_headers():
-    pool = pg_db.get_pool()
-    if pool is None:
-        pytest.skip("PostgreSQL not available")
+    pool = _require_pool()
     client = await pg_db.get_client_by_token(pool, "aakashvani_dev_key_change_me")
     if not client:
         pytest.skip("Dev tenant not seeded.")
@@ -28,7 +33,7 @@ async def dev_auth_headers():
 
 
 async def _create_test_lead() -> UUID:
-    pool = pg_db.get_pool()
+    pool = _require_pool()
     lead_id = uuid4()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -48,7 +53,7 @@ async def _create_test_lead() -> UUID:
 
 
 async def _delete_test_lead(lead_id: UUID) -> None:
-    pool = pg_db.get_pool()
+    pool = _require_pool()
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM follow_up_events WHERE lead_id = $1", lead_id)
         await conn.execute("DELETE FROM leads WHERE id = $1", lead_id)
@@ -168,9 +173,7 @@ async def test_internal_lead_context_by_phone(test_client):
     admin_key = (os.getenv("ADMIN_API_KEY") or "").strip()
     if not admin_key:
         pytest.skip("ADMIN_API_KEY not configured")
-    pool = pg_db.get_pool()
-    if pool is None:
-        pytest.skip("PostgreSQL not available")
+    pool = _require_pool()
 
     lead_id = uuid4()
     async with pool.acquire() as conn:

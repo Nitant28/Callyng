@@ -78,6 +78,27 @@ async def test_trigger_follow_up_deduplicates_manual_click():
 
 
 @pytest.mark.asyncio
+async def test_n8n_config_resolve_prefers_client_database(monkeypatch):
+    from integrations.n8n.config import N8nConfig, client_webhook_setting_key
+
+    client_id = uuid4()
+    monkeypatch.delenv("N8N_LEAD_WEBHOOK_URL", raising=False)
+    pool = MagicMock()
+
+    async def fake_get_setting(_pool, key):
+        if key == client_webhook_setting_key(client_id):
+            return "https://n8n.bhuvisx.com/webhook/client-override"
+        if key == "n8n_lead_webhook_url":
+            return "https://n8n.bhuvisx.com/webhook/global-override"
+        return None
+
+    with patch("followups.repository.get_setting", new=AsyncMock(side_effect=fake_get_setting)):
+        cfg = await N8nConfig.resolve(pool, client_id=client_id)
+    assert cfg.lead_webhook_url.endswith("/webhook/client-override")
+    assert cfg.url_source == "database_client"
+
+
+@pytest.mark.asyncio
 async def test_n8n_config_resolve_prefers_database(monkeypatch):
     from integrations.n8n.config import N8nConfig
 
