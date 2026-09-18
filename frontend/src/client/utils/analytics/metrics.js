@@ -74,6 +74,7 @@ export const buildCampaignSummary = ({ campaigns = [], calls = [] }) => {
             : 0;
 
     return {
+      id: campaign.id,
       campaignId: campaign.id,
       campaignName: campaign.name || campaign.title || 'Unknown campaign',
       status: campaign.status,

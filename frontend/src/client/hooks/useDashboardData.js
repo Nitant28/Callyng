@@ -43,7 +43,10 @@ const useDashboardData = () => {
   const loadBalance = useCallback(async () => {
     try {
       const res = await clientApi.get('/api/credits');
-      setBalance(res.data || {});
+      const next = res.data || {};
+      setBalance(next);
+      if (next.client_id) localStorage.setItem('client_id', next.client_id);
+      if (next.client_name) localStorage.setItem('client_name', next.client_name);
     } catch {
       /* keep stale */
     }

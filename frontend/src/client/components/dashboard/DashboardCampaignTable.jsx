@@ -32,10 +32,11 @@ const DashboardCampaignTable = ({ campaigns, onCampaignClick }) => (
                     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                   })
                 : '—';
+              const rowId = camp.campaignId || camp.id;
 
               return (
                 <tr
-                  key={camp.campaignId}
+                  key={rowId}
                   className="cl-table"
                   onClick={() => onCampaignClick?.(camp)}
                   style={{ cursor: onCampaignClick ? 'pointer' : 'default' }}

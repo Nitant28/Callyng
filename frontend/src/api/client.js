@@ -22,6 +22,7 @@ clientApi.interceptors.response.use(
       if (path.startsWith('/app')) {
         localStorage.removeItem('client_api_key');
         localStorage.removeItem('client_name');
+        localStorage.removeItem('client_id');
         window.location.href = '/login';
       }
     }

@@ -62,18 +62,17 @@ class MetaCloudProvider(WhatsAppProvider):
         language: str | None,
         components: dict[str, Any] | list | None,
     ) -> ProviderSendResult:
-        template: dict[str, Any] = {
-            "name": template_name,
-            "language": {"code": language or "en"},
-        }
-        if components:
-            template["components"] = components if isinstance(components, list) else [components]
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to_phone.lstrip("+"),
-            "type": "template",
-            "template": template,
-        }
+        from followups.template_ref import TemplateRefError, meta_template_payload
+
+        try:
+            payload = meta_template_payload(
+                to_phone=to_phone,
+                template_name=template_name,
+                language_code=language or "en_US",
+                components=components,
+            )
+        except TemplateRefError as exc:
+            return ProviderSendResult(ok=False, error=exc.code)
         return await self._post_messages(config, payload)
 
     async def _post_messages(self, config: dict[str, Any], payload: dict[str, Any]) -> ProviderSendResult:
@@ -107,6 +106,30 @@ class MetaCloudProvider(WhatsAppProvider):
         except Exception as exc:
             return ProviderSendResult(ok=False, error=str(exc))
 
+    def verify_webhook(
+        self,
+        config: dict[str, Any],
+        *,
+        headers: dict[str, str],
+        raw_body: bytes,
+        query: dict[str, str],
+    ) -> bool:
+        expected = (config.get("webhook_verify_token") or "").strip()
+        if query.get("hub.mode") == "subscribe" or query.get("mode") == "subscribe":
+            token = (query.get("hub.verify_token") or query.get("verify_token") or "").strip()
+            return bool(expected and token and expected == token)
+
+        app_secret = (config.get("app_secret") or "").strip()
+        if not app_secret:
+            # Fail closed: POST events require a configured app secret.
+            return False
+
+        sig = (headers.get("x-hub-signature-256") or "").strip()
+        if not sig.startswith("sha256="):
+            return False
+        digest = hmac.new(app_secret.encode(), raw_body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(sig, f"sha256={digest}")
+
     def parse_webhook(self, headers: dict[str, str], body: dict[str, Any] | list | None) -> list[ProviderWebhookEvent]:
         if not isinstance(body, dict):
             return []
@@ -116,11 +139,22 @@ class MetaCloudProvider(WhatsAppProvider):
                 continue
             for change in entry.get("changes") or []:
                 value = (change or {}).get("value") or {}
+                meta = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+                phone_number_id = meta.get("phone_number_id")
                 for msg in value.get("messages") or []:
                     text = None
                     msg_type = msg.get("type") or "text"
                     if msg_type == "text":
                         text = (msg.get("text") or {}).get("body")
+                    elif msg_type == "button":
+                        btn = msg.get("button") or {}
+                        text = btn.get("text") or btn.get("payload")
+                    elif msg_type == "interactive":
+                        interactive = msg.get("interactive") or {}
+                        itype = interactive.get("type")
+                        block = interactive.get(itype) if itype else None
+                        if isinstance(block, dict):
+                            text = block.get("title") or block.get("id") or block.get("text")
                     events.append(
                         ProviderWebhookEvent(
                             event_type="message",
@@ -130,7 +164,7 @@ class MetaCloudProvider(WhatsAppProvider):
                             message_type=msg_type,
                             text=text,
                             status="received",
-                            raw=msg,
+                            raw={**msg, "_phone_number_id": phone_number_id},
                         )
                     )
                 for st in value.get("statuses") or []:
@@ -146,24 +180,3 @@ class MetaCloudProvider(WhatsAppProvider):
                         )
                     )
         return events
-
-    def verify_webhook(
-        self,
-        config: dict[str, Any],
-        *,
-        headers: dict[str, str],
-        raw_body: bytes,
-        query: dict[str, str],
-    ) -> bool:
-        expected = (config.get("webhook_verify_token") or "").strip()
-        if query.get("hub.mode") == "subscribe" or query.get("mode") == "subscribe":
-            token = (query.get("hub.verify_token") or query.get("verify_token") or "").strip()
-            return bool(expected and token and expected == token)
-
-        app_secret = (config.get("app_secret") or "").strip()
-        sig = (headers.get("x-hub-signature-256") or "").strip()
-        if app_secret and sig.startswith("sha256="):
-            digest = hmac.new(app_secret.encode(), raw_body, hashlib.sha256).hexdigest()
-            return hmac.compare_digest(sig, f"sha256={digest}")
-        # GET challenge already handled; POST without app_secret cannot be verified.
-        return False

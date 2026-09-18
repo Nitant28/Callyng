@@ -11,7 +11,7 @@ from api.auth import get_pool, require_admin_or_n8n_token
 from db import postgres as pg_db
 from followups.enrichment import enrich_lead_payload
 from integrations.n8n.payload import build_lead_qualified_payload
-from lead_upload.normaliser import normalise_phone
+from messages.inbound import resolve_inbound_tenant
 
 router = APIRouter(prefix="/internal/leads", tags=["internal-leads"])
 
@@ -34,32 +34,48 @@ async def lead_context_by_phone(
     inbound_message: str | None = None,
     provider_message_id: str | None = None,
     phone_number_id: str | None = None,
+    integration_id: UUID | None = None,
     _admin=Depends(require_admin_or_n8n_token),
     pool=Depends(get_pool),
 ):
-    """Return canonical lead context for n8n inbound WhatsApp / lookup nodes."""
-    normalized = normalise_phone(phone)
-    if not normalized:
-        raise HTTPException(400, "invalid_phone")
+    """Return canonical lead context for n8n inbound WhatsApp / lookup nodes.
 
-    if client_id is None and phone_number_id:
-        from messages import repository as msg_repo
+    Tenant identity requires phone_number_id and/or client_id (or integration_id).
+    Phone alone is never enough.
+    """
+    resolved = await resolve_inbound_tenant(
+        pool,
+        phone=phone,
+        phone_number_id=phone_number_id,
+        client_id=client_id,
+        integration_id=integration_id,
+    )
+    if not resolved.ok:
+        status = 400 if resolved.error in {
+            "invalid_phone",
+            "phone_number_id_or_client_id_required",
+            "client_integration_mismatch",
+            "conversation_campaign_mismatch",
+            "lead_client_mismatch",
+            "memory_context_incomplete",
+        } else 200
+        body = {
+            "ok": False,
+            "error": resolved.error,
+            "phone": resolved.phone_e164,
+            "client_id": str(resolved.client_id) if resolved.client_id else None,
+            "integration_id": str(resolved.integration_id) if resolved.integration_id else None,
+            "ai_allowed": False,
+        }
+        if status == 400:
+            raise HTTPException(status, resolved.error or "inbound_resolution_failed")
+        return body
 
-        integ = await msg_repo.get_integration_by_phone_number_id(pool, phone_number_id)
-        if integ and integ.get("client_id"):
-            client_id = UUID(str(integ["client_id"]))
-
-    lead = await pg_db.find_lead_by_phone(pool, phone, client_id=client_id)
-    if not lead:
-        return {"ok": False, "error": "lead_not_found", "phone": normalized}
-
-    cid = UUID(str(lead["client_id"]))
+    cid = resolved.client_id
+    assert cid is not None
+    lead = resolved.lead or {}
+    campaign = resolved.campaign or {"id": lead.get("campaign_id"), "name": None}
     client_row = await pg_db.get_client(pool, cid)
-    campaign = None
-    if lead.get("campaign_id"):
-        campaign = await pg_db.get_campaign(pool, UUID(str(lead["campaign_id"])), cid)
-    if not campaign:
-        campaign = {"id": lead.get("campaign_id"), "name": None}
 
     meta = _meta(lead)
     extraction = lead.get("extraction") if isinstance(lead.get("extraction"), dict) else {}
@@ -75,15 +91,16 @@ async def lead_context_by_phone(
         }
 
     session_call_id = lead.get("last_session_call_id") or f"inbound_{lead['id']}"
+    normalized = resolved.phone_e164 or phone
 
     conversation: list[dict] = []
     try:
         from messages import repository as msg_repo
         from messages import service as messages_service
 
-        conv = await msg_repo.get_conversation_by_phone(pool, cid, normalized)
+        conv = resolved.conversation
         if conv:
-            rows = await msg_repo.list_messages(pool, cid, conv["id"], limit=20)
+            rows = await msg_repo.list_messages(pool, cid, UUID(str(conv["id"])), limit=20)
             conversation = [
                 {
                     "direction": r.get("direction"),
@@ -93,6 +110,14 @@ async def lead_context_by_phone(
                 for r in rows
             ]
         if inbound_message:
+            from uuid import uuid4
+
+            from followups.idempotency import inbound_message_key
+
+            ikey = inbound_message_key(
+                client_id=cid,
+                provider_message_id=provider_message_id,
+            ) or f"inbound:{cid}:once:{uuid4()}"
             await messages_service.record_n8n_message(
                 pool,
                 client_id=cid,
@@ -101,8 +126,8 @@ async def lead_context_by_phone(
                 lead_id=UUID(str(lead["id"])) if lead.get("id") else None,
                 campaign_id=UUID(str(lead["campaign_id"])) if lead.get("campaign_id") else None,
                 customer_name=lead.get("name"),
-                idempotency_key=provider_message_id or f"inbound:{normalized}:{inbound_message[:80]}",
-                direction="inbound",
+                idempotency_key=ikey,
+                direction="incoming",
                 status="received",
                 provider_message_id=provider_message_id,
             )
@@ -127,6 +152,7 @@ async def lead_context_by_phone(
     payload["flow_type"] = flow_type
     payload["event_type"] = "WHATSAPP_INBOUND" if flow_type == "CONTINUE_CHAT" else "INTERESTED_LEAD"
     payload["interested"] = True
+    payload["memory_key"] = resolved.memory_key
     if inbound_message:
         payload["message"] = {"text": inbound_message, "direction": "inbound"}
 
@@ -136,12 +162,22 @@ async def lead_context_by_phone(
         client_id=cid,
         inbound_text=inbound_message,
     )
+    # Never allow Gemini with phone-only memory; memory_key is mandatory.
+    if not payload.get("memory_key"):
+        return {
+            "ok": False,
+            "error": "memory_context_incomplete",
+            "phone": normalized,
+            "ai_allowed": False,
+        }
+
     payload["prompt_context"] = {
         "instructions": (
             "Reply to the latest inbound WhatsApp using only the facts below. "
             "Do not invent prices, inventory, or promises. Keep the reply under 120 words. "
             "Do not mention n8n, Gemini, or internal systems."
         ),
+        "memory_key": payload["memory_key"],
         "latest_inbound": inbound_message,
         "lead": payload.get("lead"),
         "client": payload.get("client"),
@@ -150,4 +186,13 @@ async def lead_context_by_phone(
         "conversation": conversation,
     }
 
-    return {"ok": True, "lead": lead, "payload": payload, "phone": normalized}
+    return {
+        "ok": True,
+        "lead": lead,
+        "payload": payload,
+        "phone": normalized,
+        "client_id": str(cid),
+        "integration_id": str(resolved.integration_id) if resolved.integration_id else None,
+        "memory_key": payload["memory_key"],
+        "ai_allowed": True,
+    }

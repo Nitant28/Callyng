@@ -35,11 +35,7 @@ def public_backend_base_url() -> str | None:
 
     NGROK_URL is local-dev fallback only (never used when ENV=production).
     """
-    public = (
-        (os.getenv("AAKASHVANI_PUBLIC_URL") or "").strip().rstrip("/")
-        or (os.getenv("AAKASHVANI_PUBLIC_URL") or "").strip().rstrip("/")
-        or (os.getenv("AAKASHVANI_PUBLIC_URL") or "").strip().rstrip("/")
-    )
+    public = (os.getenv("AAKASHVANI_PUBLIC_URL") or "").strip().rstrip("/")
     if public:
         return public
     env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
@@ -91,7 +87,7 @@ PAYLOAD_FIELD_SOURCES: dict[str, str] = {
     "lead.email": "leads.metadata.email or leads.email",
     "lead.lead_type": "leads.lead_type",
     "lead.metadata": "leads.metadata JSON",
-    "lead.whatsapp_opt_in": "leads.metadata.whatsapp_opt_in (default true if absent)",
+    "lead.whatsapp_opt_in": "leads.metadata.whatsapp_opt_in (default true if absent; explicit false/opt-out = false)",
     "call.id": "call_logs.session_call_id",
     "call.session_call_id": "call_logs.session_call_id",
     "call.status": "constant: completed",
@@ -105,8 +101,17 @@ PAYLOAD_FIELD_SOURCES: dict[str, str] = {
     "qualification.status": "extraction.intent_status or post_call outcome",
     "qualification.score": "extraction.score | qualification_score | lead_score",
     "qualification.reason": "extraction.summary | reason | notes | outcome",
+    "campaign_id": "campaigns.id (top-level for n8n send API)",
+    "lead_id": "leads.id (top-level for n8n send API)",
     "campaign.id": "campaigns.id",
     "campaign.name": "campaigns.name",
+    "whatsapp.integration_id": "whatsapp_integrations.id for this client (enrichment)",
+    "whatsapp.phone_number_id": "whatsapp_integrations.phone_number_id for this client",
+    "whatsapp.provider": "whatsapp_integrations.provider for this client",
+    "memory_key": "client_id:campaign_id:lead_id (never phone)",
+    "workflow.id": "resolved n8n_workflows.id",
+    "workflow.name": "resolved n8n_workflows.name",
+    "workflow.source": "campaign | client_default | platform_default | legacy",
     "agent.id": "bot_configs.id",
     "follow_up.channel": "constant: whatsapp",
     "follow_up.action": "constant: send",
@@ -158,12 +163,25 @@ def _qualification_reason(extraction: dict[str, Any], outcome: str | None) -> st
 
 
 def _qualification_status(extraction: dict[str, Any], outcome: str | None) -> str:
-    raw = outcome or extraction.get("intent_status") or "interested"
-    return str(raw).casefold().replace("_", " ")
+    from followups.interested import canonicalize_intent
+
+    raw = outcome or extraction.get("intent_status") or ""
+    return canonicalize_intent(raw) or "unknown"
+
+
+def _memory_key(client_id: UUID, campaign_id: Any, lead_id: Any) -> str | None:
+    """Tenant-safe Gemini/session key. Never phone. Null if any piece is missing."""
+    if not client_id or not campaign_id or not lead_id:
+        return None
+    return f"{client_id}:{campaign_id}:{lead_id}"
 
 
 def _whatsapp_opt_in(meta: dict[str, Any]) -> bool:
-    """Default opt-in True unless explicitly opted out in lead metadata."""
+    """Payload opt-in flag: default True unless explicitly opted out / set false.
+
+    Actual send gating still uses fail-closed ``parse_whatsapp_opt_in`` in
+    eligibility / delivery — this field is the Mega payload contract only.
+    """
     if "whatsapp_opt_in" in meta:
         val = meta.get("whatsapp_opt_in")
         if isinstance(val, bool):
@@ -196,6 +214,7 @@ def build_lead_qualified_payload(
     client: dict[str, Any] | None = None,
     conversation: list[dict[str, Any]] | None = None,
     inbound_text: str | None = None,
+    workflow: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build Mega_Workflow Lead Context payload. No invented business data."""
     meta = _lead_metadata(lead)
@@ -227,12 +246,18 @@ def build_lead_qualified_payload(
         elif extraction_out.get(right) and not extraction_out.get(left):
             extraction_out[left] = extraction_out[right]
     qual_status = _qualification_status(extraction_out, outcome)
+    from followups.interested import evaluate_qualification
+
+    qual_decision = extraction_out.get("qualification")
+    if not isinstance(qual_decision, dict) or "eligible" not in qual_decision:
+        qual_decision = dict(
+            evaluate_qualification(outcome or qual_status, campaign.get("follow_up_target"))
+        )
+    is_interested = bool(qual_decision.get("eligible"))
     event_id = f"{session_call_id}:{lead_id}"
+    campaign_id = campaign.get("id")
     client_row = client or {}
     wa_opt_in = _whatsapp_opt_in(meta)
-    is_interested = qual_status in ("interested", "hot", "warm") or (
-        outcome and str(outcome).casefold().replace("_", " ") in ("interested", "hot")
-    )
     fb_wa = fallback_initial_whatsapp(
         name=lead.get("name"),
         client_name=client_row.get("name"),
@@ -281,8 +306,30 @@ def build_lead_qualified_payload(
         "event_type": "INTERESTED_LEAD" if is_interested else "LEAD_QUALIFIED",
         "flow_type": "INITIAL_FOLLOWUP",
         "interested": is_interested,
+        "qualification": {
+            "eligible": bool(qual_decision.get("eligible")),
+            "canonical_outcome": qual_decision.get("canonical_outcome") or qual_status,
+            "reason": qual_decision.get("reason"),
+            "target": qual_decision.get("target") or campaign.get("follow_up_target"),
+            "version": qual_decision.get("version"),
+            "status": qual_status,
+        },
         "event_id": event_id,
         "client_id": str(client_id),
+        "campaign_id": str(campaign_id) if campaign_id else None,
+        "lead_id": str(lead_id) if lead_id else None,
+        "memory_key": _memory_key(client_id, campaign_id, lead_id),
+        "workflow": {
+            "id": (workflow or {}).get("id"),
+            "name": (workflow or {}).get("name"),
+            "source": (workflow or {}).get("source"),
+        },
+        # n8n must send via /internal/messages/send using this client's integration.
+        "whatsapp": {
+            "integration_id": None,
+            "phone_number_id": None,
+            "provider": None,
+        },
         # ── Client (Mega_Workflow Lead Context: $json.body.client.*) ───
         "client": {
             "id": str(client_id),

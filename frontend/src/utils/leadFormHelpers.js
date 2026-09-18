@@ -1,5 +1,6 @@
-export const normalizeColumnKey = (key) =>
-  key.trim().replace(/\s+/g, '_').toLowerCase();
+import { normalizeColumnKey } from './leadFieldConfig';
+
+export { normalizeColumnKey };
 
 export const buildMetadataFromCustomFields = (baseMetadata = {}, customFields = []) => {
   const metadata = { ...baseMetadata };

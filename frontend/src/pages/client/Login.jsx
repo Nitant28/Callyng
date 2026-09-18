@@ -33,6 +33,9 @@ const Login = () => {
     if (responseData.client_name) {
       localStorage.setItem('client_name', responseData.client_name);
     }
+    if (responseData.client_id) {
+      localStorage.setItem('client_id', responseData.client_id);
+    }
     setIsRedirecting(true);
     setTimeout(() => navigate('/app'), 200);
   }, [navigate]);

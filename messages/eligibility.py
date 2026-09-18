@@ -29,6 +29,7 @@ class SendDecision:
 
 
 def parse_whatsapp_opt_in(metadata: dict[str, Any] | None) -> bool:
+    """Require explicit opt-in. Missing key = not opted in (fail closed)."""
     meta = metadata or {}
     if "whatsapp_opt_in" in meta:
         val = meta.get("whatsapp_opt_in")
@@ -42,7 +43,8 @@ def parse_whatsapp_opt_in(metadata: dict[str, Any] | None) -> bool:
         return False
     if str(opt_out or "").strip().casefold() in ("1", "true", "yes", "y"):
         return False
-    return True
+    # No explicit consent recorded — do not send.
+    return False
 
 
 def conversation_window_open(

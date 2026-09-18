@@ -203,29 +203,34 @@ def plan_first_contact(
 ) -> FirstContactPlan:
     """Decide how the first outbound WhatsApp message may be delivered.
 
-    Free-form text is only allowed while the customer-service window is open.
-    Otherwise an approved template is mandatory, and if none is configured the
-    plan is ``blocked`` so callers do not send something Meta will reject.
+    Policy:
+    - Usable approved production template is preferred when configured (including
+      when the 24h window is open — still a valid first-contact path).
+    - Else inside the 24h customer-service window: free-form text.
+    - Else outside the window / brand-new lead: approved production template required.
+    - Never fall back to Meta sample templates (e.g. hello_world).
     """
-    # Prefer an approved template for the first outbound, even inside the 24h
-    # window — session text is only a fallback when no template is configured.
-    if template.is_usable:
-        parameters, error = resolve_variables(template, ctx)
-        if not error:
-            return FirstContactPlan(
-                mode=MODE_TEMPLATE,
-                reason="approved_template" if not conversation_window_open else "template_preferred",
-                template_name=template.template_name,
-                language_code=template.language_code,
-                parameters=tuple(parameters),
-                components=build_components(parameters),
-                phone_number_id=template.phone_number_id,
-            )
+    from followups.template_registry import is_sample_template
 
+    if template.is_usable and not is_sample_template(template.template_name):
+        parameters, error = resolve_variables(template, ctx)
+        if error:
+            return FirstContactPlan(mode=MODE_BLOCKED, reason=error)
+        return FirstContactPlan(
+            mode=MODE_TEMPLATE,
+            reason="approved_template",
+            template_name=template.template_name,
+            language_code=template.language_code,
+            parameters=tuple(parameters),
+            components=build_components(parameters),
+            phone_number_id=template.phone_number_id,
+        )
+
+    # No usable template: session text is allowed only inside an open window.
     if conversation_window_open:
         return FirstContactPlan(mode=MODE_TEXT, reason="conversation_window_open")
 
-    if not template.template_name:
+    if not template.template_name or is_sample_template(template.template_name):
         return FirstContactPlan(mode=MODE_BLOCKED, reason="first_contact_template_not_configured")
     if not template.approved:
         return FirstContactPlan(mode=MODE_BLOCKED, reason="first_contact_template_not_approved")
@@ -238,7 +243,7 @@ def plan_first_contact(
 
     return FirstContactPlan(
         mode=MODE_TEMPLATE,
-        reason=None,
+        reason="approved_template",
         template_name=template.template_name,
         language_code=template.language_code,
         parameters=tuple(parameters),

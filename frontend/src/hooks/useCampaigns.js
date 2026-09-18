@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import clientApi from '../api/client';
+import { useDashboardData } from '../contexts/DashboardDataContext';
 import { mapCampaignRows } from '../utils/campaignHelpers';
 
 export function useCampaigns() {
-  const [campaigns, setCampaigns] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const {
+    campaigns: rawCampaigns,
+    loading,
+    refreshing,
+    refresh,
+  } = useDashboardData();
+
+  const campaigns = useMemo(() => mapCampaignRows(rawCampaigns), [rawCampaigns]);
   const [error, setError] = useState(null);
   const [botOptions, setBotOptions] = useState([]);
 
@@ -46,44 +52,33 @@ export function useCampaigns() {
     setBotOptions(unique);
   }, []);
 
-  const refresh = useCallback(async (silent = false) => {
-    if (silent) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
-    try {
-      const res = await clientApi.get('/api/campaigns');
-      const rows = res.data?.campaigns ?? [];
-      setCampaigns(mapCampaignRows(rows));
-      await loadBots(rows);
-    } catch (err) {
-      setError(err.customErrorMessage || 'Unable to load campaigns.');
-      setCampaigns([]);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [loadBots]);
-
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    setError(null);
+    loadBots(rawCampaigns || []).catch(() => {
+      setError('Unable to load voice agents.');
+    });
+  }, [rawCampaigns, loadBots]);
 
   const createCampaign = useCallback(async (payload) => {
     const res = await clientApi.post('/api/campaigns', payload);
+    await refresh();
     return res.data?.id;
-  }, []);
+  }, [refresh]);
 
   const startCampaign = useCallback(async (id) => {
     await clientApi.patch(`/api/campaigns/${id}/start`);
-  }, []);
+    await refresh();
+  }, [refresh]);
 
   const stopCampaign = useCallback(async (id) => {
     await clientApi.patch(`/api/campaigns/${id}/stop`);
-  }, []);
+    await refresh();
+  }, [refresh]);
 
   const cancelCampaign = useCallback(async (id) => {
     await clientApi.patch(`/api/campaigns/${id}/cancel`);
-  }, []);
+    await refresh();
+  }, [refresh]);
 
   const uploadLeads = useCallback(async (id, file) => {
     const form = new FormData();
@@ -91,7 +86,8 @@ export function useCampaigns() {
     await clientApi.post(`/api/campaigns/${id}/leads/upload`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
-  }, []);
+    await refresh();
+  }, [refresh]);
 
   const duplicateCampaign = useCallback(
     async (campaign) => {
@@ -104,10 +100,9 @@ export function useCampaigns() {
         max_attempts: campaign.maxAttempts || 3,
         retry_delay_minutes: campaign.retryDelayMinutes || 120,
       });
-      await refresh(true);
       return id;
     },
-    [createCampaign, refresh],
+    [createCampaign],
   );
 
   return {

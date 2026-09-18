@@ -408,6 +408,14 @@ def record_to_dict(record: asyncpg.Record | None) -> dict[str, Any] | None:
             out["setup_charge"] = data["setup_charge"]
         if out.get("duration_charge") is None and data.get("duration_charge") is not None:
             out["duration_charge"] = data["duration_charge"]
+    meta = out.get("metadata")
+    if isinstance(meta, str):
+        try:
+            parsed = json.loads(meta)
+            if isinstance(parsed, dict):
+                out["metadata"] = parsed
+        except json.JSONDecodeError:
+            pass
     return out
 
 
@@ -535,6 +543,18 @@ async def add_credits(
 async def get_client(pool: asyncpg.Pool, client_id: UUID) -> dict | None:
     row = await pool.fetchrow("SELECT * FROM clients WHERE id = $1", client_id)
     return record_to_dict(row)
+
+
+async def update_client_default_n8n_workflow(
+    pool: asyncpg.Pool,
+    client_id: UUID,
+    workflow_id: UUID | None,
+) -> None:
+    await pool.execute(
+        "UPDATE clients SET default_n8n_workflow_id = $1 WHERE id = $2",
+        workflow_id,
+        client_id,
+    )
 
 
 async def update_client_status(pool: asyncpg.Pool, client_id: UUID, active: bool) -> None:
@@ -1255,6 +1275,11 @@ async def update_campaign_settings(
     max_attempts: int | None = None,
     retry_delay_minutes: int | None = None,
     max_call_minutes: int | None = None,
+    set_n8n_workflow_id: bool = False,
+    n8n_workflow_id: UUID | None = None,
+    set_follow_up_target: bool = False,
+    follow_up_target: str | None = None,
+    lead_field_config: dict | None = None,
 ) -> None:
     sets: list[str] = []
     args: list[Any] = []
@@ -1282,6 +1307,20 @@ async def update_campaign_settings(
     if max_call_minutes is not None:
         sets.append(f"max_call_minutes = ${idx}")
         args.append(max_call_minutes)
+        idx += 1
+    if set_n8n_workflow_id:
+        sets.append(f"n8n_workflow_id = ${idx}")
+        args.append(n8n_workflow_id)
+        idx += 1
+    if set_follow_up_target:
+        sets.append(f"follow_up_target = ${idx}")
+        args.append(follow_up_target)
+        idx += 1
+    if lead_field_config is not None:
+        import json
+
+        sets.append(f"lead_field_config = ${idx}::jsonb")
+        args.append(json.dumps(lead_field_config))
         idx += 1
     if not sets:
         return
@@ -5066,27 +5105,43 @@ async def list_call_logs(
 # ── Webhooks ──────────────────────────────────────────────────────────────────
 
 
+WEBHOOK_EVENTS = frozenset(
+    {
+        "lead_qualified",
+        "lead_not_interested",
+        "lead_callback",
+        "lead_failed",
+        "campaign_completed",
+    }
+)
+
+
 async def upsert_webhook_config(
     pool: asyncpg.Pool,
     client_id: UUID,
+    campaign_id: UUID,
     event: str,
     url: str,
-    secret: str,
+    secret: str | None = None,
 ) -> UUID:
+    """Upsert campaign-scoped webhook. Empty secret preserves the existing secret."""
     row = await pool.fetchrow(
         """
-        INSERT INTO webhook_configs (client_id, event, url, secret)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (client_id, event) DO UPDATE SET
+        INSERT INTO webhook_configs (client_id, campaign_id, event, url, secret)
+        VALUES ($1, $2, $3, $4, NULLIF($5, ''))
+        ON CONFLICT (campaign_id, event) DO UPDATE SET
+            client_id = EXCLUDED.client_id,
             url = EXCLUDED.url,
-            secret = EXCLUDED.secret,
-            active = TRUE
+            secret = COALESCE(NULLIF(EXCLUDED.secret, ''), webhook_configs.secret),
+            active = TRUE,
+            updated_at = NOW()
         RETURNING id
         """,
         client_id,
+        campaign_id,
         event,
         url,
-        secret,
+        secret or "",
     )
     return row["id"]
 
@@ -5094,29 +5149,135 @@ async def upsert_webhook_config(
 async def get_webhook_configs(
     pool: asyncpg.Pool,
     client_id: UUID,
+    *,
+    include_inactive: bool = True,
 ) -> list[dict]:
     rows = await pool.fetch(
         """
-        SELECT * FROM webhook_configs
-        WHERE client_id = $1 AND active = TRUE
+        SELECT
+            w.id,
+            w.client_id,
+            w.campaign_id,
+            w.event,
+            w.url,
+            w.active,
+            w.created_at,
+            w.updated_at,
+            w.last_tested_at,
+            w.last_test_status,
+            (w.secret IS NOT NULL AND btrim(w.secret) <> '') AS secret_set,
+            c.name AS client_name,
+            camp.name AS campaign_name
+        FROM webhook_configs w
+        JOIN clients c ON c.id = w.client_id
+        JOIN campaigns camp ON camp.id = w.campaign_id
+        WHERE w.client_id = $1
+          AND ($2::boolean OR w.active = TRUE)
+        ORDER BY camp.name ASC, w.event ASC
         """,
         client_id,
+        include_inactive,
     )
     return records_to_dicts(rows)
+
+
+async def get_webhook_config_by_id(
+    pool: asyncpg.Pool,
+    webhook_id: UUID,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT w.*, c.name AS client_name, camp.name AS campaign_name,
+               camp.client_id AS campaign_client_id
+        FROM webhook_configs w
+        JOIN clients c ON c.id = w.client_id
+        JOIN campaigns camp ON camp.id = w.campaign_id
+        WHERE w.id = $1
+        """,
+        webhook_id,
+    )
+    return record_to_dict(row)
 
 
 async def get_webhook_config_for_event(
     pool: asyncpg.Pool,
     client_id: UUID,
     event: str,
+    *,
+    campaign_id: UUID | None = None,
+) -> dict | None:
+    """Resolve exact campaign+event webhook. Requires campaign_id — no client/global fallback."""
+    if campaign_id is None:
+        return None
+    row = await pool.fetchrow(
+        """
+        SELECT w.*
+        FROM webhook_configs w
+        JOIN campaigns camp ON camp.id = w.campaign_id
+        WHERE w.campaign_id = $1
+          AND w.event = $2
+          AND w.client_id = $3
+          AND camp.client_id = $3
+          AND w.active = TRUE
+        """,
+        campaign_id,
+        event,
+        client_id,
+    )
+    return record_to_dict(row)
+
+
+async def mark_webhook_config_tested(
+    pool: asyncpg.Pool,
+    webhook_id: UUID,
+    *,
+    status: str,
+) -> None:
+    await pool.execute(
+        """
+        UPDATE webhook_configs
+        SET last_tested_at = NOW(),
+            last_test_status = $2,
+            updated_at = NOW()
+        WHERE id = $1
+        """,
+        webhook_id,
+        status,
+    )
+
+
+async def delete_webhook_config(
+    pool: asyncpg.Pool,
+    webhook_id: UUID,
+) -> bool:
+    """Hard-delete a campaign webhook config. Returns True if a row was removed."""
+    row = await pool.fetchrow(
+        """
+        DELETE FROM webhook_configs
+        WHERE id = $1
+        RETURNING id
+        """,
+        webhook_id,
+    )
+    return row is not None
+
+
+async def set_webhook_config_active(
+    pool: asyncpg.Pool,
+    webhook_id: UUID,
+    *,
+    active: bool,
 ) -> dict | None:
     row = await pool.fetchrow(
         """
-        SELECT * FROM webhook_configs
-        WHERE client_id = $1 AND event = $2 AND active = TRUE
+        UPDATE webhook_configs
+        SET active = $2,
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, active
         """,
-        client_id,
-        event,
+        webhook_id,
+        bool(active),
     )
     return record_to_dict(row)
 

@@ -60,6 +60,10 @@ def test_build_lead_qualified_payload_mega_workflow_contract():
     assert payload["event"] == "lead_qualified"
     assert payload["event_id"] == f"sess_abc123:{lead_id}"
     assert payload["client_id"] == str(client_id)
+    assert payload["campaign_id"] == str(campaign_id)
+    assert payload["lead_id"] == str(lead_id)
+    assert payload["memory_key"] == f"{client_id}:{campaign_id}:{lead_id}"
+    assert payload["whatsapp"]["integration_id"] is None
     assert payload["client"]["id"] == str(client_id)
     assert payload["follow_up"]["idempotency_key"].startswith("n8n_")
     # Lead Context fields
@@ -195,32 +199,42 @@ async def test_fire_event_webhook_uses_n8n_service_for_lead_qualified(monkeypatc
     lead_id = uuid4()
     campaign_id = uuid4()
 
-    monkeypatch.setenv("N8N_LEAD_WEBHOOK_URL", "https://n8n.bhuvisx.com/webhook/test")
+    from integrations.n8n.routing import ResolvedWorkflow, SOURCE_CAMPAIGN_WEBHOOK
+
+    dest = ResolvedWorkflow(
+        ok=True,
+        webhook_url="https://n8n.bhuvisx.com/webhook/test",
+        source=SOURCE_CAMPAIGN_WEBHOOK,
+        webhook_secret=None,
+        event="lead_qualified",
+    )
 
     with patch(
         "integrations.n8n.service.N8nService.send_lead_qualified",
         new_callable=AsyncMock,
-    ) as mock_send:
+    ) as mock_send, patch(
+        "integrations.n8n.routing.resolve_campaign_webhook",
+        new=AsyncMock(return_value=dest),
+    ):
         from integrations.n8n.service import N8nSendResult
 
         mock_send.return_value = N8nSendResult(ok=True, status_code=200)
-        with patch("db.postgres.get_webhook_config_for_event", new=AsyncMock(return_value=None)):
-            from n8n_webhook import fire_event_webhook
+        from n8n_webhook import fire_event_webhook
 
-            await fire_event_webhook(
-                None,
-                client_id,
-                "lead_qualified",
-                session_call_id="call_1",
-                lead={"id": lead_id, "name": "A", "phone": "+91111", "metadata": {}},
-                campaign={"id": campaign_id, "name": "C1"},
-                extraction={"intent_status": "Interested", "summary": "Interested in demo"},
-                duration_seconds=30,
-                billed_minutes=1,
-                credits_charged=1.0,
-                route="sts",
-                outcome="Interested",
-            )
+        await fire_event_webhook(
+            None,
+            client_id,
+            "lead_qualified",
+            session_call_id="call_1",
+            lead={"id": lead_id, "name": "A", "phone": "+91111", "metadata": {}},
+            campaign={"id": campaign_id, "name": "C1", "client_id": client_id},
+            extraction={"intent_status": "Interested", "summary": "Interested in demo"},
+            duration_seconds=30,
+            billed_minutes=1,
+            credits_charged=1.0,
+            route="sts",
+            outcome="Interested",
+        )
 
     assert mock_send.await_count == 1
     payload = mock_send.await_args.args[0]
@@ -230,40 +244,50 @@ async def test_fire_event_webhook_uses_n8n_service_for_lead_qualified(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_generic_client_webhook_does_not_skip_mega_followup(monkeypatch):
+async def test_lead_qualified_uses_single_campaign_webhook_only(monkeypatch):
+    """No dual CRM+global path — exact campaign webhook is the only send."""
     client_id = uuid4()
     lead_id = uuid4()
-    monkeypatch.setenv("N8N_LEAD_WEBHOOK_URL", "https://n8n.bhuvisx.com/webhook/mega")
+    campaign_id = uuid4()
+
+    from integrations.n8n.routing import ResolvedWorkflow, SOURCE_CAMPAIGN_WEBHOOK
+
+    dest = ResolvedWorkflow(
+        ok=True,
+        webhook_url="https://n8n.bhuvisx.com/webhook/mega",
+        source=SOURCE_CAMPAIGN_WEBHOOK,
+        webhook_secret="s",
+        event="lead_qualified",
+    )
 
     with patch(
         "integrations.n8n.service.N8nService.send_lead_qualified",
         new_callable=AsyncMock,
-    ) as mock_send:
+    ) as mock_send, patch(
+        "integrations.n8n.routing.resolve_campaign_webhook",
+        new=AsyncMock(return_value=dest),
+    ), patch("n8n_webhook._post_signed", new_callable=AsyncMock) as mock_generic:
         from integrations.n8n.service import N8nSendResult
+        from n8n_webhook import fire_event_webhook
 
         mock_send.return_value = N8nSendResult(ok=True, status_code=200)
-        with patch(
-            "db.postgres.get_webhook_config_for_event",
-            new=AsyncMock(return_value={"url": "https://crm.example.com/hook", "secret": "s"}),
-        ), patch("n8n_webhook._post_signed", new_callable=AsyncMock) as mock_generic:
-            from n8n_webhook import fire_event_webhook
 
-            await fire_event_webhook(
-                None,
-                client_id,
-                "lead_qualified",
-                session_call_id="call_2",
-                lead={"id": lead_id, "name": "B", "phone": "+919999", "metadata": {}},
-                campaign={"id": uuid4(), "name": "C2"},
-                extraction={"intent_status": "Interested"},
-                duration_seconds=10,
-                billed_minutes=1,
-                credits_charged=1.0,
-                route="sts",
-                outcome="Interested",
-            )
+        await fire_event_webhook(
+            None,
+            client_id,
+            "lead_qualified",
+            session_call_id="call_2",
+            lead={"id": lead_id, "name": "B", "phone": "+919999", "metadata": {}},
+            campaign={"id": campaign_id, "name": "C2", "client_id": client_id},
+            extraction={"intent_status": "Interested"},
+            duration_seconds=10,
+            billed_minutes=1,
+            credits_charged=1.0,
+            route="sts",
+            outcome="Interested",
+        )
 
-    mock_generic.assert_awaited_once()
+    mock_generic.assert_not_awaited()
     assert mock_send.await_count == 1
 
 

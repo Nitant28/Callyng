@@ -18,6 +18,10 @@ from pydantic import BaseModel, Field
 from api.auth import client_id_uuid, get_client_from_token, get_pool
 from api.guards import require_campaign_modifiable, require_lead_editable
 from api.routes.campaigns import _get_lead_schema
+from campaigns.lead_field_config import (
+    resolve_campaign_field_config,
+    validate_lead_against_config,
+)
 from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from lead_upload.normaliser import normalise_phone
@@ -85,6 +89,25 @@ def _parse_metadata(raw) -> dict:
         except Exception:
             return {}
     return {}
+
+
+async def _campaign_field_config(pool, camp: dict, cid: UUID) -> dict:
+    schema_fields: list[dict] = []
+    try:
+        bot_record = await pg_db.get_bot_config(pool, UUID(str(camp["bot_config_id"])), cid)
+        bot = dict(bot_record) if bot_record else None
+        if bot:
+            schema = await _get_lead_schema(pool, bot, cid)
+            schema_fields = extract_lead_fields(schema)
+    except Exception:
+        schema_fields = []
+    return resolve_campaign_field_config(camp, schema_fields)
+
+
+def _raise_field_errors(errors: list[str]) -> None:
+    if not errors:
+        return
+    raise HTTPException(status_code=422, detail={"errors": errors, "message": errors[0]})
 
 
 
@@ -322,6 +345,22 @@ async def edit_lead(
     if body.name is None and body.lead_type is None and body.metadata is None:
         raise HTTPException(400, "No fields to update")
 
+    merged_meta = _parse_metadata(lead.get("metadata"))
+    if body.metadata is not None:
+        merged_meta = {**merged_meta, **_parse_metadata(body.metadata)}
+
+    config = await _campaign_field_config(pool, camp, cid)
+    _raise_field_errors(
+        validate_lead_against_config(
+            config=config,
+            name=body.name if body.name is not None else lead.get("name"),
+            phone=lead.get("phone"),
+            lead_type=body.lead_type if body.lead_type is not None else lead.get("lead_type"),
+            metadata=merged_meta,
+            is_create=False,
+        )
+    )
+
     updated = await pg_db.update_lead_fields(
         pool,
         lead_id,
@@ -367,6 +406,19 @@ async def add_lead(
     if body.lead_type and body.lead_type not in ("cold", "warm", "hot"):
         raise HTTPException(422, "lead_type must be one of: cold, warm, hot")
 
+    metadata = _parse_metadata(body.metadata)
+    config = await _campaign_field_config(pool, camp, cid)
+    _raise_field_errors(
+        validate_lead_against_config(
+            config=config,
+            name=body.name,
+            phone=phone,
+            lead_type=body.lead_type or "cold",
+            metadata=metadata,
+            is_create=True,
+        )
+    )
+
     lead_dict = {
         "client_id": cid,
         "campaign_id": campaign_id,
@@ -376,7 +428,7 @@ async def add_lead(
         "status": status,
         "max_attempts": int(camp.get("max_attempts") or 3),
         "next_attempt_at": next_attempt_at,
-        "metadata": body.metadata or {},
+        "metadata": metadata,
     }
 
     try:

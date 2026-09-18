@@ -8,7 +8,6 @@ import { lazy, Suspense } from "react";
 import Login from "./pages/client/Login";
 import ClientDashboard from "./pages/client/Dashboard";
 import ClientCampaigns from "./pages/client/Campaigns";
-import CampaignWorkspace from "./pages/client/CampaignWorkspace/CampaignWorkspace";
 import ClientGuard from "./client/guards/ClientGuard";
 import AdminGuard from "./admin/guards/AdminGuard";
 import ClientEvents from "./pages/client/Events/EventsPage";
@@ -41,8 +40,25 @@ import { AdminDataProvider } from "./admin/contexts/AdminDataContext";
 import ClientCampaignDetail from "./pages/client/CampaignDetail";
 import ClientMessages from "./client/pages/Messages";
 
+const ShellFallback = () => (
+  <div
+    style={{
+      minHeight: "100vh",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      background: "#f8fafc",
+      color: "#64748b",
+      fontFamily: "system-ui, sans-serif",
+      fontSize: 14,
+    }}
+  >
+    Loading…
+  </div>
+);
+
 const ClientShell = ({ children }) => (
-  <Suspense fallback={null}>
+  <Suspense fallback={<ShellFallback />}>
     <MainLayout>{children}</MainLayout>
   </Suspense>
 );
@@ -54,68 +70,23 @@ function App() {
         <AdminDataProvider>
           <Router>
             <Routes>
-              {/* Client Routes */}
+              {/* Client Routes — one shell so dashboard/campaigns/leads share the same data */}
               <Route path="/login" element={<Login />} />
               <Route
                 path="/app"
                 element={
                   <ClientGuard>
-                    <ClientShell>
-                      <ClientDashboard />
-                    </ClientShell>
+                    <ClientShell />
                   </ClientGuard>
                 }
-              />
-              <Route
-                path="/app/campaigns"
-                element={
-                  <ClientGuard>
-                    <ClientShell>
-                      <ClientCampaigns />
-                    </ClientShell>
-                  </ClientGuard>
-                }
-              />
-              <Route
-                path="/app/campaigns/:id/*"
-                element={
-                  <ClientGuard>
-                    <ClientShell>
-                      <ClientCampaignDetail />
-                    </ClientShell>
-                  </ClientGuard>
-                }
-              />
-              <Route
-                path="/app/messages"
-                element={
-                  <ClientGuard>
-                    <ClientShell>
-                      <ClientMessages />
-                    </ClientShell>
-                  </ClientGuard>
-                }
-              />
-              <Route
-                path="/app/events"
-                element={
-                  <ClientGuard>
-                    <ClientShell>
-                      <ClientEvents />
-                    </ClientShell>
-                  </ClientGuard>
-                }
-              />
-              <Route
-                path="/app/events/:eventId"
-                element={
-                  <ClientGuard>
-                    <ClientShell>
-                      <ClientEventDetail />
-                    </ClientShell>
-                  </ClientGuard>
-                }
-              />
+              >
+                <Route index element={<ClientDashboard />} />
+                <Route path="campaigns" element={<ClientCampaigns />} />
+                <Route path="campaigns/:id/*" element={<ClientCampaignDetail />} />
+                <Route path="messages" element={<ClientMessages />} />
+                <Route path="events" element={<ClientEvents />} />
+                <Route path="events/:eventId" element={<ClientEventDetail />} />
+              </Route>
 
               <Route
                 path="/app/leads"

@@ -1,36 +1,31 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import adminApi from '../../shared/api/admin';
 
-function N8nStatusBadge({ status, configured }) {
-  if (!configured) {
-    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-error/15 text-error">Not Connected</span>;
-  }
-  if (status === 'connected') {
-    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-secondary/15 text-secondary dark:bg-molten-success/15 dark:text-molten-success">Connected</span>;
-  }
-  if (status === 'failed') {
-    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-error/15 text-error">Connection Failed</span>;
-  }
-  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-surface-container-high text-on-surface-variant">Configured</span>;
-}
+const DEFAULT_EVENTS = [
+  'lead_qualified',
+  'lead_not_interested',
+  'lead_callback',
+  'lead_failed',
+  'campaign_completed',
+];
 
 export default function AdminWebhooks() {
   const [clients, setClients] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [events, setEvents] = useState(DEFAULT_EVENTS);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [webhooks, setWebhooks] = useState([]);
 
   const [formClientId, setFormClientId] = useState('');
+  const [formCampaignId, setFormCampaignId] = useState('');
   const [formEvent, setFormEvent] = useState('lead_qualified');
   const [formUrl, setFormUrl] = useState('');
   const [formSecret, setFormSecret] = useState('');
 
-  const [n8nStatus, setN8nStatus] = useState(null);
-  const [n8nWebhookUrl, setN8nWebhookUrl] = useState('');
-  const [n8nSaving, setN8nSaving] = useState(false);
-  const [n8nTesting, setN8nTesting] = useState(false);
-  const [n8nTestMsg, setN8nTestMsg] = useState('');
-
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testingId, setTestingId] = useState('');
+  const [deletingId, setDeletingId] = useState('');
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -48,29 +43,32 @@ export default function AdminWebhooks() {
     }
   };
 
-  const fetchN8n = async () => {
-    try {
-      const [statusRes, settingsRes] = await Promise.all([
-        adminApi.get('/internal/n8n/status'),
-        adminApi.get('/internal/n8n/settings'),
-      ]);
-      setN8nStatus(statusRes.data || null);
-      setN8nWebhookUrl(settingsRes.data?.webhook_url || '');
-    } catch (err) {
-      console.error('Failed to fetch n8n settings', err);
+  const fetchCampaignsForClient = useCallback(async (clientId) => {
+    if (!clientId) {
+      setCampaigns([]);
+      return;
     }
-  };
-
-  useEffect(() => {
-    fetchClients();
-    fetchN8n();
+    try {
+      const res = await adminApi.get('/internal/campaigns', { params: { client_id: clientId } });
+      setCampaigns(res.data.campaigns || []);
+    } catch (err) {
+      console.error('Failed to fetch campaigns', err);
+      setCampaigns([]);
+    }
   }, []);
 
   const fetchWebhooks = async (clientId) => {
+    if (!clientId) {
+      setWebhooks([]);
+      return;
+    }
     try {
       setLoading(true);
       const res = await adminApi.get(`/internal/clients/${clientId}/webhooks`);
       setWebhooks(res.data.webhooks || []);
+      if (Array.isArray(res.data.events) && res.data.events.length) {
+        setEvents(res.data.events);
+      }
     } catch (err) {
       console.error('Failed to fetch webhooks', err);
     } finally {
@@ -79,87 +77,123 @@ export default function AdminWebhooks() {
   };
 
   useEffect(() => {
+    fetchClients();
+  }, []);
+
+  useEffect(() => {
+    fetchCampaignsForClient(formClientId);
+  }, [formClientId, fetchCampaignsForClient]);
+
+  useEffect(() => {
     if (selectedClientId) {
       fetchWebhooks(selectedClientId);
+      // Keep upsert form aligned with the selected client so campaign list is visible.
+      if (selectedClientId !== formClientId) {
+        setFormClientId(selectedClientId);
+        setFormCampaignId('');
+      }
     } else {
       setWebhooks([]);
     }
-  }, [selectedClientId]);
+  }, [selectedClientId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFilterClientChange = (clientId) => {
+    setSelectedClientId(clientId);
+    setFormClientId(clientId);
+    setFormCampaignId('');
+  };
+
+  const handleFormClientChange = (clientId) => {
+    setFormClientId(clientId);
+    setFormCampaignId('');
+    setSelectedClientId(clientId);
+  };
 
   const handleUpsertWebhook = async (e) => {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
 
-    if (!formClientId || !formEvent || !formUrl || !formSecret) {
-      setError('All fields are required.');
+    if (!formClientId || !formCampaignId || !formEvent || !formUrl) {
+      setError('Client, campaign, event, and target URL are required.');
       return;
     }
 
     try {
-      await adminApi.post('/internal/webhook-configs', {
+      setSaving(true);
+      const body = {
         client_id: formClientId,
+        campaign_id: formCampaignId,
         event: formEvent,
         url: formUrl,
-        secret: formSecret,
-      });
-
-      setSuccessMsg('Webhook configuration upserted successfully!');
-
-      if (formClientId === selectedClientId) {
-        fetchWebhooks(selectedClientId);
+      };
+      if (formSecret.trim()) {
+        body.secret = formSecret.trim();
       }
-
+      await adminApi.post('/internal/webhook-configs', body);
+      setSuccessMsg('Webhook configuration saved for this campaign and event.');
+      if (formClientId === selectedClientId) {
+        await fetchWebhooks(selectedClientId);
+      }
       setFormUrl('');
       setFormSecret('');
     } catch (err) {
       console.error('Failed to upsert webhook config', err);
-      setError(err.customErrorMessage || err.message || 'Failed to upsert webhook configuration.');
+      const detail = err.response?.data?.detail;
+      setError(
+        (typeof detail === 'string' ? detail : null)
+        || err.customErrorMessage
+        || err.message
+        || 'Failed to upsert webhook configuration.'
+      );
+    } finally {
+      setSaving(false);
     }
   };
 
-  const saveN8nWebhook = async (e) => {
-    e.preventDefault();
-    setN8nSaving(true);
+  const handleTestWebhook = async (webhookId) => {
+    setTestingId(webhookId);
     setError('');
     setSuccessMsg('');
-    setN8nTestMsg('');
     try {
-      await adminApi.put('/internal/n8n/settings', {
-        webhook_url: n8nWebhookUrl.trim(),
-      });
-      setSuccessMsg('N8N follow-up webhook URL saved.');
-      await fetchN8n();
+      const res = await adminApi.post(`/internal/webhook-configs/${webhookId}/test`);
+      setSuccessMsg(res.data?.message || 'Connected to campaign webhook');
+      await fetchWebhooks(selectedClientId);
     } catch (err) {
       const detail = err.response?.data?.detail;
-      const msg = Array.isArray(detail)
-        ? detail.map((item) => item.msg || item).join(', ')
-        : (typeof detail === 'string' ? detail : (err.customErrorMessage || err.message || 'Failed to save n8n webhook'));
-      setError(msg);
+      setError(
+        (typeof detail === 'string' ? detail : null)
+        || err.message
+        || 'Webhook test failed'
+      );
+      await fetchWebhooks(selectedClientId);
     } finally {
-      setN8nSaving(false);
+      setTestingId('');
     }
   };
 
-  const testN8nWebhook = async () => {
-    setN8nTesting(true);
-    setN8nTestMsg('');
+  const handleDeleteWebhook = async (wh) => {
+    const label = `${wh.campaign_name || wh.campaign_id} / ${wh.event}`;
+    if (!window.confirm(`Delete webhook for ${label}?\n\n${wh.url || ''}`)) {
+      return;
+    }
+    setDeletingId(wh.id);
     setError('');
+    setSuccessMsg('');
     try {
-      const res = await adminApi.post('/internal/n8n/settings/test');
-      setN8nTestMsg(res.data?.message || 'Connected to n8n');
-      await fetchN8n();
+      await adminApi.delete(`/internal/webhook-configs/${wh.id}`);
+      setSuccessMsg(`Deleted webhook for ${label}.`);
+      await fetchWebhooks(selectedClientId);
     } catch (err) {
-      setN8nTestMsg(err.response?.data?.detail || err.message || 'Unable to connect to n8n');
+      const detail = err.response?.data?.detail;
+      setError(
+        (typeof detail === 'string' ? detail : null)
+        || err.message
+        || 'Failed to delete webhook'
+      );
     } finally {
-      setN8nTesting(false);
+      setDeletingId('');
     }
-  };
-
-  const handleClientChange = (e) => {
-    const val = e.target.value;
-    setSelectedClientId(val);
-    setFormClientId(val);
   };
 
   return (
@@ -167,87 +201,7 @@ export default function AdminWebhooks() {
       <div>
         <h1 className="font-headline-lg text-headline-lg text-on-surface dark:text-molten-text">Webhooks</h1>
         <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted mt-2">
-          Configure CRM event callbacks and the global n8n follow-up workflow.
-        </p>
-      </div>
-
-      <div className="bg-arctic-surface dark:bg-[#1A1A24] p-stack-lg rounded-lg border border-outline-variant/30 dark:border-[#2A345E] shadow-arctic dark:shadow-none">
-        <h2 className="font-headline-sm text-headline-sm text-on-surface dark:text-molten-text font-semibold mb-1">
-          N8N Follow-up Workflow
-        </h2>
-        <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted mb-4">
-          This webhook receives qualified lead events and starts the configured n8n follow-up workflow.
-          It is separate from per-client CRM webhooks below.
-        </p>
-
-        {n8nStatus && (
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            <N8nStatusBadge
-              status={n8nStatus.last_test_status}
-              configured={n8nStatus.configured}
-            />
-            {n8nStatus.webhook_host ? (
-              <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted">{n8nStatus.webhook_host}</span>
-            ) : null}
-            {n8nStatus.lead_webhook_url_source ? (
-              <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted">
-                Source: {n8nStatus.lead_webhook_url_source}
-              </span>
-            ) : null}
-            {n8nStatus.last_tested_at ? (
-              <span className="text-xs text-arctic-text-muted dark:text-molten-text-muted">
-                Last tested {new Date(n8nStatus.last_tested_at).toLocaleString()}
-              </span>
-            ) : null}
-          </div>
-        )}
-
-        {n8nTestMsg && (
-          <div className={`mb-4 p-3 rounded-lg text-sm border ${
-            n8nTestMsg.toLowerCase().includes('connect')
-              ? 'bg-secondary/15 border-secondary/30 text-secondary dark:bg-molten-success/15 dark:text-molten-success'
-              : 'bg-arctic-error/15 border-arctic-error/30 text-arctic-error dark:text-molten-error'
-          }`}>
-            {n8nTestMsg}
-          </div>
-        )}
-
-        <form onSubmit={saveN8nWebhook} className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
-          <label className="flex-1 font-label-sm text-label-sm text-on-surface dark:text-molten-text">
-            N8N Webhook URL
-            <input
-              className="w-full mt-1 px-3 py-2 bg-background dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm focus:outline-none focus:border-primary dark:focus:border-molten-primary font-body-sm text-body-sm text-on-surface dark:text-molten-text"
-              type="url"
-              placeholder="https://n8n.bhuvisx.com/webhook/5879f520-d9b9-4dc9-ba95-3392c2f30792"
-              value={n8nWebhookUrl}
-              onChange={(e) => setN8nWebhookUrl(e.target.value)}
-              required
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={n8nSaving}
-            className="px-4 py-2.5 rounded-lg bg-primary dark:bg-molten-primary text-on-primary font-label-md text-label-md h-fit"
-          >
-            {n8nSaving ? 'Saving…' : 'Save'}
-          </button>
-          <button
-            type="button"
-            disabled={n8nTesting || !n8nWebhookUrl.trim()}
-            onClick={testN8nWebhook}
-            className="px-4 py-2.5 rounded-lg border border-outline-variant dark:border-[#2A345E] font-label-md text-label-md h-fit"
-          >
-            {n8nTesting ? 'Testing…' : 'Test Connection'}
-          </button>
-        </form>
-      </div>
-
-      <div>
-        <h2 className="font-headline-sm text-headline-sm text-on-surface dark:text-molten-text font-semibold mb-1">
-          CRM Event Webhooks
-        </h2>
-        <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted">
-          Per-client outbound callbacks for call and campaign events. These do not replace the n8n follow-up workflow above.
+          Configure one webhook per client, campaign, and event. There is no global follow-up URL.
         </p>
       </div>
 
@@ -265,24 +219,57 @@ export default function AdminWebhooks() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
         <div className="lg:col-span-2 flex flex-col gap-stack-md">
-          <div className="bg-arctic-surface dark:bg-[#1A1A24] p-stack-md rounded-lg border border-outline-variant/30 dark:border-[#2A345E] shadow-arctic dark:shadow-none flex flex-col gap-4">
-            <div>
-              <label className="block font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase mb-1.5">
-                Select Client to View Configured Webhooks
-              </label>
-              <select
-                className="w-full max-w-md px-3 py-2 bg-background dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm focus:outline-none focus:border-primary dark:focus:border-molten-primary font-body-sm text-body-sm text-on-surface dark:text-molten-text"
-                value={selectedClientId}
-                onChange={handleClientChange}
-              >
-                <option value="">-- Choose Client --</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="bg-arctic-surface dark:bg-[#1A1A24] p-stack-md rounded-lg border border-outline-variant/30 dark:border-[#2A345E] shadow-arctic dark:shadow-none">
+            <label className="block font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase mb-1.5">
+              Client (view campaigns + webhooks)
+            </label>
+            <select
+              className="w-full max-w-md px-3 py-2 bg-background dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg text-sm focus:outline-none focus:border-primary dark:focus:border-molten-primary font-body-sm text-body-sm text-on-surface dark:text-molten-text"
+              value={selectedClientId}
+              onChange={(e) => handleFilterClientChange(e.target.value)}
+            >
+              <option value="">-- Choose Client --</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            {selectedClientId ? (
+              <div className="mt-3 rounded-lg border border-outline-variant/40 dark:border-[#2A345E] p-3">
+                <div className="font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase mb-2">
+                  Campaigns for this client ({campaigns.length})
+                </div>
+                {campaigns.length === 0 ? (
+                  <div className="text-sm text-on-surface-variant dark:text-molten-text-muted">
+                    No campaigns for this client yet.
+                  </div>
+                ) : (
+                  <ul className="space-y-1 max-h-40 overflow-y-auto text-sm">
+                    {campaigns.map((c) => (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          className={`w-full text-left px-2 py-1.5 rounded ${
+                            formCampaignId === c.id
+                              ? 'bg-primary/15 text-primary font-medium'
+                              : 'hover:bg-surface-container-high dark:hover:bg-[#2A345E]/40'
+                          }`}
+                          onClick={() => {
+                            setFormClientId(selectedClientId);
+                            setFormCampaignId(c.id);
+                          }}
+                        >
+                          {c.name}
+                          <span className="block font-mono text-[11px] opacity-70">{c.id}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-2 text-xs text-arctic-text-muted dark:text-molten-text-muted">
+                  Click a campaign to pre-select it in Upsert Webhook on the right.
+                </p>
+              </div>
+            ) : null}
           </div>
 
           <div className="bg-arctic-surface dark:bg-[#1A1A24] rounded-lg border border-outline-variant/50 dark:border-[#2A345E] shadow-arctic dark:shadow-none overflow-hidden">
@@ -295,31 +282,64 @@ export default function AdminWebhooks() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-outline-variant/50 dark:border-[#2A345E] bg-surface-container-low dark:bg-[#1A1A24]/50">
+                    <th className="px-4 py-3 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider font-semibold">Client</th>
+                    <th className="px-4 py-3 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider font-semibold">Campaign</th>
                     <th className="px-4 py-3 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider font-semibold">Event</th>
                     <th className="px-4 py-3 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider font-semibold">Target URL</th>
                     <th className="px-4 py-3 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider font-semibold">Status</th>
+                    <th className="px-4 py-3 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider font-semibold">Last Test</th>
+                    <th className="px-4 py-3 font-label-sm text-label-sm text-arctic-text-muted dark:text-molten-text-muted uppercase tracking-wider font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="font-body-sm text-body-sm">
                   {webhooks.length === 0 ? (
                     <tr>
-                      <td colSpan="3" className="px-4 py-8 text-center text-on-surface-variant dark:text-molten-text-muted">
-                        No webhooks configured for this client.
+                      <td colSpan="7" className="px-4 py-8 text-center text-on-surface-variant dark:text-molten-text-muted">
+                        No campaign webhooks configured for this client.
                       </td>
                     </tr>
                   ) : (
                     webhooks.map((wh) => (
-                      <tr key={wh.id} className="border-b border-outline-variant/20 dark:border-[#2A345E]/50">
-                        <td className="px-4 py-3 font-medium text-on-surface dark:text-molten-text font-mono text-xs">
-                          {wh.event}
+                      <tr key={wh.id} className="border-b border-outline-variant/20 dark:border-[#2A345E]/50 align-top">
+                        <td className="px-4 py-3 text-on-surface dark:text-molten-text">{wh.client_name || '—'}</td>
+                        <td className="px-4 py-3 text-on-surface dark:text-molten-text">
+                          <div className="font-medium">{wh.campaign_name || '—'}</div>
+                          <div className="font-mono text-[11px] text-arctic-text-muted dark:text-molten-text-muted mt-0.5">{wh.campaign_id}</div>
                         </td>
-                        <td className="px-4 py-3 text-on-surface-variant dark:text-molten-text-muted font-mono text-xs truncate max-w-xs">
-                          {wh.url}
-                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-on-surface dark:text-molten-text">{wh.event}</td>
+                        <td className="px-4 py-3 text-on-surface-variant dark:text-molten-text-muted font-mono text-xs truncate max-w-xs">{wh.url}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${wh.active ? 'bg-secondary/15 text-secondary dark:bg-molten-success/15 dark:text-molten-success font-semibold' : 'bg-surface-container-high text-on-surface-variant'}`}>
-                            {wh.active ? 'Active' : 'Disabled'}
+                            {wh.active ? 'Enabled' : 'Disabled'}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-arctic-text-muted dark:text-molten-text-muted">
+                          {wh.last_tested_at ? (
+                            <>
+                              <div>{wh.last_test_status || '—'}</div>
+                              <div>{new Date(wh.last_tested_at).toLocaleString()}</div>
+                            </>
+                          ) : '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={testingId === wh.id || deletingId === wh.id}
+                              onClick={() => handleTestWebhook(wh.id)}
+                              className="px-3 py-1.5 rounded-lg border border-outline-variant dark:border-[#2A345E] text-xs"
+                            >
+                              {testingId === wh.id ? 'Testing…' : 'Test'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={testingId === wh.id || deletingId === wh.id}
+                              onClick={() => handleDeleteWebhook(wh)}
+                              className="px-3 py-1.5 rounded-lg border border-arctic-error/40 text-arctic-error dark:border-molten-error/40 dark:text-molten-error text-xs"
+                            >
+                              {deletingId === wh.id ? 'Deleting…' : 'Delete'}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -335,7 +355,7 @@ export default function AdminWebhooks() {
             Upsert Webhook Configuration
           </h3>
           <p className="font-body-sm text-body-sm text-arctic-text-muted dark:text-molten-text-muted">
-            Configure or update the endpoint URL and secret signature for the selected event.
+            Routing rule: client → campaign → event → target URL. Secret is optional and used only for HMAC signing.
           </p>
 
           <form onSubmit={handleUpsertWebhook} className="space-y-4">
@@ -344,15 +364,33 @@ export default function AdminWebhooks() {
                 Client
               </label>
               <select
-                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
+                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
                 value={formClientId}
-                onChange={(e) => setFormClientId(e.target.value)}
+                onChange={(e) => handleFormClientChange(e.target.value)}
                 required
               >
                 <option value="">Select Client</option>
                 {clients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">
+                Campaign
+              </label>
+              <select
+                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
+                value={formCampaignId}
+                onChange={(e) => setFormCampaignId(e.target.value)}
+                required
+                disabled={!formClientId}
+              >
+                <option value="">{formClientId ? 'Select Campaign' : 'Select a client first'}</option>
+                {campaigns.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {c.name} — {c.id}
                   </option>
                 ))}
               </select>
@@ -360,29 +398,27 @@ export default function AdminWebhooks() {
 
             <div>
               <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">
-                Event
+                Event / Status
               </label>
               <select
-                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
+                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
                 value={formEvent}
                 onChange={(e) => setFormEvent(e.target.value)}
                 required
               >
-                <option value="lead_qualified">lead_qualified</option>
-                <option value="lead_not_interested">lead_not_interested</option>
-                <option value="lead_callback">lead_callback</option>
-                <option value="lead_failed">lead_failed</option>
-                <option value="campaign_completed">campaign_completed</option>
+                {events.map((ev) => (
+                  <option key={ev} value={ev}>{ev}</option>
+                ))}
               </select>
             </div>
 
             <div>
               <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">
-                Target URL
+                Target Webhook URL
               </label>
               <input
-                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
-                placeholder="https://your-domain.com/webhooks/voice"
+                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
+                placeholder="https://n8n.example.com/webhook/..."
                 type="url"
                 value={formUrl}
                 onChange={(e) => setFormUrl(e.target.value)}
@@ -392,23 +428,27 @@ export default function AdminWebhooks() {
 
             <div>
               <label className="block font-label-sm text-label-sm text-on-surface dark:text-molten-text mb-1.5 uppercase tracking-wide">
-                Secret (Signature Key)
+                Secret (HMAC, optional)
               </label>
               <input
-                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary focus:ring-1 focus:ring-primary dark:focus:ring-molten-primary transition-colors"
-                placeholder="whsec_..."
-                type="text"
+                className="w-full bg-surface-container-lowest dark:bg-[#141210] border border-outline-variant dark:border-[#2A345E] rounded-lg px-3 py-2 font-body-sm text-body-sm text-on-surface dark:text-molten-text focus:outline-none focus:border-primary dark:focus:border-molten-primary"
+                placeholder="Leave blank to keep existing / skip signing"
+                type="password"
+                autoComplete="new-password"
                 value={formSecret}
                 onChange={(e) => setFormSecret(e.target.value)}
-                required
               />
+              <p className="mt-1 text-[11px] text-arctic-text-muted dark:text-molten-text-muted">
+                Used for X-Aakashvani-Signature. Never shown in the list. Leave blank on update to preserve the current secret.
+              </p>
             </div>
 
             <button
               type="submit"
+              disabled={saving}
               className="w-full py-2.5 rounded-lg bg-primary dark:bg-molten-primary text-on-primary font-label-md text-label-md shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] hover:bg-primary-fixed-variant dark:hover:brightness-90 transition-colors"
             >
-              Upsert Webhook
+              {saving ? 'Saving…' : 'Upsert Webhook'}
             </button>
           </form>
         </div>

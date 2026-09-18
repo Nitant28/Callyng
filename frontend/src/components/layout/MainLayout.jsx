@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { DashboardDataProvider, useDashboardData } from '../../contexts/DashboardDataContext';
 import { SIDEBAR_NAV } from '../../constants/sidebar';
@@ -60,6 +60,7 @@ const MainLayoutInner = ({ children }) => {
   const handleSignOut = () => {
     localStorage.removeItem('client_api_key');
     localStorage.removeItem('client_name');
+    localStorage.removeItem('client_id');
     window.location.href = '/login';
   };
 
@@ -141,7 +142,7 @@ const MainLayoutInner = ({ children }) => {
 
 const MainLayout = ({ children }) => (
   <DashboardDataProvider>
-    <MainLayoutInner>{children}</MainLayoutInner>
+    <MainLayoutInner>{children ?? <Outlet />}</MainLayoutInner>
   </DashboardDataProvider>
 );
 

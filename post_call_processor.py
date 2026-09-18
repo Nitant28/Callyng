@@ -648,6 +648,14 @@ async def process_post_call(
     # status/outcome used downstream is overridden to "Unknown".
     outcome = validate_interested_outcome(outcome, transcript)
 
+    # Persist structured qualification on the extraction blob (same txn as settle).
+    from followups.interested import evaluate_qualification
+
+    follow_up_target = (campaign or {}).get("follow_up_target")
+    qualification = evaluate_qualification(outcome, follow_up_target)
+    extraction_json = dict(extraction_json or {})
+    extraction_json["qualification"] = dict(qualification)
+
     fire_webhook = False
     applied = False
     just_completed = False
@@ -813,7 +821,11 @@ async def process_post_call(
             if post_call_snapshot
             else None
         )
-        event = outcome_to_event(outcome, event_map=event_map)
+        event = outcome_to_event(
+            outcome,
+            event_map=event_map,
+            follow_up_target=follow_up_target,
+        )
         if event:
             try:
                 await fire_event_webhook(

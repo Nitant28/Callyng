@@ -9,6 +9,8 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from api.auth import get_pool, require_admin
@@ -110,6 +112,49 @@ async def admin_upsert_integration(
     return {"integration": row}
 
 
+class FirstContactTemplateBody(BaseModel):
+    client_id: UUID
+    template_name: str = Field(..., min_length=1, max_length=255)
+    language_code: str = Field(default="en_US", max_length=20)
+    enabled: bool = True
+    approved: bool = True
+    variables: list[dict] | None = None
+
+
+@router.put("/integrations/first-contact-template")
+async def admin_set_first_contact_template(
+    body: FirstContactTemplateBody,
+    _admin=Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    """Per-client Meta template for first WhatsApp after interested / manual follow-up.
+
+    Template must already be approved in Meta Business Manager for the WABA used by n8n.
+    Different clients may use different template names / languages / body variables.
+    """
+    from messages import repository as messages_repo
+
+    try:
+        row = await messages_repo.set_client_first_contact_template(
+            pool,
+            body.client_id,
+            template_name=body.template_name,
+            language_code=body.language_code,
+            enabled=body.enabled,
+            approved=body.approved,
+            variables=body.variables,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    cfg = row.get("configuration") or {}
+    return {
+        "ok": True,
+        "client_id": str(body.client_id),
+        "integration_id": str(row.get("id")),
+        "first_contact_template": (cfg.get("first_contact_template") if isinstance(cfg, dict) else None),
+    }
+
+
 @router.post("/integrations/{integration_id}/test")
 async def admin_test_integration(
     integration_id: UUID,
@@ -172,7 +217,25 @@ async def admin_send_message(
         force_message_type=body.force_message_type,
     )
     status_code = 200 if result.get("ok") else 502
-    return result
+    err = str(result.get("error") or "")
+    if not result.get("ok") and err in {
+        "client_id_required",
+        "lead_not_found_for_client",
+        "campaign_not_found_for_client",
+        "lead_campaign_mismatch",
+        "integration_not_found_for_client",
+        "integration_disabled",
+        "no_enabled_whatsapp_integration",
+        "missing_or_invalid_phone",
+        "whatsapp_opt_out",
+        "send_not_allowed",
+        "conversation_window_closed_template_required",
+        "text_or_template_required",
+        "text_required",
+        "template_required",
+    }:
+        status_code = 400
+    return JSONResponse(status_code=status_code, content=jsonable_encoder(result))
 
 
 class RecordMessageBody(BaseModel):
@@ -318,12 +381,25 @@ async def admin_process_followups(
 
 # ── Provider webhook boundary ──────────────────────────────────────────
 
-@router.api_route("/webhooks/{integration_id}", methods=["GET", "POST"])
-async def messages_webhook(
+@router.get("/webhooks/{integration_id}", name="messages_provider_webhook_verify")
+async def messages_webhook_verify(
     integration_id: UUID,
     request: Request,
     pool=Depends(get_pool),
 ):
+    return await _messages_webhook_dispatch(integration_id, request, pool)
+
+
+@router.post("/webhooks/{integration_id}", name="messages_provider_webhook_receive")
+async def messages_webhook_receive(
+    integration_id: UUID,
+    request: Request,
+    pool=Depends(get_pool),
+):
+    return await _messages_webhook_dispatch(integration_id, request, pool)
+
+
+async def _messages_webhook_dispatch(integration_id: UUID, request: Request, pool):
     raw = await request.body()
     body = None
     if raw:

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useTheme } from '../hooks/useTheme';
+import { useParams, Link } from 'react-router-dom';
 
 import { useToast } from '../../contexts/ToastContext';
 import { useDashboardData } from '../../contexts/DashboardDataContext';
@@ -10,6 +9,22 @@ import CallTranscriptDrawer from '../components/CallTranscriptDrawer';
 import { Modal, Button } from '../../components/enterprise';
 import CustomMetadataFields from '../../components/client/CustomMetadataFields';
 import { buildMetadataFromCustomFields } from '../../utils/leadFormHelpers';
+import {
+  resolveLeadFieldConfig,
+  parseLeadMetadata,
+  metaValue,
+  validateLeadForm,
+  labelForField,
+  isFieldRequired,
+} from '../../utils/leadFieldConfig';
+import {
+  buildAvailableLeadSheetColumns,
+  loadSelectedOptionalIds,
+  saveSelectedOptionalIds,
+  resolveVisibleColumnIds,
+  getOptionalColumnIds,
+  schemaColumnId,
+} from '../../utils/leadSheetColumns';
 import { sortLeadsCallStack } from '../../pages/client/LeadSheet/leadUtils';
 import { buildTurnsByLead, getLeadTurns } from '../utils/computeTurns';
 import MultiSelectFilter, { joinFilterParam } from '../components/MultiSelectFilter';
@@ -122,6 +137,11 @@ function formatLastFollowUp(at) {
   }
 }
 
+function normalizeLeadRow(lead) {
+  if (!lead) return lead;
+  return { ...lead, metadata: parseLeadMetadata(lead.metadata) };
+}
+
 function buildCallbackBadgeLabel(lead) {
   const outcome = (lead.outcome || '').toString();
   const duration = lead.last_call_duration_seconds;
@@ -140,9 +160,8 @@ function buildCallbackBadgeLabel(lead) {
 
 const CampaignDetail = () => {
   const { id } = useParams();
-  const { theme, toggleTheme } = useTheme();
   const { showToast } = useToast();
-  const { calls: dashboardCalls } = useDashboardData();
+  const { calls: dashboardCalls, refresh: refreshDashboard } = useDashboardData();
 
   // Campaign Details & UI State
   const [campaign, setCampaign] = useState(null);
@@ -195,22 +214,35 @@ const CampaignDetail = () => {
 
   // Expandable secondary KPIs
   const [showMoreStats, setShowMoreStats] = useState(false);
+  const [columnPickerOpen, setColumnPickerOpen] = useState(false);
+  const [selectedOptionalIds, setSelectedOptionalIds] = useState([]);
+  const [draftOptionalIds, setDraftOptionalIds] = useState([]);
 
   // IST Compliance window state
   const [istStatus, setIstStatus] = useState({ isInside: true, formattedIst: '' });
 
-  const getDynamicLeadFields = useCallback(() => {
-    const schema = campaign?.bot_config?.lead_schema;
-    if (!schema) return [];
-    if (schema.fields && Array.isArray(schema.fields)) return schema.fields;
+  const fieldConfig = useMemo(() => resolveLeadFieldConfig(campaign), [campaign]);
+  const schemaFields = fieldConfig.fields || [];
+  const availableColumns = useMemo(
+    () => buildAvailableLeadSheetColumns(schemaFields),
+    [schemaFields],
+  );
+  const optionalColumnIds = useMemo(
+    () => getOptionalColumnIds(availableColumns),
+    [availableColumns],
+  );
+  const visibleColumnIds = useMemo(
+    () => resolveVisibleColumnIds(availableColumns, selectedOptionalIds),
+    [availableColumns, selectedOptionalIds],
+  );
+  const showCol = (colId) => visibleColumnIds.includes(colId);
 
-    return Object.entries(schema).map(([key, value]) => {
-      if (typeof value === 'object') {
-        return { key, ...value };
-      }
-      return null;
-    }).filter(f => f !== null);
-  }, [campaign]);
+  useEffect(() => {
+    if (!id) return;
+    const loaded = loadSelectedOptionalIds(id);
+    setSelectedOptionalIds(loaded);
+    setDraftOptionalIds(loaded);
+  }, [id]);
 
   useEffect(() => {
     const updateIst = () => {
@@ -308,14 +340,15 @@ const CampaignDetail = () => {
       });
 
       if (response.data) {
-        const pageLeads = response.data.leads || [];
+        const pageLeads = (response.data.leads || []).map(normalizeLeadRow);
+        const callingNormalized = callingLeads.map(normalizeLeadRow);
         const merged = useStack
-          ? [...callingLeads, ...pageLeads.filter((l) => !callingLeads.some((c) => c.id === l.id))]
+          ? [...callingNormalized, ...pageLeads.filter((l) => !callingNormalized.some((c) => c.id === l.id))]
           : pageLeads;
         setLeads(sortLeadsCallStack(merged, { live: useStack }));
         setTotalLeadsCount(response.data.total_count || 0);
       } else {
-        setLeads(useStack ? sortLeadsCallStack(callingLeads, { live: true }) : []);
+        setLeads(useStack ? sortLeadsCallStack(callingLeads.map(normalizeLeadRow), { live: true }) : []);
         setTotalLeadsCount(callingLeads.length);
       }
     } catch (err) {
@@ -371,6 +404,14 @@ const CampaignDetail = () => {
   const turnsIndex = useMemo(
     () => buildTurnsByLead((dashboardCalls || []).filter((c) => String(c.campaign_id) === String(id))),
     [dashboardCalls, id],
+  );
+
+  const outcomeFilterOptions = useMemo(
+    () => outcomes.map((outcome) => ({
+      value: outcome,
+      label: friendlyOutcome(outcome),
+    })),
+    [outcomes],
   );
 
   // Adjust active tab slider indicator layout
@@ -438,6 +479,7 @@ const CampaignDetail = () => {
       if (response.data) {
         showToast('Campaign paused successfully.', 'success');
         loadCampaignDetails();
+        refreshDashboard();
         return;
       }
     } catch (err) {
@@ -453,6 +495,7 @@ const CampaignDetail = () => {
         showToast('Campaign started successfully.', 'success');
         setIsStartConfirmOpen(false);
         loadCampaignDetails();
+        refreshDashboard();
         return;
       }
     } catch (err) {
@@ -559,6 +602,7 @@ const CampaignDetail = () => {
         });
         loadCampaignDetails();
         loadLeads();
+        refreshDashboard();
       }
     } catch (err) {
       console.error('File upload failed', err);
@@ -574,12 +618,22 @@ const CampaignDetail = () => {
 
   const handleAddLead = async (e) => {
     e?.preventDefault?.();
-    if (!newLead.phone.trim()) return;
+
+    const metadata = buildMetadataFromCustomFields(newLead.metadata, addLeadCustomColumns);
+    const fieldErrors = validateLeadForm(fieldConfig, {
+      name: newLead.name,
+      phone: newLead.phone,
+      metadata,
+    });
+    if (fieldErrors.length) {
+      showToast(fieldErrors[0], 'error');
+      return;
+    }
 
     try {
       const payload = {
         ...newLead,
-        metadata: buildMetadataFromCustomFields(newLead.metadata, addLeadCustomColumns),
+        metadata,
       };
       const response = await clientApi.post(`/api/campaigns/${id}/leads`, payload);
       if (response.data) {
@@ -590,6 +644,7 @@ const CampaignDetail = () => {
         setAddLeadCustomColumns([]);
         loadLeads();
         loadCampaignDetails();
+        refreshDashboard();
         return;
       }
     } catch (err) {
@@ -600,16 +655,26 @@ const CampaignDetail = () => {
 
   const handleEditLead = async (e) => {
     e?.preventDefault?.();
-    if (!editLeadData.name?.trim()) return;
+    if (!editLeadData) return;
+
+    const metadata = parseLeadMetadata(editLeadData.metadata);
+    const fieldErrors = validateLeadForm(
+      fieldConfig,
+      { name: editLeadData.name, phone: editLeadData.phone, metadata },
+      { isCreate: false },
+    );
+    if (fieldErrors.length) {
+      showToast(fieldErrors[0], 'error');
+      return;
+    }
 
     try {
-      // 1. Update basic fields
       await clientApi.patch(`/api/campaigns/${id}/leads/${editLeadData.id}`, {
         name: editLeadData.name,
-        lead_type: editLeadData.lead_type || 'cold'
+        lead_type: editLeadData.lead_type || 'cold',
+        metadata,
       });
 
-      // 2. Update status if changed
       if (editLeadData.status && editLeadData.status !== editLeadData.original_status) {
         await clientApi.patch(`/api/campaigns/${id}/leads/${editLeadData.id}/status`, {
           status: editLeadData.status
@@ -621,6 +686,7 @@ const CampaignDetail = () => {
       setEditLeadData(null);
       loadLeads();
       loadCampaignDetails();
+      refreshDashboard();
     } catch (err) {
       console.error('Failed to edit lead', err);
       showToast(err.customErrorMessage || 'Failed to edit lead. Transition may not be allowed.', 'error');
@@ -866,14 +932,6 @@ const CampaignDetail = () => {
   const rangeStart = totalLeadsCount === 0 ? 0 : leadsOffset + 1;
   const rangeEnd = Math.min(leadsOffset + sortedLeads.length, totalLeadsCount);
 
-  const outcomeFilterOptions = useMemo(
-    () => outcomes.map((outcome) => ({
-      value: outcome,
-      label: friendlyOutcome(outcome),
-    })),
-    [outcomes],
-  );
-
   const setFilterValues = (key, values) => {
     setLeadFilters((prev) => ({ ...prev, [key]: values }));
   };
@@ -1086,6 +1144,87 @@ const CampaignDetail = () => {
 
                       {
                         <>
+                          <div className="cl-col-picker">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDraftOptionalIds(selectedOptionalIds);
+                                setColumnPickerOpen((open) => !open);
+                              }}
+                              className="cl-btn cl-btn--secondary cl-btn--sm"
+                              title="Show columns"
+                            >
+                              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                                view_column
+                              </span>
+                              Columns
+                            </button>
+                            {columnPickerOpen && (
+                              <div className="cl-col-picker__menu" role="dialog" aria-label="Lead sheet columns">
+                                <p className="cl-col-picker__hint">Required columns stay on. Optional columns can be hidden.</p>
+                                <ul className="cl-col-picker__list">
+                                  {availableColumns.map((col) => (
+                                    <li key={col.id}>
+                                      <label>
+                                        <input
+                                          type="checkbox"
+                                          checked={col.required || draftOptionalIds.includes(col.id)}
+                                          disabled={col.required}
+                                          onChange={(e) => {
+                                            if (col.required) return;
+                                            setDraftOptionalIds((prev) =>
+                                              e.target.checked
+                                                ? [...prev, col.id]
+                                                : prev.filter((id) => id !== col.id),
+                                            );
+                                          }}
+                                        />
+                                        {col.label}
+                                        {col.required ? ' (required)' : ''}
+                                      </label>
+                                    </li>
+                                  ))}
+                                </ul>
+                                <div className="cl-col-picker__actions">
+                                  <button
+                                    type="button"
+                                    className="cl-btn cl-btn--secondary cl-btn--sm"
+                                    onClick={() => setDraftOptionalIds(optionalColumnIds)}
+                                  >
+                                    Select all
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="cl-btn cl-btn--secondary cl-btn--sm"
+                                    onClick={() => setDraftOptionalIds(optionalColumnIds.filter((cid) =>
+                                      ['follow_up', 'whatsapp', 'email', 'last_follow_up'].includes(cid)
+                                    ))}
+                                  >
+                                    Reset
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="cl-btn cl-btn--secondary cl-btn--sm"
+                                    onClick={() => setColumnPickerOpen(false)}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="cl-btn cl-btn--primary cl-btn--sm"
+                                    onClick={() => {
+                                      setSelectedOptionalIds(draftOptionalIds);
+                                      saveSelectedOptionalIds(id, draftOptionalIds);
+                                      setColumnPickerOpen(false);
+                                    }}
+                                  >
+                                    Apply
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
                           {(campaign.status === 'draft' || campaign.status === 'paused') && (
                             <>
                               <input
@@ -1153,8 +1292,9 @@ const CampaignDetail = () => {
                   <table className="cl-lead-table cl-lead-table--dense">
                     <thead>
                       <tr>
-                        <th>Name</th>
-                        <th>Phone</th>
+                        {showCol('name') && <th>Name</th>}
+                        {showCol('phone') && <th>Phone</th>}
+                        {showCol('status') && (
                         <th>
                           <MultiSelectFilter
                             label="Status"
@@ -1164,6 +1304,8 @@ const CampaignDetail = () => {
                             onChange={(values) => setFilterValues('status', values)}
                           />
                         </th>
+                        )}
+                        {showCol('outcome') && (
                         <th>
                           <MultiSelectFilter
                             label="Outcome"
@@ -1173,6 +1315,8 @@ const CampaignDetail = () => {
                             onChange={(values) => setFilterValues('outcome', values)}
                           />
                         </th>
+                        )}
+                        {showCol('turns') && (
                         <th className="cl-th--numeric">
                           <MultiSelectFilter
                             label="Turns"
@@ -1183,6 +1327,8 @@ const CampaignDetail = () => {
                             onChange={(values) => setFilterValues('turns', values)}
                           />
                         </th>
+                        )}
+                        {showCol('attempts') && (
                         <th className="cl-th--numeric">
                           <MultiSelectFilter
                             label="Attempts"
@@ -1193,21 +1339,27 @@ const CampaignDetail = () => {
                             onChange={(values) => setFilterValues('attempts', values)}
                           />
                         </th>
-                        <th>Follow-up</th>
-                        <th>WhatsApp</th>
-                        <th>Email</th>
-                        <th>Last follow-up</th>
-                        <th className="text-right">Actions</th>
+                        )}
+                        {schemaFields.map((field) =>
+                          showCol(schemaColumnId(field.key)) ? (
+                            <th key={field.key}>{field.label}</th>
+                          ) : null,
+                        )}
+                        {showCol('follow_up') && <th>Follow-up</th>}
+                        {showCol('whatsapp') && <th>WhatsApp</th>}
+                        {showCol('email') && <th>Email</th>}
+                        {showCol('last_follow_up') && <th>Last follow-up</th>}
+                        {showCol('actions') && <th className="text-right">Actions</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {leadsLoading ? (
                         <tr>
-                          <td colSpan="11" className="text-center text-muted">Loading leads...</td>
+                          <td colSpan={Math.max(visibleColumnIds.length, 1)} className="text-center text-muted">Loading leads...</td>
                         </tr>
                       ) : sortedLeads.length === 0 ? (
                         <tr>
-                          <td colSpan="11" className="text-center py-8">No leads found.</td>
+                          <td colSpan={Math.max(visibleColumnIds.length, 1)} className="text-center py-8">No leads found.</td>
                         </tr>
                       ) : (
                         sortedLeads.map((lead) => (
@@ -1216,9 +1368,10 @@ const CampaignDetail = () => {
                             className={lead.status === 'calling' ? 'cl-lead--live' : ''}
                             onClick={() => handleOpenTranscript(lead)}
                           >
-                            <td className="font-semibold text-primary">{lead.name || '—'}</td>
-                            <td className="font-mono">{lead.phone}</td>
-                            <td>{renderStatusBadges(lead)}</td>
+                            {showCol('name') && <td className="font-semibold text-primary">{lead.name || '—'}</td>}
+                            {showCol('phone') && <td className="font-mono">{lead.phone}</td>}
+                            {showCol('status') && <td>{renderStatusBadges(lead)}</td>}
+                            {showCol('outcome') && (
                             <td>
                               {lead.outcome ? (
                                 <span className={`cl-badge ${lead.outcome === 'Interested' ? 'cl-badge--interested' :
@@ -1235,12 +1388,19 @@ const CampaignDetail = () => {
                                 <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>—</span>
                               )}
                             </td>
-                            <td>{getLeadTurns(lead, turnsIndex)}</td>
-                            <td>{lead.attempts || 0}</td>
-                            <td>{formatFollowUpStatus(lead)}</td>
-                            <td>{formatChannelStatus(lead.whatsapp_follow_up_status)}</td>
-                            <td>{formatChannelStatus(lead.email_follow_up_status)}</td>
-                            <td>{formatLastFollowUp(lead.last_follow_up_at)}</td>
+                            )}
+                            {showCol('turns') && <td>{getLeadTurns(lead, turnsIndex)}</td>}
+                            {showCol('attempts') && <td>{lead.attempts || 0}</td>}
+                            {schemaFields.map((field) =>
+                              showCol(schemaColumnId(field.key)) ? (
+                                <td key={field.key}>{metaValue(lead, field.key) || '—'}</td>
+                              ) : null,
+                            )}
+                            {showCol('follow_up') && <td>{formatFollowUpStatus(lead)}</td>}
+                            {showCol('whatsapp') && <td>{formatChannelStatus(lead.whatsapp_follow_up_status)}</td>}
+                            {showCol('email') && <td>{formatChannelStatus(lead.email_follow_up_status)}</td>}
+                            {showCol('last_follow_up') && <td>{formatLastFollowUp(lead.last_follow_up_at)}</td>}
+                            {showCol('actions') && (
                             <td className="text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex justify-end gap-2.5 flex-wrap items-center">
                                 {(() => {
@@ -1261,7 +1421,11 @@ const CampaignDetail = () => {
                                 <button
                                   className="cl-btn cl-btn--secondary cl-btn--icon cl-btn--sm"
                                   onClick={() => {
-                                    setEditLeadData({ ...lead, original_status: lead.status });
+                                    setEditLeadData({
+                                      ...lead,
+                                      metadata: parseLeadMetadata(lead.metadata),
+                                      original_status: lead.status,
+                                    });
                                     setIsEditLeadOpen(true);
                                   }}
                                   title="Edit Lead"
@@ -1283,6 +1447,7 @@ const CampaignDetail = () => {
                                 </button>
                               </div>
                             </td>
+                            )}
                           </tr>
                         ))
                       )}
@@ -1419,24 +1584,25 @@ const CampaignDetail = () => {
         )}
       >
         <form className="ent-form" onSubmit={handleAddLead}>
-          <label>
-            Full Name
+            <label>
+            {labelForField(fieldConfig, 'name')}{isFieldRequired(fieldConfig, 'name') ? ' *' : ''}
             <input
               type="text"
               value={newLead.name}
               onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
               placeholder="e.g. Rahul Patil"
+              required={isFieldRequired(fieldConfig, 'name')}
             />
           </label>
 
           <label>
-            Phone Number (with prefix)
+            {labelForField(fieldConfig, 'phone')}{isFieldRequired(fieldConfig, 'phone') ? ' *' : ''}
             <input
               type="tel"
               value={newLead.phone}
               onChange={(e) => setNewLead({ ...newLead, phone: e.target.value })}
               placeholder="e.g. +919988776655"
-              required
+              required={isFieldRequired(fieldConfig, 'phone')}
             />
           </label>
 
@@ -1452,21 +1618,35 @@ const CampaignDetail = () => {
             </select>
           </label>
 
-          {getDynamicLeadFields()
-            .filter((f) => f.key !== 'lead_name' && f.key !== 'lead_phone' && f.key !== 'name' && f.key !== 'phone')
-            .map((field) => (
+          {schemaFields.map((field) => (
               <label key={field.key}>
-                {field.key.replace(/_/g, ' ')}{field.required ? ' *' : ''}
-                <input
-                  type={field.type === 'number' ? 'number' : 'text'}
-                  required={field.required}
-                  value={newLead.metadata[field.key] || ''}
-                  onChange={(e) => setNewLead({
-                    ...newLead,
-                    metadata: { ...newLead.metadata, [field.key]: e.target.value },
-                  })}
-                  placeholder={field.description || ''}
-                />
+                {field.label}{field.required ? ' *' : ''}
+                {field.type === 'dropdown' && field.options?.length ? (
+                  <select
+                    required={field.required}
+                    value={newLead.metadata[field.key] || ''}
+                    onChange={(e) => setNewLead({
+                      ...newLead,
+                      metadata: { ...newLead.metadata, [field.key]: e.target.value },
+                    })}
+                  >
+                    <option value="">Select…</option>
+                    {field.options.map((opt) => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    required={field.required}
+                    value={newLead.metadata[field.key] || ''}
+                    onChange={(e) => setNewLead({
+                      ...newLead,
+                      metadata: { ...newLead.metadata, [field.key]: e.target.value },
+                    })}
+                    placeholder={field.placeholder || ''}
+                  />
+                )}
               </label>
             ))}
 
@@ -1517,21 +1697,35 @@ const CampaignDetail = () => {
               </select>
             </label>
 
-            {getDynamicLeadFields()
-              .filter((f) => f.key !== 'lead_name' && f.key !== 'lead_phone' && f.key !== 'name' && f.key !== 'phone')
-              .map((field) => (
+            {schemaFields.map((field) => (
                 <label key={field.key}>
-                  {field.key.replace(/_/g, ' ')}{field.required ? ' *' : ''}
-                  <input
-                    type={field.type === 'number' ? 'number' : 'text'}
-                    required={field.required}
-                    value={editLeadData.metadata?.[field.key] || ''}
-                    onChange={(e) => setEditLeadData({
-                      ...editLeadData,
-                      metadata: { ...(editLeadData.metadata || {}), [field.key]: e.target.value },
-                    })}
-                    placeholder={field.description || ''}
-                  />
+                  {field.label}{field.required ? ' *' : ''}
+                  {field.type === 'dropdown' && field.options?.length ? (
+                    <select
+                      required={field.required}
+                      value={editLeadData.metadata?.[field.key] || ''}
+                      onChange={(e) => setEditLeadData({
+                        ...editLeadData,
+                        metadata: { ...(editLeadData.metadata || {}), [field.key]: e.target.value },
+                      })}
+                    >
+                      <option value="">Select…</option>
+                      {field.options.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.type === 'number' ? 'number' : 'text'}
+                      required={field.required}
+                      value={editLeadData.metadata?.[field.key] || ''}
+                      onChange={(e) => setEditLeadData({
+                        ...editLeadData,
+                        metadata: { ...(editLeadData.metadata || {}), [field.key]: e.target.value },
+                      })}
+                      placeholder={field.placeholder || ''}
+                    />
+                  )}
                 </label>
               ))}
 

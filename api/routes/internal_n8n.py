@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from api.auth import get_pool, require_admin
 from followups import repository as followups_repo
+from followups.interested import DEFAULT_FOLLOW_UP_TARGET, FOLLOW_UP_TARGET_OPTIONS
 from integrations.n8n.config import GLOBAL_WEBHOOK_SETTING, N8nConfig
-from integrations.n8n.payload import PAYLOAD_FIELD_SOURCES, build_connectivity_test_payload, build_test_payload
-from integrations.n8n.service import N8nService
-from integrations.n8n.url_validation import validate_n8n_webhook_url
+from integrations.n8n.payload import PAYLOAD_FIELD_SOURCES, build_test_payload
+from integrations.n8n import workflows as n8n_workflows
 
 router = APIRouter(prefix="/internal/n8n", tags=["internal-n8n"])
 
 SETTING_LAST_TEST = "n8n_webhook_last_tested_at"
 SETTING_LAST_STATUS = "n8n_webhook_last_test_status"
+SETTING_FOLLOW_UP_TARGET = "n8n_follow_up_target"
 
 
 class N8nTestBody(BaseModel):
@@ -38,9 +38,24 @@ class N8nSettingsBody(BaseModel):
     )
 
 
+class N8nFollowUpTargetBody(BaseModel):
+    follow_up_target: str = Field(
+        ...,
+        validation_alias=AliasChoices("follow_up_target", "followUpTarget"),
+    )
+
+
+_LEGACY_GLOBAL_GONE = (
+    "Global N8N follow-up configuration is retired. "
+    "Configure campaign-scoped webhooks at Admin → Webhooks "
+    "(client → campaign → event → URL) and use "
+    "POST /internal/webhook-configs/{id}/test for connectivity."
+)
+
+
 @router.get("/status")
 async def n8n_status(_admin=Depends(require_admin), pool=Depends(get_pool)):
-    """Show whether remote n8n webhook is configured (no secrets returned)."""
+    """Deprecated read-only status. Does not participate in event dispatch."""
     cfg = await N8nConfig.resolve(pool)
     env_cfg = N8nConfig.from_env()
     db_url = await followups_repo.get_setting(pool, GLOBAL_WEBHOOK_SETTING)
@@ -49,6 +64,8 @@ async def n8n_status(_admin=Depends(require_admin), pool=Depends(get_pool)):
     source = cfg.url_source or ("env" if env_cfg.lead_webhook_url else None)
     return {
         "configured": cfg.is_configured,
+        "deprecated": True,
+        "dispatch_note": "Event dispatch uses campaign webhook_configs only; this status is informational.",
         "base_url": cfg.base_url or env_cfg.base_url or None,
         "lead_webhook_url_set": bool(cfg.lead_webhook_url),
         "lead_webhook_url_source": "database" if db_url else source,
@@ -64,85 +81,220 @@ async def n8n_status(_admin=Depends(require_admin), pool=Depends(get_pool)):
 
 @router.get("/settings")
 async def n8n_get_settings(_admin=Depends(require_admin), pool=Depends(get_pool)):
-    """Return saved webhook URL (full URL for admin — not exposed to client UI)."""
+    """Deprecated read-only view of legacy global settings. Not used for dispatch."""
     db_url = await followups_repo.get_setting(pool, GLOBAL_WEBHOOK_SETTING)
     env_cfg = N8nConfig.from_env()
     effective = await N8nConfig.resolve(pool)
     url = db_url or env_cfg.lead_webhook_url or ""
     return {
+        "deprecated": True,
+        "dispatch_note": "Legacy global URL is ignored by campaign event dispatch.",
         "webhook_url": url,
         "configured": effective.is_configured,
         "source": "database" if db_url else ("env" if env_cfg.lead_webhook_url else None),
+        "follow_up_target": await followups_repo.get_setting(pool, SETTING_FOLLOW_UP_TARGET) or DEFAULT_FOLLOW_UP_TARGET,
+        "follow_up_target_options": FOLLOW_UP_TARGET_OPTIONS,
         "precedence": [
-            "client-specific database n8n_lead_webhook_url:{client_id}",
-            "global database n8n_lead_webhook_url",
-            "N8N_LEAD_WEBHOOK_URL environment variable",
+            "RETIRED — campaign webhook_configs(campaign_id, event) only",
         ],
     }
 
 
+@router.put("/settings/follow-up-target")
+async def n8n_save_follow_up_target(
+    body: N8nFollowUpTargetBody,
+    _admin=Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    raise HTTPException(410, _LEGACY_GLOBAL_GONE)
+
+
 @router.put("/settings")
 async def n8n_save_settings(body: N8nSettingsBody, _admin=Depends(require_admin), pool=Depends(get_pool)):
-    url = body.webhook_url.strip().replace("/webhook-test/", "/webhook/")
-    ok, err = validate_n8n_webhook_url(url)
-    if not ok:
-        raise HTTPException(400, err or "Invalid webhook URL")
-    await followups_repo.set_setting(pool, GLOBAL_WEBHOOK_SETTING, url)
-    return {"ok": True, "configured": True, "webhook_url": url}
+    raise HTTPException(410, _LEGACY_GLOBAL_GONE)
 
 
 @router.post("/settings/test")
 async def n8n_test_saved_settings(_admin=Depends(require_admin), pool=Depends(get_pool)):
-    cfg = await N8nConfig.resolve(pool)
-    if not cfg.is_configured:
-        raise HTTPException(400, "n8n webhook URL is not configured")
-    service = N8nService(cfg, pool=pool)
-    payload = build_connectivity_test_payload()
-    result = await service.send_test_event(payload)
-    now = datetime.now(timezone.utc).isoformat()
-    status = "connected" if result.ok else "failed"
-    await followups_repo.set_setting(pool, SETTING_LAST_TEST, now)
-    await followups_repo.set_setting(pool, SETTING_LAST_STATUS, status)
-    if not result.ok:
-        raise HTTPException(502, result.error or "n8n connection test failed")
-    return {
-        "ok": True,
-        "status": status,
-        "status_code": result.status_code,
-        "last_tested_at": now,
-        "response_preview": result.response_preview,
-        "message": "Connected to n8n",
-    }
+    raise HTTPException(410, _LEGACY_GLOBAL_GONE)
 
 
 @router.post("/test")
 async def n8n_test(body: N8nTestBody, _admin=Depends(require_admin), pool=Depends(get_pool)):
-    """Send a synthetic test event to the configured n8n webhook."""
-    cfg = await N8nConfig.resolve(pool, client_id=body.client_id)
-    service = N8nService(cfg, pool=pool)
-    if not service.is_configured() and not body.dry_run:
-        raise HTTPException(
-            400,
-            "N8N_LEAD_WEBHOOK_URL is not configured. Set it in Admin → Webhooks → N8N Follow-up Workflow.",
-        )
+    """Dry-run payload inspection only. Live global POSTs are disabled."""
+    if not body.dry_run:
+        raise HTTPException(410, _LEGACY_GLOBAL_GONE)
 
-    payload = build_test_payload(client_id=body.client_id) if body.dry_run else build_connectivity_test_payload()
-    if body.dry_run:
-        return {
-            "ok": True,
-            "dry_run": True,
-            "payload": payload,
-            "field_sources": PAYLOAD_FIELD_SOURCES,
-        }
-
-    result = await service.send_test_event(payload)
-    if result.skipped:
-        raise HTTPException(400, result.error or "n8n not configured")
-    if not result.ok:
-        raise HTTPException(502, result.error or "n8n request failed")
-
+    payload = build_test_payload(client_id=body.client_id)
     return {
         "ok": True,
-        "status_code": result.status_code,
-        "response_preview": result.response_preview,
+        "dry_run": True,
+        "payload": payload,
+        "field_sources": PAYLOAD_FIELD_SOURCES,
     }
+
+
+# ── Workflow registry (inert: does not change runtime dispatch) ────────
+
+
+class CreateN8nWorkflowBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    webhook_url: str = Field(
+        ...,
+        min_length=1,
+        max_length=2048,
+        validation_alias=AliasChoices("webhook_url", "webhookUrl"),
+    )
+    description: str | None = None
+    enabled: bool = True
+
+
+class PatchN8nWorkflowBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    webhook_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        validation_alias=AliasChoices("webhook_url", "webhookUrl"),
+    )
+    description: str | None = None
+    enabled: bool | None = None
+
+
+class N8nWorkflowTestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dry_run: bool = True
+
+
+def _workflow_http_error(exc: n8n_workflows.WorkflowError) -> HTTPException:
+    if exc.code == "not_found":
+        return HTTPException(404, exc.message)
+    return HTTPException(400, exc.message)
+
+
+@router.get("/workflows")
+async def list_n8n_workflows(_admin=Depends(require_admin), pool=Depends(get_pool)):
+    rows = await n8n_workflows.list_workflows(pool)
+    return {"workflows": rows}
+
+
+@router.post("/workflows")
+async def create_n8n_workflow(
+    body: CreateN8nWorkflowBody,
+    _admin=Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    try:
+        row = await n8n_workflows.create_workflow(
+            pool,
+            name=body.name,
+            webhook_url=body.webhook_url,
+            description=body.description,
+            enabled=body.enabled,
+        )
+    except n8n_workflows.WorkflowError as exc:
+        raise _workflow_http_error(exc) from exc
+    return {"ok": True, "workflow": row}
+
+
+@router.get("/workflows/{workflow_id}")
+async def get_n8n_workflow(
+    workflow_id: UUID,
+    _admin=Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    row = await n8n_workflows.get_workflow(pool, workflow_id)
+    if not row:
+        raise HTTPException(404, "Workflow not found")
+    return {"workflow": row}
+
+
+@router.patch("/workflows/{workflow_id}")
+async def patch_n8n_workflow(
+    workflow_id: UUID,
+    body: PatchN8nWorkflowBody,
+    _admin=Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(400, "No workflow fields to update")
+    try:
+        row = await n8n_workflows.update_workflow(pool, workflow_id, fields=fields)
+    except n8n_workflows.WorkflowError as exc:
+        raise _workflow_http_error(exc) from exc
+    if not row:
+        raise HTTPException(404, "Workflow not found")
+    return {"ok": True, "workflow": row}
+
+
+@router.delete("/workflows/{workflow_id}")
+async def delete_n8n_workflow(
+    workflow_id: UUID,
+    _admin=Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    try:
+        row = await n8n_workflows.delete_workflow(pool, workflow_id)
+    except n8n_workflows.WorkflowError as exc:
+        raise _workflow_http_error(exc) from exc
+    if not row:
+        raise HTTPException(404, "Workflow not found")
+    return {"ok": True, "workflow": row}
+
+
+@router.post("/workflows/{workflow_id}/test")
+async def test_n8n_workflow(
+    workflow_id: UUID,
+    body: N8nWorkflowTestBody,
+    _admin=Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    """Record connectivity-test metadata. Live n8n POST is disabled in Release 2."""
+    if not body.dry_run:
+        raise HTTPException(
+            400,
+            "Live workflow tests are disabled until the resolver release. Use dry_run=true.",
+        )
+    try:
+        result = await n8n_workflows.record_dry_test(pool, workflow_id)
+    except n8n_workflows.WorkflowError as exc:
+        raise _workflow_http_error(exc) from exc
+    return {"ok": True, **result}
+
+
+class PlatformDefaultWorkflowBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workflow_id: UUID | None = Field(
+        default=None,
+        validation_alias=AliasChoices("workflow_id", "workflowId"),
+    )
+
+
+@router.get("/settings/platform-default-workflow")
+async def get_platform_default_workflow(_admin=Depends(require_admin), pool=Depends(get_pool)):
+    from integrations.n8n.routing import PLATFORM_DEFAULT_WORKFLOW_SETTING, get_platform_default_workflow_id
+
+    workflow_id = await get_platform_default_workflow_id(pool)
+    workflow = None
+    if workflow_id:
+        workflow = await n8n_workflows.get_workflow(pool, workflow_id)
+    return {
+        "setting": PLATFORM_DEFAULT_WORKFLOW_SETTING,
+        "workflow_id": str(workflow_id) if workflow_id else None,
+        "workflow": workflow,
+    }
+
+
+@router.put("/settings/platform-default-workflow")
+async def put_platform_default_workflow(
+    body: PlatformDefaultWorkflowBody,
+    _admin=Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    raise HTTPException(410, _LEGACY_GLOBAL_GONE)

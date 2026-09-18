@@ -1,12 +1,9 @@
 import './DashboardInterestedLeads.css';
 
-const isInterested = (outcome) => {
-  const o = (outcome || '').toString();
-  return o === 'Interested' || (o.includes('Interest') && o !== 'Not_Interested');
-};
+import { isInterestedOutcome } from '../../utils/analytics/helpers';
 
 const DashboardInterestedLeads = ({ calls = [], onOpenLead }) => {
-  const rows = (calls || []).filter((c) => isInterested(c.outcome)).slice(0, 12);
+  const rows = (calls || []).filter((c) => isInterestedOutcome(c)).slice(0, 12);
 
   return (
     <section className="cl-interested-panel">

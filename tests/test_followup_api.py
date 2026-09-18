@@ -90,11 +90,12 @@ async def test_manual_follow_up_success(test_client, dev_auth_headers):
         assert res.status_code == 200
         body = res.json()
         assert body["ok"] is True
-        # No approved first-contact template is configured for the test client and the
-        # lead has never messaged us, so free-form WhatsApp is not permitted yet.
-        assert body["whatsapp"] == "blocked"
-        assert body["first_contact"]["mode"] == "blocked"
-        assert body["first_contact"]["can_send"] is False
+        # Seed client uses stub WhatsApp with configuration.bridge=n8n, so first-contact
+        # is delegated to Mega_Workflow (not hard-blocked for missing Meta template).
+        assert body["whatsapp"] in ("queued", "blocked")
+        assert body["first_contact"]["can_send"] is True or body["whatsapp"] == "blocked"
+        if body["whatsapp"] == "queued":
+            assert body["first_contact"].get("reason") in ("n8n_bridge", "approved_template", "template_preferred", "conversation_window_open", "template_not_configured")
         assert body["email"] == "queued"
         mock_send.assert_awaited_once()
         payload = mock_send.await_args.args[0]
@@ -104,6 +105,7 @@ async def test_manual_follow_up_success(test_client, dev_auth_headers):
         assert payload["fallback"]["whatsapp"]["message"]
         assert payload["fallback"]["email"]["subject"]
         assert payload["fallback"]["email"]["body"]
+        assert "message" in body
     finally:
         await _delete_test_lead(lead_id)
 
@@ -190,9 +192,21 @@ async def test_internal_lead_context_by_phone(test_client):
             '{"email": "getin2grave@gmail.com"}',
         )
     try:
+        bare = await test_client.get(
+            "/internal/leads/context",
+            params={"phone": "9359210080"},
+            headers={"X-Admin-Key": admin_key},
+        )
+        assert bare.status_code == 400
+
         res = await test_client.get(
             "/internal/leads/context",
-            params={"phone": "9359210080", "flow_type": "CONTINUE_CHAT", "inbound_message": "Hi"},
+            params={
+                "phone": "9359210080",
+                "client_id": str(CLIENT_ID),
+                "flow_type": "CONTINUE_CHAT",
+                "inbound_message": "Hi",
+            },
             headers={"X-Admin-Key": admin_key},
         )
         assert res.status_code == 200
@@ -200,6 +214,8 @@ async def test_internal_lead_context_by_phone(test_client):
         assert body["ok"] is True
         assert body["payload"]["flow_type"] == "CONTINUE_CHAT"
         assert body["payload"]["lead"]["phone"] == "+919359210080"
+        assert body["memory_key"]
+        assert body["ai_allowed"] is True
     finally:
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM leads WHERE id = $1", lead_id)

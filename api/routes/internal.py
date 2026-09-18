@@ -111,9 +111,10 @@ class PatchCampaignBody(BaseModel):
 
 class WebhookConfigBody(BaseModel):
     client_id: UUID
+    campaign_id: UUID
     event: str
     url: str
-    secret: str
+    secret: str | None = None
 
 
 class ClientStatusBody(BaseModel):
@@ -270,8 +271,14 @@ async def list_client_webhooks(
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
 ):
-    rows = await pool.fetch("SELECT * FROM webhook_configs WHERE client_id = $1", client_id)
-    return {"webhooks": [dict(r) for r in rows]}
+    client = await pg_db.get_client(pool, client_id)
+    if client is None:
+        raise HTTPException(404, "Client not found")
+    webhooks = await pg_db.get_webhook_configs(pool, client_id, include_inactive=True)
+    return {
+        "webhooks": webhooks,
+        "events": sorted(pg_db.WEBHOOK_EVENTS),
+    }
 
 
 @router.post("/bot-configs")
@@ -879,10 +886,90 @@ async def create_webhook_config(
     _: None = Depends(require_admin),
     pool=Depends(get_pool),
 ):
+    event = (body.event or "").strip()
+    if event not in pg_db.WEBHOOK_EVENTS:
+        raise HTTPException(
+            422,
+            f"Invalid event. Allowed: {', '.join(sorted(pg_db.WEBHOOK_EVENTS))}",
+        )
+    url = (body.url or "").strip()
+    if not url.startswith(("https://", "http://")):
+        raise HTTPException(422, "url must be an absolute http(s) webhook URL")
+
+    campaign = await pg_db.get_campaign(pool, body.campaign_id, body.client_id)
+    if campaign is None:
+        raise HTTPException(404, "Campaign not found for this client")
+
     wh_id = await pg_db.upsert_webhook_config(
-        pool, body.client_id, body.event, body.url, body.secret
+        pool,
+        body.client_id,
+        body.campaign_id,
+        event,
+        url,
+        body.secret,
     )
-    return {"id": str(wh_id)}
+    row = await pg_db.get_webhook_config_by_id(pool, wh_id)
+    return {"id": str(wh_id), "webhook": row}
+
+
+@router.delete("/webhook-configs/{webhook_id}")
+async def delete_webhook_config(
+    webhook_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    existing = await pg_db.get_webhook_config_by_id(pool, webhook_id)
+    if existing is None:
+        raise HTTPException(404, "Webhook config not found")
+    deleted = await pg_db.delete_webhook_config(pool, webhook_id)
+    if not deleted:
+        raise HTTPException(404, "Webhook config not found")
+    return {"ok": True, "id": str(webhook_id)}
+
+
+@router.post("/webhook-configs/{webhook_id}/test")
+async def test_webhook_config(
+    webhook_id: UUID,
+    _: None = Depends(require_admin),
+    pool=Depends(get_pool),
+):
+    """POST a connectivity probe to the configured campaign webhook URL."""
+    from integrations.n8n.routing import SOURCE_CAMPAIGN_WEBHOOK, ResolvedWorkflow, n8n_config_for
+    from integrations.n8n.service import N8nService
+
+    row = await pg_db.get_webhook_config_by_id(pool, webhook_id)
+    if row is None:
+        raise HTTPException(404, "Webhook config not found")
+    url = str(row.get("url") or "").strip()
+    if not url:
+        raise HTTPException(422, "Webhook has no URL configured")
+
+    dest = ResolvedWorkflow(
+        ok=True,
+        webhook_url=url,
+        source=SOURCE_CAMPAIGN_WEBHOOK,
+        webhook_secret=(str(row["secret"]).strip() if row.get("secret") else None),
+        event=str(row.get("event") or ""),
+        workflow_id=str(row["id"]),
+        workflow_name=str(row.get("campaign_name") or "") or None,
+    )
+    service = N8nService(n8n_config_for(dest), pool=pool)
+    result = await service.send_test_event()
+    status = "ok" if result.ok else "failed"
+    await pg_db.mark_webhook_config_tested(pool, webhook_id, status=status)
+    if not result.ok:
+        raise HTTPException(
+            502,
+            result.error or "Webhook test failed",
+        )
+    return {
+        "ok": True,
+        "message": f"Connected to campaign webhook ({result.status_code})",
+        "status_code": result.status_code,
+        "url": url.split("?")[0],
+        "event": row.get("event"),
+        "campaign_id": str(row.get("campaign_id")) if row.get("campaign_id") else None,
+    }
 
 
 @router.get("/calls")

@@ -599,6 +599,7 @@ def _register_api_routes() -> None:
         internal_messages,
         internal_n8n,
         internal_leads,
+        internal_followups,
         internal_script_configs,
         leads,
         messages,
@@ -610,6 +611,7 @@ def _register_api_routes() -> None:
     app.include_router(internal_script_configs.router)
     app.include_router(internal_messages.router)
     app.include_router(internal_n8n.router)
+    app.include_router(internal_followups.router)
     app.include_router(internal_leads.router)
     app.include_router(campaigns.router)
     app.include_router(leads.router)

@@ -31,16 +31,24 @@ async def list_conversations(
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(
     conversation_id: UUID,
+    limit: int = Query(100, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     client: dict = Depends(get_client_from_token),
     pool=Depends(get_pool),
 ):
     cid = client_id_uuid(client)
     conv, messages = await messages_service.get_client_conversation_thread(
-        pool, cid, conversation_id
+        pool, cid, conversation_id, limit=limit, offset=offset
     )
     if not conv:
         raise HTTPException(404, "conversation not found")
-    return {"conversation": conv, "messages": messages}
+    return {
+        "conversation": conv,
+        "messages": messages,
+        "limit": limit,
+        "offset": offset,
+        "has_more": len(messages) >= limit,
+    }
 
 
 @router.get("/templates")

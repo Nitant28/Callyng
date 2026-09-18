@@ -95,7 +95,9 @@ const Dashboard = () => {
   }, []);
 
   const handleCampaignClick = (camp) => {
-    navigate(`/app/campaigns/${camp.campaignId || camp.id}`);
+    const campaignId = camp.campaignId || camp.id;
+    if (!campaignId) return;
+    navigate(`/app/campaigns/${campaignId}`);
   };
 
   const handleConfirmStart = async () => {
