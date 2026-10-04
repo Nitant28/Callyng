@@ -1,4 +1,4 @@
-# AakashVani - Local Setup
+# Callyng - Local Setup
 
 ## Prerequisites
 
