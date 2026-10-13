@@ -1,20 +1,24 @@
+"""Call recording management for Telnyx telephony and media storage."""
+
 import json
 import os
 import urllib.parse
-from loguru import logger
+from pathlib import Path
+from typing import Any
+
 import aiohttp
-from fastapi import Request
-from fastapi.responses import PlainTextResponse
 import boto3
 from botocore.config import Config
+from fastapi import Request
+from fastapi.responses import PlainTextResponse
+from loguru import logger
 
-from plivo_hangup import _parse_plivo_payload
-from telephony import public_telephony_base_url, _plivo_auth
 import db.postgres as pg_db
+from telephony import _telnyx_credentials, public_telephony_base_url
 
 
 # ---------------------------------------------------------------------------
-# R2 helpers (kept for legacy keys & optional future use)
+# R2 / S3 helpers (kept for legacy keys & cloud storage)
 # ---------------------------------------------------------------------------
 
 def _r2_client():
@@ -42,140 +46,160 @@ def generate_presigned_url(object_key: str, expires_in: int = 3600) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Plivo recording URL helpers
+# Recording URL resolution helpers
 # ---------------------------------------------------------------------------
-
-def generate_plivo_recording_url(recording_url: str, expires_in: int = 3600) -> str:
-    """Return a Plivo recording URL with Basic Auth embedded for direct playback.
-
-    Plivo media URLs require authentication. We embed the credentials directly
-    so the browser / frontend can fetch the MP3 without an extra proxy hop.
-    """
-    auth_id, auth_token = _plivo_auth()
-    parsed = urllib.parse.urlparse(recording_url)
-    authed = parsed._replace(
-        netloc=f"{auth_id}:{auth_token}@{parsed.hostname}"
-        + (f":{parsed.port}" if parsed.port else "")
-    )
-    return urllib.parse.urlunparse(authed)
-
 
 def resolve_recording_url(recording_key: str, expires_in: int = 3600) -> str:
     """Given a stored recording_key, return a playable URL.
 
-    Handles three formats:
-    - plivo:<full-plivo-url>  → authenticates with Plivo creds
-    - recordings/...          → legacy R2 key, generates presigned URL
-    - local:<filename>        → not handled here (caller should serve file)
+    Handles formats:
+    - telnyx:<full-url>  → returns the Telnyx media URL
+    - plivo:<full-url>   → legacy support
+    - recordings/...     → legacy R2 key, generates presigned URL
+    - http:// or https://→ direct URL
     """
+    if not recording_key:
+        return ""
+    if recording_key.startswith("telnyx:"):
+        return recording_key[len("telnyx:"):]
     if recording_key.startswith("plivo:"):
-        plivo_url = recording_key[len("plivo:"):]
-        return generate_plivo_recording_url(plivo_url, expires_in)
+        return recording_key[len("plivo:"):]
+    if recording_key.startswith(("http://", "https://")):
+        return recording_key
     # Legacy R2 key
-    return generate_presigned_url(recording_key, expires_in)
+    try:
+        return generate_presigned_url(recording_key, expires_in)
+    except Exception as exc:
+        logger.warning("Failed to generate presigned URL for recording key {}: {}", recording_key, exc)
+        return ""
+
+
+# Compatibility alias
+generate_plivo_recording_url = resolve_recording_url
 
 
 # ---------------------------------------------------------------------------
-# Plivo Record API — start recording on an active call
+# Telnyx Record API — start recording on an active call
 # ---------------------------------------------------------------------------
 
-async def start_plivo_recording(
+async def start_telnyx_recording(
     session: aiohttp.ClientSession,
-    call_uuid: str,
+    call_control_id: str,
     session_call_id: str,
     *,
     host: str = "",
 ) -> bool:
-    """Fire Plivo Record API. Returns True if accepted (200/202)."""
-    auth_id, auth_token = _plivo_auth()
-    url = f"https://api.plivo.com/v1/Account/{auth_id}/Call/{call_uuid}/Record/"
-    base = public_telephony_base_url(host)
-    callback = f"{base}/plivo-recording?session_call_id={urllib.parse.quote(session_call_id)}"
-    data = {
-        "time_limit": 3600,
-        "file_format": "mp3",
-        "callback_url": callback,
-        "callback_method": "POST",
+    """Fire Telnyx Call Control Record Start API."""
+    api_key, _, _, _ = _telnyx_credentials()
+    if not api_key or not call_control_id:
+        return False
+
+    url = f"https://api.telnyx.com/v2/calls/{call_control_id}/actions/record_start"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
     }
-    auth = aiohttp.BasicAuth(auth_id, auth_token)
-    async with session.post(url, json=data, auth=auth) as resp:
-        if resp.status in (200, 202):
-            logger.info("Recording started for call_uuid={} session_call_id={}", call_uuid, session_call_id)
-            return True
-        body = await resp.text()
-        logger.error("Record API failed ({}) for {}: {}", resp.status, call_uuid, body)
+    payload: dict[str, Any] = {
+        "format": "mp3",
+        "channels": "dual",
+        "play_beep": False,
+    }
+    try:
+        async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status in (200, 201, 202):
+                logger.info(
+                    "Telnyx recording started for call_control_id={} session_call_id={}",
+                    call_control_id,
+                    session_call_id,
+                )
+                return True
+            body = await resp.text()
+            logger.warning("Telnyx Record API returned ({}) for {}: {}", resp.status, call_control_id, body)
+            return False
+    except Exception as exc:
+        logger.warning("Telnyx Record API error for {}: {}", call_control_id, exc)
         return False
 
 
+# Compatibility alias
+start_plivo_recording = start_telnyx_recording
+
+
 # ---------------------------------------------------------------------------
-# Plivo recording webhook — called when recording is ready
+# Telnyx recording webhook handler
 # ---------------------------------------------------------------------------
 
-async def handle_plivo_recording(request: Request) -> PlainTextResponse:
-    """Webhook: Plivo POSTs here when recording file is ready.
-
-    Instead of downloading and re-uploading, we store the Plivo-hosted
-    recording URL directly. Plivo retains recordings for 90 days.
-    """
+async def handle_telnyx_recording(request: Request) -> PlainTextResponse:
+    """Webhook: processes Telnyx recording saved events."""
     pool = getattr(request.app.state, "pool", None)
-    payload = await _parse_plivo_payload(request)
-
-    # Plivo's Record API delivers its callback as a single form field "response"
-    # containing a JSON object with snake_case keys (record_url, call_uuid,
-    # recording_duration). Other Plivo webhooks send flat top-level params
-    # (RecordUrl, CallUUID, ...). Merge the JSON envelope so both formats work.
-    record_data = dict(payload)
-    raw_response = payload.get("response")
-    if raw_response:
+    raw_body = await request.body()
+    payload: dict[str, Any] = dict(request.query_params)
+    if raw_body:
         try:
-            parsed = json.loads(raw_response)
+            parsed = json.loads(raw_body.decode("utf-8"))
             if isinstance(parsed, dict):
-                record_data.update(parsed)
-        except (ValueError, TypeError):
+                payload.update(parsed)
+        except Exception:
             pass
 
-    session_call_id = (
-        record_data.get("session_call_id")
-        or request.query_params.get("session_call_id")
-        or ""
-    )
-    call_uuid = record_data.get("CallUUID") or record_data.get("call_uuid") or ""
-    record_url = record_data.get("RecordUrl") or record_data.get("record_url") or ""
-    recording_duration = (
-        record_data.get("RecordingDuration")
-        or record_data.get("recording_duration")
-        or "0"
-    )
+    data = payload.get("data", {}) if isinstance(payload.get("data"), dict) else payload
+    event_payload = data.get("payload", {}) if isinstance(data.get("payload"), dict) else data
 
-    # 1. Look up call_log
+    call_control_id = str(
+        event_payload.get("call_control_id")
+        or event_payload.get("call_leg_id")
+        or payload.get("CallUUID")
+        or payload.get("call_uuid")
+        or ""
+    ).strip()
+
+    record_url = str(
+        event_payload.get("recording_urls", {}).get("mp3")
+        or event_payload.get("public_recording_urls", {}).get("mp3")
+        or event_payload.get("recording_url")
+        or payload.get("RecordUrl")
+        or payload.get("record_url")
+        or ""
+    ).strip()
+
+    session_call_id = str(
+        request.query_params.get("session_call_id")
+        or payload.get("session_call_id")
+        or ""
+    ).strip()
+
+    if not pool:
+        return PlainTextResponse("OK", status_code=200)
+
     call_log = None
-    if session_call_id and pool:
+    if session_call_id:
         call_log = await pg_db.get_call_log_by_session(pool, session_call_id)
-    if not call_log and call_uuid and pool:
-        call_log = await pg_db.get_call_log_by_call_sid(pool, call_uuid)
+    if not call_log and call_control_id:
+        call_log = await pg_db.get_call_log_by_call_sid(pool, call_control_id)
 
     if not call_log:
-        logger.warning("plivo-recording: no call_log for CallUUID={} session_call_id={}",
-                       call_uuid, session_call_id)
+        logger.warning(
+            "telnyx-recording: no call_log for call_control_id={} session_call_id={}",
+            call_control_id,
+            session_call_id,
+        )
         return PlainTextResponse("OK", status_code=200)
 
     if not record_url:
-        logger.warning("plivo-recording: empty RecordUrl for session_call_id={}", session_call_id)
+        logger.warning("telnyx-recording: empty record_url for session_call_id={}", session_call_id)
         return PlainTextResponse("OK", status_code=200)
 
     scid = str(call_log["session_call_id"])
-
-    # 2. Store the Plivo recording URL directly (prefixed with "plivo:")
-    stored_key = f"plivo:{record_url}"
+    stored_key = f"telnyx:{record_url}"
 
     try:
         await pg_db.update_call_log_recording_url(pool, scid, stored_key)
+        logger.info("Recording saved: session_call_id={} telnyx_url={}", scid, record_url)
     except Exception as exc:
         logger.error("Failed to save recording URL for session={}: {}", scid, exc)
-        return PlainTextResponse("OK", status_code=200)
 
-    logger.info("Recording saved: session_call_id={} plivo_url={} duration={}s",
-                scid, record_url, recording_duration)
     return PlainTextResponse("OK", status_code=200)
 
 
+# Compatibility alias
+handle_plivo_recording = handle_telnyx_recording

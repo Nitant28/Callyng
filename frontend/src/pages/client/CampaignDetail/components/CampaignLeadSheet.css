@@ -148,7 +148,7 @@
   /* Premium gradient background with subtle glass effect */
   background: linear-gradient(135deg, rgba(239, 246, 255, 0.9), rgba(219, 234, 254, 0.9));
   backdrop-filter: blur(4px);
-  border-left: 4px solid #2563EB;
+  border-left: 4px solid #047857;
   transition: background 0.3s ease, box-shadow 0.3s ease;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
@@ -160,12 +160,12 @@
 
 /* Left border accent */
 .cdet-lead-sheet__row--live td:first-child {
-  border-left: 6px solid #2563EB;
+  border-left: 6px solid #047857;
 }
 
 /* Animated LIVE badge for premium feel */
 .cdet-lead-sheet__row--live .cl-badge--live {
-  background: linear-gradient(45deg, #3B82F6, #60A5FA);
+  background: linear-gradient(45deg, #10B981, #60A5FA);
   color: #fff;
   animation: badge-pulse 2s infinite;
 }
@@ -187,23 +187,23 @@
 .pulsing-icon {
   animation: pulse-blue 1.5s infinite;
   display: inline-block;
-  color: #2563EB;
-  filter: drop-shadow(0 0 4px rgba(37, 99, 235, 0.6));
+  color: #047857;
+  filter: drop-shadow(0 0 4px rgba(4, 120, 87, 0.6));
 }
 
 @keyframes pulse-blue {
   0% {
     transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7);
+    box-shadow: 0 0 0 0 rgba(4, 120, 87, 0.7);
   }
 
   70% {
     transform: scale(1.05);
-    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
+    box-shadow: 0 0 0 8px rgba(4, 120, 87, 0);
   }
 
   100% {
     transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+    box-shadow: 0 0 0 0 rgba(4, 120, 87, 0);
   }
 }

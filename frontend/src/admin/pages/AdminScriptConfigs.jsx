@@ -1685,7 +1685,7 @@ export default function AdminScriptConfigs() {
                   onChange={(e) => setTestCallTelephonyNumber(e.target.value)}
                 />
                 <p className="text-xs text-on-surface-variant dark:text-molten-text-muted mt-1">
-                  Your registered Plivo number (Caller ID)
+                  Your registered Telnyx phone number (Caller ID)
                 </p>
               </div>
               <div>

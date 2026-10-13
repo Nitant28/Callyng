@@ -30,8 +30,21 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  margin-bottom: 24px;
+  margin-bottom: 8px;
+  padding: 28px 28px 24px;
+  background: linear-gradient(180deg, #ECFDF5 0%, #FFFFFF 100%);
+  border: 1px solid #E7F5EE;
+  border-radius: 28px;
   flex-wrap: wrap;
+}
+
+.cl-dashboard-header__kicker {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #047857;
 }
 
 .cl-dashboard-header__meta {
@@ -41,7 +54,7 @@
 }
 
 .cl-dashboard-header__sync {
-  color: #2563EB;
+  color: #047857;
   font-weight: 500;
 }
 
@@ -225,7 +238,7 @@
 }
 
 .cl-chart-tooltip__dot--green { background: #16A34A; }
-.cl-chart-tooltip__dot--blue { background: #2563EB; }
+.cl-chart-tooltip__dot--blue { background: #047857; }
 
 /* ── Live activity panel ── */
 .cl-dashboard-activity {
@@ -255,8 +268,8 @@
   gap: 6px;
   font-size: 11px;
   font-weight: 700;
-  color: #2563EB;
-  background: #EFF6FF;
+  color: #047857;
+  background: #ECFDF5;
   padding: 6px 12px;
   border-radius: 999px;
   text-transform: uppercase;
@@ -267,7 +280,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #2563EB;
+  background: #047857;
   animation: cl-pulse 1.5s ease-in-out infinite;
 }
 
@@ -347,7 +360,7 @@
 }
 
 .cl-activity-table__live-label {
-  color: #2563EB;
+  color: #047857;
   font-weight: 700;
   font-size: 11px;
   text-transform: uppercase;

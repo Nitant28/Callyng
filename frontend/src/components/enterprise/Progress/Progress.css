@@ -10,7 +10,7 @@
   transition: width 400ms ease;
 }
 .ent-progress__fill--primary {
-  background: linear-gradient(90deg, #2563eb, #60a5fa);
+  background: linear-gradient(90deg, #047857, #34D399);
 }
 .ent-progress__fill--success {
   background: linear-gradient(90deg, #16a34a, #4ade80);

@@ -1,4 +1,4 @@
-.bhuvisx-logo {
+.swarna-logo {
   display: inline-flex;
   align-items: baseline;
   line-height: 1;
@@ -11,24 +11,24 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-.bhuvisx-logo__text,
-.bhuvisx-logo__x {
+.swarna-logo__text,
+.swarna-logo__x {
   font: inherit;
   letter-spacing: inherit;
   line-height: inherit;
 }
 
 /* Light surfaces — official mark: black + blue X */
-.bhuvisx-logo--dark .bhuvisx-logo__text { color: #0B0F19; }
-.bhuvisx-logo--dark .bhuvisx-logo__x { color: #2563EB; }
+.swarna-logo--dark .swarna-logo__text { color: #052E16; }
+.swarna-logo--dark .swarna-logo__x { color: #047857; }
 
 /* Dark sidebar — white + brighter blue X */
-.bhuvisx-logo--light .bhuvisx-logo__text { color: #FFFFFF; }
-.bhuvisx-logo--light .bhuvisx-logo__x { color: #3B82F6; }
+.swarna-logo--light .swarna-logo__text { color: #FFFFFF; }
+.swarna-logo--light .swarna-logo__x { color: #10B981; }
 
-.bhuvisx-logo--sm { font-size: 18px; }
-.bhuvisx-logo--md { font-size: 22px; }
-.bhuvisx-logo--lg { font-size: 28px; }
+.swarna-logo--sm { font-size: 18px; }
+.swarna-logo--md { font-size: 22px; }
+.swarna-logo--lg { font-size: 28px; }
 
 /* Sidebar brand rail */
 .cl-sidebar__logo {
@@ -58,7 +58,7 @@
   outline-offset: 4px;
 }
 
-.cl-sidebar__logo .bhuvisx-logo {
+.cl-sidebar__logo .swarna-logo {
   font-size: 22px;
 }
 
@@ -69,6 +69,6 @@
   line-height: 0;
 }
 
-.cl-login__brand .bhuvisx-logo {
+.cl-login__brand .swarna-logo {
   font-size: 26px;
 }

@@ -212,8 +212,8 @@
 }
 
 .event-leads__status--calling {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: #D1FAE5;
+  color: #065F46;
 }
 
 .event-leads__status--completed {
@@ -293,7 +293,7 @@
 }
 
 .event-leads__outcome--no-answer {
-  color: #2563eb !important;
+  color: #047857 !important;
   font-weight: 600;
 }
 
@@ -401,14 +401,14 @@
 .event-leads__action-button--details {
   min-width: 80px;
   padding: 0 14px;
-  background: #2563eb;
-  border-color: #2563eb;
+  background: #047857;
+  border-color: #047857;
   color: #ffffff;
 }
 
 .event-leads__action-button--details:hover {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
+  background: #065F46;
+  border-color: #065F46;
   color: #ffffff;
 }
 

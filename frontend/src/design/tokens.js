@@ -1,6 +1,6 @@
 export const colors = {
-  primary: '#2563eb',
-  primaryHover: '#1d4ed8',
+  primary: '#047857',
+  primaryHover: '#065F46',
   background: '#f8fafc',
   surface: '#ffffff',
   border: '#e7edf7',
@@ -13,8 +13,8 @@ export const colors = {
   warningBg: '#fef3c7',
   danger: '#b91c1c',
   dangerBg: '#fee2e2',
-  info: '#1d4ed8',
-  infoBg: '#dbeafe',
+  info: '#065F46',
+  infoBg: '#D1FAE5',
   neutral: '#475569',
   neutralBg: '#f1f5f9',
 };

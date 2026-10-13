@@ -178,7 +178,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
               {/* Avatar */}
               <div style={{
                 width: 42, height: 42, borderRadius: 12, flexShrink: 0,
-                background: "linear-gradient(135deg,#2563eb 0%,#7c3aed 100%)",
+                background: "linear-gradient(135deg,#047857 0%,#7c3aed 100%)",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 color: "#fff", fontWeight: 700, fontSize: 14, letterSpacing: 1,
               }}>
@@ -235,8 +235,8 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
               <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
                 padding: "9px 14px", fontSize: 13, fontWeight: 600,
                 border: "none", background: "none", cursor: "pointer",
-                color: activeTab === tab.id ? "#2563eb" : "#64748b",
-                borderBottom: activeTab === tab.id ? "2px solid #2563eb" : "2px solid transparent",
+                color: activeTab === tab.id ? "#047857" : "#64748b",
+                borderBottom: activeTab === tab.id ? "2px solid #047857" : "2px solid transparent",
                 marginBottom: -1, transition: "all 0.15s ease",
               }}>
                 {tab.label}
@@ -249,7 +249,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
         <div style={{ flex: 1, overflowY: "auto", background: "#f8fafc" }}>
           {loading ? (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", gap: 12, color: "#94a3b8" }}>
-              <div style={{ width: 22, height: 22, borderRadius: "50%", border: "2.5px solid #2563eb", borderTopColor: "transparent", animation: "ctd-spin 0.8s linear infinite" }} />
+              <div style={{ width: 22, height: 22, borderRadius: "50%", border: "2.5px solid #047857", borderTopColor: "transparent", animation: "ctd-spin 0.8s linear infinite" }} />
               <span style={{ fontSize: 13 }}>Loading call data...</span>
             </div>
           ) : !callData ? (
@@ -270,11 +270,11 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                       <span style={{ fontSize: 12, color: "#64748b" }}>{stats.turns} total turns</span>
                     </div>
                     <div style={{ height: 8, borderRadius: 999, background: "#f1f5f9", overflow: "hidden", display: "flex", marginBottom: 10 }}>
-                      <div style={{ width: `${stats.aiRatio}%`, background: "#2563eb", transition: "width 0.6s ease" }} />
+                      <div style={{ width: `${stats.aiRatio}%`, background: "#047857", transition: "width 0.6s ease" }} />
                       <div style={{ flex: 1, background: "#22c55e" }} />
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                      <span style={{ color: "#2563eb", fontWeight: 600 }}>AI Agent {stats.aiRatio}%</span>
+                      <span style={{ color: "#047857", fontWeight: 600 }}>AI Agent {stats.aiRatio}%</span>
                       <span style={{ color: "#16a34a", fontWeight: 600 }}>Customer {stats.custRatio}%</span>
                     </div>
                   </div>
@@ -291,8 +291,8 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                         display: "flex", alignItems: "center", gap: 12, padding: "11px 16px",
                         borderBottom: i < arr.length - 1 ? "1px solid #f0f2f7" : "none",
                       }}>
-                        <div style={{ width: 32, height: 32, borderRadius: 8, background: "#eff6ff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                          <span className="material-symbols-outlined" style={{ fontSize: 17, color: "#2563eb" }}>{item.icon}</span>
+                        <div style={{ width: 32, height: 32, borderRadius: 8, background: "#ECFDF5", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 17, color: "#047857" }}>{item.icon}</span>
                         </div>
                         <div>
                           <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em" }}>{item.label}</div>
@@ -310,7 +310,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                   {extractionEntries.length > 0 ? (
                     <>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                        <span className="material-symbols-outlined" style={{ fontSize: 16, color: "#2563eb" }}>data_object</span>
+                        <span className="material-symbols-outlined" style={{ fontSize: 16, color: "#047857" }}>data_object</span>
                         <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.07em" }}>Extracted Info</span>
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(155px, 1fr))", gap: 10 }}>
@@ -319,7 +319,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                             <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>
                               {key.replace(/_/g, " ")}
                             </div>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: key.toLowerCase() === "intent" ? "#2563eb" : "#0f172a" }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: key.toLowerCase() === "intent" ? "#047857" : "#0f172a" }}>
                               {String(val)}
                             </div>
                           </div>
@@ -354,8 +354,8 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                         return (
                           <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: isAi ? "flex-start" : "flex-end" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4, ...(isAi ? {} : { flexDirection: "row-reverse" }) }}>
-                              <div style={{ width: 20, height: 20, borderRadius: 5, background: isAi ? "#eff6ff" : "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                                <span className="material-symbols-outlined" style={{ fontSize: 12, color: isAi ? "#2563eb" : "#16a34a" }}>
+                              <div style={{ width: 20, height: 20, borderRadius: 5, background: isAi ? "#ECFDF5" : "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                <span className="material-symbols-outlined" style={{ fontSize: 12, color: isAi ? "#047857" : "#16a34a" }}>
                                   {isAi ? "smart_toy" : "person"}
                                 </span>
                               </div>
@@ -370,7 +370,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                               maxWidth: "82%", padding: "8px 12px",
                               borderRadius: isAi ? "3px 12px 12px 12px" : "12px 3px 12px 12px",
                               fontSize: 13, lineHeight: 1.55,
-                              background: isAi ? "#fff" : "#2563eb",
+                              background: isAi ? "#fff" : "#047857",
                               color: isAi ? "#0f172a" : "#fff",
                               border: isAi ? "1px solid #e8ecf2" : "none",
                               boxShadow: isAi ? "0 1px 3px rgba(0,0,0,0.04)" : "none",
@@ -387,8 +387,8 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                     )}
                     {callData?.in_progress && (
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                        <div style={{ width: 20, height: 20, borderRadius: 5, background: "#eff6ff", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#2563eb" }}>smart_toy</span>
+                        <div style={{ width: 20, height: 20, borderRadius: 5, background: "#ECFDF5", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 12, color: "#047857" }}>smart_toy</span>
                         </div>
                         <div style={{ background: "#fff", border: "1px solid #e8ecf2", borderRadius: "3px 12px 12px 12px", padding: "9px 14px", display: "flex", gap: 4, alignItems: "center" }}>
                           {[0, 1, 2].map(d => (
@@ -416,7 +416,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
           />
           {recordingLoading ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px 20px", color: "#475569", fontSize: 12 }}>
-              <div style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid #3b82f6", borderTopColor: "transparent", animation: "ctd-spin 0.8s linear infinite" }} />
+              <div style={{ width: 14, height: 14, borderRadius: "50%", border: "2px solid #10B981", borderTopColor: "transparent", animation: "ctd-spin 0.8s linear infinite" }} />
               Loading audio...
             </div>
           ) : recordingUrl ? (
@@ -434,7 +434,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                 {Array.from({ length: 72 }).map((_, i) => {
                   const active = audioDuration > 0 && (audioProgress / audioDuration) > (i / 72);
                   const h = Math.abs(Math.sin(i * 0.47) * 11) + Math.abs(Math.cos(i * 0.31) * 5) + 4;
-                  return <div key={i} style={{ width: 2.5, height: `${h}px`, borderRadius: 999, flexShrink: 0, background: active ? "#60a5fa" : "rgba(148,163,184,0.22)" }} />;
+                  return <div key={i} style={{ width: 2.5, height: `${h}px`, borderRadius: 999, flexShrink: 0, background: active ? "#34D399" : "rgba(148,163,184,0.22)" }} />;
                 })}
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -445,7 +445,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                   <button onClick={() => skipTime(-15)} style={circleBtn(30, "#1e293b", { color: "#94a3b8" })}>
                     <span className="material-symbols-outlined" style={{ fontSize: 16 }}>replay_15</span>
                   </button>
-                  <button onClick={togglePlay} style={circleBtn(40, "#2563eb", { color: "#fff", boxShadow: "0 0 14px rgba(37,99,235,0.4)" })}>
+                  <button onClick={togglePlay} style={circleBtn(40, "#047857", { color: "#fff", boxShadow: "0 0 14px rgba(4,120,87,0.4)" })}>
                     <span className="material-symbols-outlined" style={{ fontSize: 22 }}>{isPlaying ? "pause" : "play_arrow"}</span>
                   </button>
                   <button onClick={() => skipTime(15)} style={circleBtn(30, "#1e293b", { color: "#94a3b8" })}>
@@ -461,7 +461,7 @@ const CallTranscriptDrawer = ({ isOpen, sessionCallId, onClose, leadName, leadDa
                     {speedMenuOpen && (
                       <div style={{ position: "absolute", bottom: "110%", right: 0, background: "#1e293b", border: "1px solid #334155", borderRadius: 8, padding: 4, display: "flex", flexDirection: "column", gap: 1, zIndex: 20 }}>
                         {[0.75, 1, 1.25, 1.5, 2].map(sp => (
-                          <button key={sp} onClick={() => changeSpeed(sp)} style={{ padding: "5px 16px", background: playbackSpeed === sp ? "#2563eb" : "transparent", border: "none", borderRadius: 6, color: playbackSpeed === sp ? "#fff" : "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                          <button key={sp} onClick={() => changeSpeed(sp)} style={{ padding: "5px 16px", background: playbackSpeed === sp ? "#047857" : "transparent", border: "none", borderRadius: 6, color: playbackSpeed === sp ? "#fff" : "#94a3b8", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                             {sp}x
                           </button>
                         ))}

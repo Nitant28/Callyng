@@ -87,7 +87,7 @@ async def get_call_recording(
             raise HTTPException(404, "Recording file not found")
         return FileResponse(file_path, media_type="audio/mpeg")
 
-    # Plivo-hosted or legacy R2 key — resolve_recording_url handles both
+    # Telnyx-hosted, legacy Plivo, or legacy R2 key — resolve_recording_url handles all
     url = resolve_recording_url(recording_key, expires_in=3600)
     return {"url": url, "expires_in": 3600}
 
@@ -114,16 +114,16 @@ async def play_call_recording(
             raise HTTPException(404, "Recording file not found")
         return FileResponse(file_path, media_type="audio/mpeg")
 
-    if recording_key.startswith("plivo:"):
-        plivo_url = recording_key.removeprefix("plivo:")
-        from telephony import _plivo_auth
-        auth_id, auth_token = _plivo_auth()
-        auth = aiohttp.BasicAuth(auth_id, auth_token)
+    if recording_key.startswith("telnyx:"):
+        telnyx_url = recording_key.removeprefix("telnyx:")
+        from telephony import _telnyx_credentials
+        api_key, _, _, _ = _telnyx_credentials()
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         async def stream_audio():
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(plivo_url, auth=auth) as resp:
+                    async with session.get(telnyx_url, headers=headers) as resp:
                         if resp.status != 200:
                             raise HTTPException(resp.status, "Failed to fetch recording from provider")
                         async for chunk in resp.content.iter_chunked(8192):
@@ -134,7 +134,23 @@ async def play_call_recording(
 
         return StreamingResponse(stream_audio(), media_type="audio/mpeg")
 
-    # Legacy R2 key
+    if recording_key.startswith("plivo:"):
+        plivo_url = recording_key.removeprefix("plivo:")
+        async def stream_audio_legacy():
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(plivo_url) as resp:
+                        if resp.status != 200:
+                            raise HTTPException(resp.status, "Failed to fetch recording from provider")
+                        async for chunk in resp.content.iter_chunked(8192):
+                            yield chunk
+            except aiohttp.ClientConnectorError as exc:
+                logger.warning("recording stream connect failed: {}", exc)
+                raise HTTPException(503, "Recording provider temporarily unreachable") from exc
+
+        return StreamingResponse(stream_audio_legacy(), media_type="audio/mpeg")
+
+    # Legacy R2 key / Direct URL
     from fastapi.responses import RedirectResponse
     url = resolve_recording_url(recording_key, expires_in=3600)
     return RedirectResponse(url)

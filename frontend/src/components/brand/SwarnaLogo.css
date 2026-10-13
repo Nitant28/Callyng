@@ -1,0 +1,49 @@
+.swarna-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: "Plus Jakarta Sans", Inter, system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  user-select: none;
+}
+
+.swarna-logo__mark {
+  display: grid;
+  place-items: center;
+  width: 1.15em;
+  height: 1.15em;
+  border-radius: 8px;
+  font-size: 0.62em;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.swarna-logo__text {
+  font-size: 1em;
+}
+
+.swarna-logo--dark .swarna-logo__text { color: #052E16; }
+.swarna-logo--dark .swarna-logo__mark {
+  background: #047857;
+  color: #FFFFFF;
+}
+
+.swarna-logo--light .swarna-logo__text { color: #F7FBF8; }
+.swarna-logo--light .swarna-logo__mark {
+  background: #ECFDF5;
+  color: #047857;
+}
+
+.swarna-logo--sm { font-size: 18px; }
+.swarna-logo--md { font-size: 22px; }
+.swarna-logo--lg { font-size: 28px; }
+
+.cl-sidebar__logo .swarna-logo {
+  color: inherit;
+}
+
+.cl-login__brand .swarna-logo {
+  font-size: 32px;
+}

@@ -1,8 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
+import SwarnaLogo from '../../components/brand/SwarnaLogo';
 
-/**
- * Client Sidebar — Premium SaaS style
- */
 const Sidebar = ({ handleSignOut, balance = null }) => {
   const location = useLocation();
   const path = location.pathname;
@@ -13,13 +11,7 @@ const Sidebar = ({ handleSignOut, balance = null }) => {
   return (
     <aside className="cl-sidebar">
       <div className="cl-sidebar__logo">
-        <div className="cl-sidebar__brand-icon">
-          <div className="cl-sidebar__brand-dot" />
-        </div>
-        <div>
-          <div className="cl-sidebar__brand">Dev Client</div>
-          <div className="cl-sidebar__subtitle">Enterprise</div>
-        </div>
+        <SwarnaLogo variant="dark" size="sm" />
       </div>
 
       <nav className="cl-sidebar__nav" aria-label="Main navigation">
@@ -48,7 +40,7 @@ const Sidebar = ({ handleSignOut, balance = null }) => {
             <div className="cl-sidebar__credits-label">Credits remaining</div>
             <div className="cl-sidebar__credits-value">
               {Number(balance).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-              <span style={{ fontSize: '12px', fontWeight: 500, color: 'rgba(255,255,255,0.65)', marginLeft: '6px' }}>/ 10,000</span>
+              <span style={{ fontSize: '12px', fontWeight: 500, color: '#7A9388', marginLeft: '6px' }}>/ 10,000</span>
             </div>
             <div className="cl-progress-bar">
               <div

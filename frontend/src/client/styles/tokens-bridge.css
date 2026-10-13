@@ -26,17 +26,17 @@
 
   /* Colors */
   --text: var(--text-primary, #0f172a);
-  --text-muted: #64748b;
-  --text-subtle: #94a3b8;
+  --text-muted: #7A9388;
+  --text-subtle: #7A9388;
   --text-caption: var(--text-subtle);
-  --background: var(--bg, #f8fafc);
+  --background: var(--bg, #F6FBF8);
   --surface: #ffffff;
-  --surface-alt: #f8fafc;
-  --border: #e2e8f0;
-  --border-light: #f1f5f9;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-light: #eff6ff;
+  --surface-alt: #F6FBF8;
+  --border: #E7F5EE;
+  --border-light: #F1F8F4;
+  --primary: #047857;
+  --primary-hover: #065F46;
+  --primary-light: #ECFDF5;
   --success: #16a34a;
   --success-light: #f0fdf4;
   --warning: #ea580c;

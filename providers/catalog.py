@@ -474,6 +474,16 @@ TTS_CATALOG: dict[str, ProviderSpec] = {
                 _EL_BASE + _EL_SPEED,
                 recommended_voices=_ELEVENLABS_VOICES,
             ),
+            "eleven_turbo_v2_5": ModelSpec(
+                "Turbo v2.5",
+                _EL_BASE + _EL_SPEED,
+                recommended_voices=_ELEVENLABS_VOICES,
+            ),
+            "eleven_multilingual_v2": ModelSpec(
+                "Multilingual v2",
+                _EL_BASE + _EL_SPEED,
+                recommended_voices=_ELEVENLABS_VOICES,
+            ),
             "eleven_v3": ModelSpec(
                 "Eleven v3",
                 _EL_BASE,

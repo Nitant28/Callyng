@@ -108,7 +108,7 @@ const AnalyticsTab = () => {
               <XAxis dataKey="day" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} />
               <Tooltip />
-              <Area type="monotone" dataKey="interested" stroke="#2563eb" fill="#93c5fd" />
+              <Area type="monotone" dataKey="interested" stroke="#047857" fill="#6EE7B7" />
             </AreaChart>
           </ResponsiveContainer>
         </section>

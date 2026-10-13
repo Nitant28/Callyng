@@ -4540,13 +4540,13 @@ async def mark_call_log_not_in_progress(
     return row is not None
 
 
-async def link_call_log_plivo_sid(
+async def link_call_log_telnyx_sid(
     pool: asyncpg.Pool,
     session_call_id: str,
-    call_uuid: str,
+    call_sid: str,
 ) -> bool:
-    """Persist Plivo CallUUID on the call_log row (idempotent)."""
-    if not session_call_id or not call_uuid:
+    """Persist Telnyx call_control_id / call_sid on the call_log row (idempotent)."""
+    if not session_call_id or not call_sid:
         return False
     row = await pool.fetchrow(
         """
@@ -4556,9 +4556,12 @@ async def link_call_log_plivo_sid(
         RETURNING id
         """,
         session_call_id,
-        call_uuid,
+        call_sid,
     )
     return row is not None
+
+
+link_call_log_plivo_sid = link_call_log_telnyx_sid
 
 
 async def get_call_log_by_session(
@@ -4603,23 +4606,28 @@ def _normalize_hangup_source(payload: dict) -> str:
     return str(raw).strip().lower()
 
 
-def plivo_hangup_callback_enabled() -> bool:
-    v = (os.getenv("PLIVO_HANGUP_CALLBACK_ENABLED") or "true").strip().lower()
+def telephony_hangup_callback_enabled() -> bool:
+    v = (os.getenv("TELNYX_HANGUP_CALLBACK_ENABLED") or os.getenv("PLIVO_HANGUP_CALLBACK_ENABLED") or "true").strip().lower()
     return v not in ("0", "false", "no", "off")
 
 
-async def record_plivo_hangup(
+plivo_hangup_callback_enabled = telephony_hangup_callback_enabled
+
+
+async def record_telnyx_hangup(
     pool: asyncpg.Pool,
     *,
     session_call_id: str | None,
-    call_uuid: str | None,
+    call_sid: str | None = None,
+    call_uuid: str | None = None,
     payload: dict,
 ) -> dict | None:
-    """Store Plivo hangup payload on call_logs; return row or None."""
+    """Store Telnyx hangup payload on call_logs; return row or None."""
+    sid = call_sid or call_uuid or payload.get("call_control_id") or payload.get("CallUUID") or payload.get("call_uuid")
     stored = {
         **payload,
         "hangup_source": _normalize_hangup_source(payload),
-        "call_uuid": call_uuid or payload.get("CallUUID") or payload.get("call_uuid"),
+        "call_sid": sid,
     }
     import json
     blob = json.dumps(stored)
@@ -4634,10 +4642,10 @@ async def record_plivo_hangup(
             """,
             session_call_id,
             blob,
-            stored.get("call_uuid"),
+            sid,
         )
         return record_to_dict(row)
-    if call_uuid:
+    if sid:
         row = await pool.fetchrow(
             """
             UPDATE call_logs SET
@@ -4646,11 +4654,14 @@ async def record_plivo_hangup(
             WHERE call_sid = $1
             RETURNING *
             """,
-            call_uuid,
+            sid,
             blob,
         )
         return record_to_dict(row)
     return None
+
+
+record_plivo_hangup = record_telnyx_hangup
 
 
 async def apply_callee_hangup_callback(

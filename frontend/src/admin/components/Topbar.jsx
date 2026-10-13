@@ -5,7 +5,7 @@ import ThemeToggle from './ThemeToggle';
 export default function Topbar({ 
   searchQuery = '', 
   onSearchChange = null, 
-  clientName = 'Aakashvani Admin' 
+  clientName = 'Swarna Admin' 
 }) {
   return (
     <header className="admin-topbar">

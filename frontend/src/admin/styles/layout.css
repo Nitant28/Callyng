@@ -116,9 +116,9 @@ body:has(.admin-app) {
 
 .sidebar-nav-item.active,
 .sidebar-nav-item[aria-current="page"] {
-  background-color: var(--admin-primary);
-  color: var(--admin-on-primary);
-  font-weight: 600;
+  background-color: #ECFDF5;
+  color: #047857;
+  font-weight: 700;
 }
 
 .sidebar-nav-item .material-symbols-outlined {

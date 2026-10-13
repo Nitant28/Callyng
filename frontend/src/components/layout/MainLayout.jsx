@@ -37,7 +37,7 @@ const MobileNav = () => {
               flexDirection: 'column',
               alignItems: 'center',
               gap: '4px',
-              color: isActive ? '#2563EB' : '#64748B',
+              color: isActive ? '#047857' : '#64748B',
               textDecoration: 'none',
               fontSize: '11px',
               fontWeight: isActive ? 600 : 500,
@@ -73,7 +73,6 @@ const MainLayoutInner = ({ children }) => {
 
   return (
     <div className="client-app">
-      {/* Dark Sidebar */}
       <Sidebar onSignOut={handleSignOut} isOpen={sidebarOpen} />
 
       {/* Overlay for mobile drawer */}
@@ -115,7 +114,10 @@ const MainLayoutInner = ({ children }) => {
 
         <div className="cl-topbar__spacer" />
 
-        {/* Client Name + Avatar */}
+        <Link to="/app/campaigns" className="cl-btn cl-btn--primary cl-btn--sm">
+          New campaign
+        </Link>
+
         <div className="cl-topbar__user">
           <div style={{ textAlign: 'right' }}>
             <div className="cl-topbar__client-name">{clientName}</div>

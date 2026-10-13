@@ -17,7 +17,7 @@ from loguru import logger
 from compliance import is_call_allowed, next_compliant_time
 from db import postgres as pg_db
 from dialer.cost_guard import check_campaign_budget
-from telephony import build_hangup_url, make_plivo_call
+from telephony import build_hangup_url, make_telnyx_call
 from script_prefetch import (
     build_lead_dict,
     pop_prefetched_config,
@@ -30,10 +30,10 @@ from dialer.dialer_lock import (
     refresh_dialer_lock,
     release_dialer_lock,
 )
-from dialer.plivo_balance import (
-    check_plivo_balance,
-    exception_is_plivo_balance_exhausted,
-    invalidate_plivo_balance_cache,
+from dialer.telnyx_balance import (
+    check_telnyx_balance,
+    exception_is_telnyx_balance_exhausted,
+    invalidate_telnyx_balance_cache,
 )
 
 _active_tasks: dict[str, asyncio.Task] = {}
@@ -310,16 +310,16 @@ async def fire_call(
 
     from_number = (
         bot_config.get("telephony_number")
-        or os.getenv("PLIVO_PHONE_NUMBER", "")
+        or os.getenv("TELNYX_PHONE_NUMBER", "")
     )
-    if not await check_plivo_balance(session):
+    if not await check_telnyx_balance(session):
         if prefetch_registered:
             await pop_prefetched_config(call_id)
         if lead_uuid:
             await _release_dialed_lead_to_pending(
                 pool, lead, camp_id=camp_id, event_id=event_id_uuid, client_id=cid
             )
-        raise Exception("Plivo error (402): Insufficient balance")
+        raise Exception("Telnyx error (402): Insufficient balance")
 
     reserved = Decimal("0")
     snap_rate: Decimal | float | None = None
@@ -368,12 +368,13 @@ async def fire_call(
         raise
 
     try:
-        await make_plivo_call(
+        await make_telnyx_call(
             session,
             phone,
             from_number,
             answer_url,
             hangup_url=hangup_url,
+            client_state=call_id,
         )
         logger.info(
             "Dialer fired call call_id={} lead={} campaign={} answer_url={}",
@@ -394,10 +395,10 @@ async def fire_call(
             )
         except Exception:
             pass
-        if exception_is_plivo_balance_exhausted(exc):
-            invalidate_plivo_balance_cache()
+        if exception_is_telnyx_balance_exhausted(exc):
+            invalidate_telnyx_balance_cache()
         logger.error(
-            "Plivo dial failed for lead {} (call_id={}): {}",
+            "Telnyx dial failed for lead {} (call_id={}): {}",
             lead_uuid,
             call_id,
             exc,
@@ -507,13 +508,13 @@ async def run_campaign_dialer(
                 await asyncio.sleep(5)
                 continue
 
-            if not await check_plivo_balance(session):
-                invalidate_plivo_balance_cache()
+            if not await check_telnyx_balance(session):
+                invalidate_telnyx_balance_cache()
                 await pause_campaign(
                     pool,
                     campaign_id,
                     client_id,
-                    reason="plivo_balance_exhausted",
+                    reason="telnyx_balance_exhausted",
                 )
                 break
 
@@ -673,14 +674,14 @@ async def run_campaign_dialer(
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for result in results:
                     if isinstance(result, Exception) and (
-                        exception_is_plivo_balance_exhausted(result)
+                        exception_is_telnyx_balance_exhausted(result)
                     ):
-                        invalidate_plivo_balance_cache()
+                        invalidate_telnyx_balance_cache()
                         await pause_campaign(
                             pool,
                             campaign_id,
                             client_id,
-                            reason="plivo_balance_exhausted",
+                            reason="telnyx_balance_exhausted",
                         )
                         return
 

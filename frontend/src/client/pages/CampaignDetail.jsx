@@ -858,7 +858,7 @@ const CampaignDetail = () => {
     const isYellow = colorClass.includes('yellow');
 
     let barColor = '#94A3B8';
-    if (isBlue) barColor = '#2563EB';
+    if (isBlue) barColor = '#047857';
     else if (isGreen) barColor = '#16A34A';
     else if (isRed) barColor = '#DC2626';
     else if (isPurple) barColor = '#7C3AED';

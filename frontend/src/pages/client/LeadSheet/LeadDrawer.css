@@ -547,7 +547,7 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 2px solid #3b82f6;
+  border: 2px solid #10B981;
   border-top-color: transparent;
   animation: ls-spin 0.8s linear infinite;
   flex-shrink: 0;
@@ -591,7 +591,7 @@
 }
 
 .ls-drawer__wave-bar--active {
-  background: #3b82f6;
+  background: #10B981;
 }
 
 .ls-drawer__player-utils {
@@ -628,7 +628,7 @@
 
 .ls-drawer__progress-fill {
   height: 100%;
-  background: #3b82f6;
+  background: #10B981;
   border-radius: 999px;
   transition: width 80ms linear;
 }
@@ -669,13 +669,13 @@
 .ls-drawer__player-btn--play {
   width: 36px;
   height: 36px;
-  background: #2563eb;
+  background: #047857;
   color: #fff;
-  box-shadow: 0 2px 12px rgba(37, 99, 235, 0.45);
+  box-shadow: 0 2px 12px rgba(4, 120, 87, 0.45);
 }
 
 .ls-drawer__player-btn--play:hover {
-  background: #1d4ed8;
+  background: #065F46;
 }
 
 .ls-drawer__player-btn--play .material-symbols-outlined {
@@ -746,7 +746,7 @@
 }
 
 .ls-drawer__speed-option--active {
-  background: #2563eb;
+  background: #047857;
   color: #fff;
 }
 

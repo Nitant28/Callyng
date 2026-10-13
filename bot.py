@@ -1,8 +1,8 @@
 #
-# Copyright (c) 2025, Daily
+# bot.py — Telnyx Pipecat Bot Runner
 #
-# SPDX-License-Identifier: BSD 2-Clause License
-#
+
+from __future__ import annotations
 
 import os
 
@@ -19,7 +19,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
-from pipecat.serializers.plivo import PlivoFrameSerializer
+from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
@@ -40,7 +40,7 @@ async def run_bot(transport: BaseTransport, handle_sigint: bool):
                 "You are a friendly assistant. "
                 "Your responses will be read aloud, so keep them concise and conversational. "
                 "Avoid special characters or formatting. "
-                "Begin by saying: 'Hello! This is an automated call from our Plivo chatbot demo.' "
+                "Begin by saying: 'Hello! This is an automated call from our AI receptionist.' "
             ),
         ),
     )
@@ -86,7 +86,6 @@ async def run_bot(transport: BaseTransport, handle_sigint: bool):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        # Kick off the outbound conversation, waiting for the user to speak first
         logger.info("Starting outbound call conversation")
 
     @transport.event_handler("on_client_disconnected")
@@ -95,22 +94,17 @@ async def run_bot(transport: BaseTransport, handle_sigint: bool):
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=handle_sigint)
-
     await runner.run(task)
 
 
 async def bot(runner_args: RunnerArguments):
-    """Main bot entry point compatible with Pipecat Cloud."""
-
+    """Main bot entry point compatible with Pipecat Cloud and Telnyx."""
     transport_type, call_data = await parse_telephony_websocket(runner_args.websocket)
     logger.info(f"Auto-detected transport: {transport_type}")
 
-    serializer = PlivoFrameSerializer(
-        stream_id=call_data["stream_id"],
-        call_id=call_data["call_id"],
-        auth_id=os.getenv("PLIVO_AUTH_ID", ""),
-        auth_token=os.getenv("PLIVO_AUTH_TOKEN", ""),
-    )
+    from telephony import create_telnyx_serializer
+
+    serializer = create_telnyx_serializer(call_data)
 
     transport = FastAPIWebsocketTransport(
         websocket=runner_args.websocket,
@@ -123,5 +117,4 @@ async def bot(runner_args: RunnerArguments):
     )
 
     handle_sigint = runner_args.handle_sigint
-
     await run_bot(transport, handle_sigint)

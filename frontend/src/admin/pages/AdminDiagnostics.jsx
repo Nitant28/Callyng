@@ -91,16 +91,16 @@ export default function AdminDiagnostics() {
       )}
 
       <div className="space-y-6">
-        {/* Plivo Balance */}
+        {/* Telnyx Balance */}
         <div className="bg-surface-container-lowest dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-lg p-6">
           <h3 className="font-headline-sm flex items-center gap-2 mb-2 text-on-surface dark:text-molten-text">
             <span className="material-symbols-outlined text-primary dark:text-molten-primary">account_balance_wallet</span>
-            Plivo Gateway Balance
+            Telnyx Telephony Balance
           </h3>
           <p className="text-3xl font-bold font-mono text-on-surface dark:text-molten-text">
-            {health?.plivo_balance !== null && health?.plivo_balance !== undefined 
-              ? `₹${(health.plivo_balance * 80.0229).toFixed(2)}` 
-              : <span className="text-sm text-on-surface-variant dark:text-molten-text-muted italic">Unavailable. Check via 'just plivo-balance' in terminal.</span>}
+            {(health?.telnyx_balance ?? health?.plivo_balance) !== null && (health?.telnyx_balance ?? health?.plivo_balance) !== undefined 
+              ? `₹${((health?.telnyx_balance ?? health?.plivo_balance) * 80.0229).toFixed(2)} ($${(health?.telnyx_balance ?? health?.plivo_balance).toFixed(2)})` 
+              : <span className="text-sm text-on-surface-variant dark:text-molten-text-muted italic">Unavailable (Check TELNYX_API_KEY in .env)</span>}
           </p>
         </div>
 

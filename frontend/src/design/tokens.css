@@ -81,13 +81,13 @@
   --shadow-xs: var(--shadow-card);
   --shadow-sm: var(--shadow-card);
   --shadow-hover: var(--shadow-card-hover);
-  --shadow-glow-primary: 0 8px 24px rgba(37, 99, 235, 0.25);
+  --shadow-glow-primary: 0 8px 24px rgba(4, 120, 87, 0.25);
   --color-card-hover-shadow: var(--shadow-card-hover);
 
   /* ── Semantic colors ── */
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-light: #dbeafe;
+  --primary: #047857;
+  --primary-hover: #065F46;
+  --primary-light: #D1FAE5;
   --success: #16a34a;
   --success-light: #dcfce7;
   --warning: #ea580c;
@@ -106,9 +106,9 @@
   --text-subtle: #94a3b8;
   --text-caption: var(--text-subtle);
 
-  --sidebar-bg: #08162c;
+  --sidebar-bg: #052E16;
   --sidebar-hover: rgba(255, 255, 255, 0.06);
-  --sidebar-active: #2563eb;
+  --sidebar-active: #047857;
   --text-sidebar: #94a3b8;
   --text-sidebar-active: #ffffff;
 

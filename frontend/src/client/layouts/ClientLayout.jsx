@@ -81,13 +81,19 @@ export default function ClientLayout({ children }) {
 
         <div className="cl-topbar__spacer" />
 
-        <div className="cl-topbar__spacer" />
+        <button
+          type="button"
+          className="cl-btn cl-btn--primary cl-btn--sm"
+          onClick={() => navigate('/app/campaigns')}
+        >
+          New campaign
+        </button>
 
         {/* User */}
         <div className="cl-topbar__user">
           <div style={{ position: 'relative', marginRight: '16px', display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-            <span className="material-symbols-outlined" style={{ color: '#64748B', fontSize: '22px' }}>notifications</span>
-            <div style={{ position: 'absolute', top: '-2px', right: '-2px', width: '8px', height: '8px', background: '#2563EB', borderRadius: '50%', border: '2px solid #FFF' }}></div>
+            <span className="material-symbols-outlined" style={{ color: '#7A9388', fontSize: '22px' }}>notifications</span>
+            <div style={{ position: 'absolute', top: '-2px', right: '-2px', width: '8px', height: '8px', background: '#047857', borderRadius: '50%', border: '2px solid #FFF' }}></div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div className="cl-topbar__client-name">{clientName === 'Client' ? 'Dev Client' : clientName}</div>

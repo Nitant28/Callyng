@@ -18,12 +18,12 @@ const EmptyState = ({ icon = 'inbox', title = 'No Data Available', description, 
         width: '56px', 
         height: '56px', 
         borderRadius: '50%', 
-        background: '#EFF6FF',
+        background: '#ECFDF5',
         display: 'flex', 
         alignItems: 'center', 
         justifyContent: 'center',
         margin: '0 auto 16px', 
-        color: '#2563EB',
+        color: '#047857',
       }}>
         <span className="material-symbols-outlined" style={{ fontSize: '28px' }}>{icon}</span>
       </div>

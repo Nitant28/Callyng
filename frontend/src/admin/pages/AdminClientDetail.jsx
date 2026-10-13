@@ -573,7 +573,7 @@ export default function AdminClientDetail() {
       {/* Adjust Balance Modal Overlay */}
       {isModalOpen && (
         <div 
-          className="fixed inset-0 bg-[#0c1941]/40 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+          className="fixed inset-0 bg-[#064E3B]/40 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeModal();
           }}
@@ -639,7 +639,7 @@ export default function AdminClientDetail() {
       {/* Create Campaign Modal Overlay */}
       {isCampaignModalOpen && (
         <div 
-          className="fixed inset-0 bg-[#0c1941]/40 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+          className="fixed inset-0 bg-[#064E3B]/40 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeCampaignModal();
           }}

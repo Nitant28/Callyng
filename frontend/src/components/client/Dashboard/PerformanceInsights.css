@@ -38,7 +38,7 @@
   font-weight: var(--weight-bold);
 }
 .cd-insights__health--green { background: var(--success-light); color: #15803d; }
-.cd-insights__health--blue { background: var(--primary-light); color: #1d4ed8; }
+.cd-insights__health--blue { background: var(--primary-light); color: #065F46; }
 .cd-insights__health--orange { background: var(--warning-light); color: #b45309; }
 .cd-insights__health--red { background: var(--danger-light); color: #b91c1c; }
 .cd-insights__health--neutral { background: var(--surface-alt); color: var(--text-muted); }
@@ -54,7 +54,7 @@
   transition: width 500ms ease;
 }
 .cd-insights__bar-fill--green { background: linear-gradient(90deg, #22c55e, #4ade80); }
-.cd-insights__bar-fill--blue { background: linear-gradient(90deg, #2563eb, #60a5fa); }
+.cd-insights__bar-fill--blue { background: linear-gradient(90deg, #047857, #34D399); }
 .cd-insights__bar-fill--orange { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
 .cd-insights__bar-fill--red { background: linear-gradient(90deg, #ef4444, #f87171); }
 .cd-insights__bar-fill--neutral { background: #cbd5e1; }

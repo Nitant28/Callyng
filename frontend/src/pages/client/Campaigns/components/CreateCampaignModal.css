@@ -30,8 +30,8 @@
   width: 24px;
   height: 24px;
   border-radius: 8px;
-  background: var(--primary-light, #dbeafe);
-  color: var(--primary, #2563eb);
+  background: var(--primary-light, #D1FAE5);
+  color: var(--primary, #047857);
   font-family: 'Plus Jakarta Sans', sans-serif;
   font-size: 12px;
   font-weight: 800;
@@ -59,7 +59,7 @@
 .cmp-create__checkbox input {
   width: 18px;
   height: 18px;
-  accent-color: var(--primary, #2563eb);
+  accent-color: var(--primary, #047857);
 }
 
 .cmp-create__upload {
@@ -74,8 +74,8 @@
 }
 
 .cmp-create__upload:hover {
-  border-color: var(--primary, #2563eb);
-  background: var(--primary-light, #eff6ff);
+  border-color: var(--primary, #047857);
+  background: var(--primary-light, #ECFDF5);
 }
 
 .cmp-create__upload input {
@@ -84,7 +84,7 @@
 
 .cmp-create__upload .material-symbols-outlined {
   font-size: 28px;
-  color: var(--primary, #2563eb);
+  color: var(--primary, #047857);
   flex-shrink: 0;
 }
 

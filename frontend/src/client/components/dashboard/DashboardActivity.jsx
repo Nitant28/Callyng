@@ -1,5 +1,5 @@
 const STATUS_STYLES = {
-  live:    { bg: '#EFF6FF', color: '#2563EB', label: 'Live' },
+  live:    { bg: '#ECFDF5', color: '#047857', label: 'Live' },
   success: { bg: '#ECFDF5', color: '#16A34A', label: 'Interested' },
   info:    { bg: '#F5F3FF', color: '#7C3AED', label: 'Answered' },
   warning: { bg: '#FFF7ED', color: '#EA580C', label: 'No answer' },

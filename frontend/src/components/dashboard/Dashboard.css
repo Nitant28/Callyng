@@ -112,7 +112,7 @@
 }
 
 .date-range__option--active {
-  background: #eff6ff;
+  background: #ECFDF5;
   color: var(--primary);
   font-weight: 600;
 }
@@ -184,7 +184,7 @@
   flex-shrink: 0;
 }
 
-.stat-card__icon-wrap--blue { background: #dbeafe; color: #2563eb; }
+.stat-card__icon-wrap--blue { background: #D1FAE5; color: #047857; }
 .stat-card__icon-wrap--green { background: #dcfce7; color: #16a34a; }
 .stat-card__icon-wrap--purple { background: #ede9fe; color: #7c3aed; }
 .stat-card__icon-wrap--orange { background: #ffedd5; color: #ea580c; }
@@ -339,7 +339,7 @@
 .campaign-status--paused,
 .campaign-status--pausing { background: var(--warning-bg); color: #b45309; }
 .campaign-status--draft { background: #f1f5f9; color: #64748b; }
-.campaign-status--completed { background: #dbeafe; color: #1d4ed8; }
+.campaign-status--completed { background: #D1FAE5; color: #065F46; }
 .campaign-status--cancelled,
 .campaign-status--failed { background: var(--danger-bg); color: #b91c1c; }
 
@@ -428,7 +428,7 @@
   width: 40px;
   height: 40px;
   border-radius: var(--radius-pill);
-  background: linear-gradient(135deg, #e0e7ff, #dbeafe);
+  background: linear-gradient(135deg, #e0e7ff, #D1FAE5);
   color: var(--primary);
   font-size: 13px;
   font-weight: 700;

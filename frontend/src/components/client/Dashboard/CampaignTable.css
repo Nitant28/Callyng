@@ -113,7 +113,7 @@
 .cd-campaigns__status--paused,
 .cd-campaigns__status--pausing { background: var(--warning-light); color: #b45309; }
 .cd-campaigns__status--draft { background: #f1f5f9; color: #64748b; }
-.cd-campaigns__status--completed { background: var(--primary-light); color: #1d4ed8; }
+.cd-campaigns__status--completed { background: var(--primary-light); color: #065F46; }
 .cd-campaigns__health {
   font-size: 10px;
   font-weight: var(--weight-bold);
@@ -124,7 +124,7 @@
 .cd-campaigns__health--green { background: var(--success-light); color: #15803d; }
 .cd-campaigns__health--orange { background: var(--warning-light); color: #b45309; }
 .cd-campaigns__health--red { background: var(--danger-light); color: #b91c1c; }
-.cd-campaigns__health--blue { background: var(--primary-light); color: #1d4ed8; }
+.cd-campaigns__health--blue { background: var(--primary-light); color: #065F46; }
 .cd-campaigns__health--neutral { background: var(--surface-alt); color: var(--text-muted); }
 .cd-campaigns__cell {
   font-size: 12px;
@@ -153,7 +153,7 @@
 .cd-campaigns__conv-bar > div,
 .cd-campaigns__budget-bar > div {
   height: 100%;
-  background: linear-gradient(90deg, #2563eb, #60a5fa);
+  background: linear-gradient(90deg, #047857, #34D399);
   border-radius: 999px;
 }
 .cd-campaigns__budget {

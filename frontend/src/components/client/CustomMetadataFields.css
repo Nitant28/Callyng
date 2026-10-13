@@ -27,7 +27,7 @@
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 10px;
   background: var(--surface-alt, #f8fafc);
-  color: var(--primary, #2563eb);
+  color: var(--primary, #047857);
   font-family: 'Inter', sans-serif;
   font-size: 12px;
   font-weight: 600;
@@ -35,7 +35,7 @@
 }
 
 .ent-custom-cols__add:hover {
-  background: var(--primary-light, #eff6ff);
+  background: var(--primary-light, #ECFDF5);
   border-color: #bfdbfe;
 }
 
@@ -70,8 +70,8 @@
 }
 
 .ent-custom-cols__row input:focus {
-  border-color: var(--primary, #2563eb);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--primary, #047857);
+  box-shadow: 0 0 0 3px rgba(4, 120, 87, 0.12);
 }
 
 .ent-custom-cols__remove {

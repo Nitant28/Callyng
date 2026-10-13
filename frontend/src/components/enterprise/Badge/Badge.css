@@ -11,5 +11,5 @@
 .ent-badge--success { background: var(--success-bg, #dcfce7); color: #15803d; }
 .ent-badge--warning { background: var(--warning-bg, #fef3c7); color: #b45309; }
 .ent-badge--danger { background: var(--danger-bg, #fee2e2); color: #b91c1c; }
-.ent-badge--info { background: #dbeafe; color: #1d4ed8; }
+.ent-badge--info { background: #D1FAE5; color: #065F46; }
 .ent-badge--neutral { background: #f1f5f9; color: #475569; }

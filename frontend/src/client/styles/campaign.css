@@ -123,6 +123,6 @@
 
 /* Live call highlight rules */
 .cl-lead-row--live {
-  background: #EFF6FF !important;
-  border-left: 3px solid #2563EB !important;
+  background: #ECFDF5 !important;
+  border-left: 3px solid #047857 !important;
 }

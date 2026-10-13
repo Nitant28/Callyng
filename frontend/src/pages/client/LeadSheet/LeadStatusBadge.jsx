@@ -4,7 +4,7 @@ import './LeadStatusBadge.css';
 const DOT = {
   success: '#22c55e',
   warning: '#eab308',
-  info: '#3b82f6',
+  info: '#10B981',
   danger: '#ef4444',
   neutral: '#94a3b8',
 };

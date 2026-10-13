@@ -118,7 +118,7 @@ const PerformanceInsights = ({ campaigns = [], calls = [], loading, refreshLaten
             cy="32"
             r="28"
             fill="none"
-            stroke="#2563eb"
+            stroke="#047857"
             strokeWidth="5"
             strokeDasharray={`${ringPct * 1.76} 176`}
             strokeLinecap="round"

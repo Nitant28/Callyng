@@ -482,7 +482,7 @@ Unclear last turn
               <section>
                 <h4 className="font-bold text-lg mb-2">Pipeline</h4>
                 <p>
-                  Plivo 8 kHz audio → Silero VAD → STT → LLM (tool calls) → TTS → Plivo.
+                  Telnyx 8 kHz audio → Silero VAD → STT → LLM (tool calls) → TTS → Telnyx.
                   This is not Gemini Live. Models-tab Gemini + VAD sliders do not apply.
                 </p>
               </section>

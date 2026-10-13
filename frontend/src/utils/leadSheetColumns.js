@@ -3,7 +3,7 @@
  * Required columns are always shown; only optional IDs are persisted.
  */
 
-const STORAGE_PREFIX = 'bhuvisx:lead-sheet-columns';
+const STORAGE_PREFIX = 'swarna:lead-sheet-columns';
 
 export const REQUIRED_LEAD_SHEET_COLUMNS = [
   { id: 'name', label: 'Name', required: true },

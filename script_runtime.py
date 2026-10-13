@@ -484,7 +484,7 @@ def schedule_post_call_snapshot_write(
 
 
 def _load_sts_script(script_id_override: str | None = None) -> ModuleType:
-    raw = (script_id_override or os.getenv("STS_SCRIPT") or "pyramid_mr").strip()
+    raw = (script_id_override or os.getenv("STS_SCRIPT") or "pyramid_bilingual").strip()
     if not re.fullmatch(r"[a-z][a-z0-9_]*", raw):
         raise ValueError(
             f"Invalid STS_SCRIPT={raw!r}; use a snake_case module name under sts_scripts/"
@@ -586,7 +586,57 @@ def resolve_sts_runtime(body: dict[str, Any]) -> StsRuntime:
             )
 
     pg = body.get("_pg") or {}
-    mod = _load_sts_script(pg.get("script_id"))
+    script_id = (
+        body.get("script_id")
+        or pg.get("script_id")
+        or ("receptionist" if body.get("persona") == "receptionist" or "reception" in str(body.get("script_name", "")).lower() else None)
+    )
+
+    custom_script = (body.get("call_script") or "").strip()
+    if custom_script and not script_id:
+        ctx = LeadContext.from_body(body)
+        lead_name = ctx.lead_name or "the caller"
+        opening = (body.get("opening_message") or custom_script.split("\n")[0]).strip()
+        system_instruction = f"""# AUDIO PROFILE: AI Phone Receptionist
+You are speaking directly over a live phone call to {lead_name}.
+Tone: Warm, courteous, articulate, and natural.
+One question, one breath. Keep responses short and conversational.
+
+## SCRIPT / CONTEXT:
+{custom_script}
+"""
+        bootstrap = [
+            {
+                "role": "user",
+                "content": (
+                    f"The call has connected to {lead_name}. "
+                    f"Say ONLY this opening in a warm, welcoming voice: '{opening}' "
+                    f"Then stop and wait for their response."
+                ),
+            }
+        ]
+        return StsRuntime(
+            script_id="custom_call_script",
+            source="custom",
+            system_instruction=system_instruction,
+            bootstrap_messages=bootstrap,
+            goodbye_markers=("have a great day", "thank you", "goodbye", "bye bye"),
+            gemini_model="models/gemini-3.1-flash-live-preview",
+            gemini_voice="Aoede",
+            gemini_language=Language.EN_IN,
+            gemini_vad=GeminiVADParams(
+                start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
+                end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
+                prefix_padding_ms=220,
+                silence_duration_ms=650,
+            ),
+            gemini_temperature=0.5,
+            extraction_schema={"type": "object", "properties": {"summary": {"type": "string"}}},
+            gemini_enable_affective_dialog=False,
+            module_name="custom_script",
+        )
+
+    mod = _load_sts_script(script_id)
     ctx = LeadContext.from_body(body)
     runtime = _sts_from_module(mod, ctx)
     logger.info("STS script active: {} ({})", runtime.script_id, runtime.module_name)

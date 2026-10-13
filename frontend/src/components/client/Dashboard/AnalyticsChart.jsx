@@ -80,7 +80,7 @@ const AnalyticsChart = ({ calls = [], loading }) => {
                 type="monotone"
                 dataKey="calls"
                 name="Calls"
-                stroke="#2563eb"
+                stroke="#047857"
                 strokeWidth={2}
                 dot={false}
                 isAnimationActive={false}

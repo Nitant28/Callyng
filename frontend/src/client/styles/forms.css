@@ -29,7 +29,7 @@
 
 .cl-input:focus {
   border-color: var(--blue) !important;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1) !important;
+  box-shadow: 0 0 0 3px rgba(4, 120, 87, 0.1) !important;
 }
 
 .cl-select {

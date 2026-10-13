@@ -3,8 +3,9 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Phone,
-    [string]$Name = "Sir/Madam",
-    [string]$City = ""
+    [string]$Name = "Nitant",
+    [string]$City = "Pune",
+    [string]$Persona = "aakashvani"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +24,7 @@ $body = @{
     body = @{
         lead_name = $Name
         city = $City
+        persona = $Persona
     }
 } | ConvertTo-Json -Depth 3
 

@@ -69,9 +69,9 @@
 }
 
 .cw-modal__primary {
-  background: var(--color-primary, #2563eb) !important;
+  background: var(--color-primary, #047857) !important;
   color: #fff !important;
-  border-color: var(--color-primary, #2563eb) !important;
+  border-color: var(--color-primary, #047857) !important;
 }
 
 .cw-modal__warn {

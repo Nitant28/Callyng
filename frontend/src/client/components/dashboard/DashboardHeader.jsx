@@ -20,9 +20,10 @@ const DashboardHeader = ({
   return (
     <div className="cl-dashboard-header">
       <div>
-        <h2 className="cl-section-title">Business Summary</h2>
+        <p className="cl-dashboard-header__kicker">Workspace</p>
+        <h2 className="cl-section-title">Hello{clientName ? `, ${clientName}` : ''}</h2>
         <p className="cl-dashboard-header__meta">
-          {clientName ? `${clientName} · ` : ''}Updated {lastUpdated}
+          A clear view of calls, interest, and credits. Updated {lastUpdated}
           {refreshing && <span className="cl-dashboard-header__sync"> · Syncing…</span>}
         </p>
       </div>

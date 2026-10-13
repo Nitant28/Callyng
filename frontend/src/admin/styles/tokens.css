@@ -5,8 +5,8 @@
 
 :root {
   /* Brand palette */
-  --admin-primary:          #1a47e8;
-  --admin-primary-muted:    #dde4fd;
+  --admin-primary:          #047857;
+  --admin-primary-muted:    #ECFDF5;
   --admin-on-primary:       #ffffff;
   --admin-success:          #006b5c;
   --admin-success-bg:       #d7f5f0;
@@ -16,14 +16,14 @@
   --admin-warning-bg:       #fef3c7;
 
   /* Surface palette */
-  --admin-bg:               #f4f6fb;
+  --admin-bg:               #F7FBF8;
   --admin-surface:          #ffffff;
-  --admin-surface-alt:      #f8f9fe;
-  --admin-border:           #e0e3ee;
+  --admin-surface-alt:      #ECFDF5;
+  --admin-border:           #E7F5EE;
   --admin-border-strong:    #c4c5d8;
 
   /* Text palette */
-  --admin-text-primary:     #0c1941;
+  --admin-text-primary:     #052E16;
   --admin-text-secondary:   #444656;
   --admin-text-muted:       #747687;
   --admin-text-disabled:    #a0a3b0;
@@ -61,7 +61,7 @@
   --admin-radius-full: 9999px;
 
   /* Shadow */
-  --admin-shadow-card:  0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(22,71,232,0.04);
+  --admin-shadow-card:  0 1px 4px rgba(0,0,0,0.06), 0 4px 16px rgba(4,120,87,0.06);
   --admin-shadow-modal: 0 8px 40px rgba(12,25,65,0.16);
 
   /* Layout */
@@ -98,9 +98,9 @@
   --color-outline-variant:      var(--admin-border);
   --color-surface-container-lowest: var(--admin-surface);
   --color-surface-container-low:    var(--admin-surface-alt);
-  --color-surface-container:        #ebedff;
-  --color-surface-container-high:   #e4e7ff;
-  --color-surface-variant:          #dce1ff;
+  --color-surface-container:        #ecfdf5;
+  --color-surface-container-high:   #d1fae5;
+  --color-surface-variant:          #d1fae5;
   --color-error:                    var(--admin-error);
   --color-error-container:          var(--admin-error-bg);
   --color-on-error-container:       var(--admin-error);

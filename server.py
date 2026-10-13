@@ -7,6 +7,7 @@ import re
 import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -38,26 +39,27 @@ from db.warmup_state import (  # noqa: E402
     set_warmup_ready,
     wait_for_warmup,
 )
-from plivo_hangup import handle_plivo_hangup  # noqa: E402
-from recording import handle_plivo_recording, start_plivo_recording  # noqa: E402
-from telephony import build_hangup_url, make_plivo_call, public_telephony_base_url  # noqa: E402
+from telnyx_hangup import handle_telnyx_webhook, handle_plivo_hangup  # noqa: E402
+from recording import handle_telnyx_recording, handle_plivo_recording, start_telnyx_recording, start_plivo_recording  # noqa: E402
+from telephony import (  # noqa: E402
+    build_hangup_url,
+    build_texml_stream_xml,
+    make_telnyx_call,
+    public_telephony_base_url,
+)
 
 from api.script_config_validation import normalize_route  # noqa: E402
 
 # ── Select which bot to run ────────────────────────────────────────────────────
 BOT_ROUTE = normalize_route(os.getenv("BOT_ROUTE", "sts"))
 
-# ── Module-level imports for the per-call hot path ────────────────────────────
-# Importing the bot module and pipecat's WebSocketRunnerArguments at module
-# load time (rather than inside the /ws handler) removes the tens-to-hundreds
-# of microseconds of `import` machinery on every inbound WebSocket and ensures
-# the lifespan pre-warm actually covers everything the hot path needs.
 from pipecat.runner.types import WebSocketRunnerArguments  # noqa: E402
 
 if BOT_ROUTE == "sts":
     from bot_sts import bot as _bot  # noqa: E402
 else:
     from bot_cascade import bot as _bot  # noqa: E402
+
 
 def _prewarm_live_connect_config():
     """Minimal LiveConnectConfig aligned with Pipecat audio STS (not empty setup)."""
@@ -123,11 +125,6 @@ async def _prewarm_gemini(call_id: str) -> None:
     """
     Optionally open a real Gemini Live session to absorb cold-start, then
     signal /answer via Redis warmup state.
-
-    Disabled by default (``GEMINI_PREWARM=0``). A missed/disabled pre-warm
-    only costs the bot's own Gemini WS cold-start (~1–2 s), which overlaps
-    with pipeline setup in ``on_client_connected``. Enabling doubles Live
-    sessions and request rate against the Gemini quota.
     """
     if not _gemini_prewarm_enabled():
         logger.debug(f"[prewarm:{call_id}] skipped (GEMINI_PREWARM disabled)")
@@ -139,7 +136,7 @@ async def _prewarm_gemini(call_id: str) -> None:
         await set_warmup_ready(call_id)
         return
 
-    from google import genai  # pip install google-genai  (NOT google-generativeai)
+    from google import genai
 
     api_key = os.getenv("GOOGLE_API_KEY", "")
     if not api_key:
@@ -152,9 +149,9 @@ async def _prewarm_gemini(call_id: str) -> None:
         logger.info(
             f"[prewarm:{call_id}] Connecting to Gemini Live model={model} …"
         )
-        client = genai.Client(api_key=api_key)  # type: ignore[attr-defined]
+        client = genai.Client(api_key=api_key)
 
-        async with client.aio.live.connect(  # type: ignore[attr-defined]
+        async with client.aio.live.connect(
             model=model, config=config
         ) as session:
             await session.send_client_content(
@@ -173,8 +170,6 @@ async def _prewarm_gemini(call_id: str) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Pre-import Silero VAD only for cascaded route (STS uses Gemini server-side VAD).
-    # LocalSmartTurnV3Analyzer is unused anywhere in this repo — skip it.
     if BOT_ROUTE != "sts":
         logger.info("[startup] Pre-importing heavy pipecat audio modules …")
         try:
@@ -183,7 +178,7 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning(f"[startup] Pre-import warning ({exc}); continuing anyway")
     else:
-        logger.info("[startup] Skipping Silero/SmartTurn pre-import (BOT_ROUTE=sts)")
+        logger.info("[startup] Skipping Silero pre-import (BOT_ROUTE=sts)")
 
     db_path = os.getenv("CALL_LOG_DB_PATH", "./data/call_logs.db")
     try:
@@ -241,7 +236,6 @@ async def lifespan(app: FastAPI):
                 pg_db.live_call_grace_minutes(),
             )
             
-        # Auto-resume campaigns
         try:
             running_camps = await pg_db.get_all_running_campaigns(pool)
             if running_camps:
@@ -300,16 +294,9 @@ app.add_middleware(
 @limiter.exempt
 async def start_call(request: Request) -> JSONResponse:
     """
-    Trigger an outbound call with Gemini pre-warming.
+    Trigger an outbound call with Telnyx Telephony & Gemini pre-warming.
 
     Body: { "phone_number": "+91XXXXXXXXXX", "body": { "lead_name": "Rahul" } }
-
-    Flow:
-      1. Generate a unique call_id and register a warmup Event.
-      2. Kick off _prewarm_gemini() as a background task (no await — runs in parallel).
-      3. Ask Plivo to place the call (also ~1-2 s, overlaps with step 2).
-      4. Return immediately; /answer will wait for the warmup event before
-         handing the stream URL to Plivo, so the bot greets with zero cold-start.
     """
     data = await request.json()
     if not data.get("phone_number"):
@@ -319,14 +306,10 @@ async def start_call(request: Request) -> JSONResponse:
     body_data = data.get("body", {}) or {}
     if not isinstance(body_data, dict):
         body_data = {}
-    # So Pipecat /ws receives callee phone inside runner_args.body (scripts use LeadContext).
     body_data = {**body_data, "phone_number": phone_number}
     call_id = str(uuid.uuid4())
 
-    # Register warmup state BEFORE starting the background task.
     await set_warmup_pending(call_id)
-
-    # Fire pre-warm in the background — overlaps with the Plivo dial request.
     spawn_background_task(_prewarm_gemini(call_id), f"prewarm_gemini:{call_id}")
 
     host = request.headers.get("host", "localhost")
@@ -335,29 +318,44 @@ async def start_call(request: Request) -> JSONResponse:
     if body_data:
         encoded = urllib.parse.quote(json.dumps(body_data))
         answer_url += f"&body_data={encoded}"
-    hangup_url = build_hangup_url(call_id, host=host)
+    webhook_url = build_hangup_url(call_id, host=host)
+    if body_data:
+        encoded = urllib.parse.quote(json.dumps(body_data))
+        webhook_url += f"&body_data={encoded}"
 
     try:
-        result = await make_plivo_call(
+        result = await make_telnyx_call(
             session=request.app.state.session,
             to_number=phone_number,
-            from_number=os.getenv("PLIVO_PHONE_NUMBER", ""),
+            from_number=os.getenv("TELNYX_PHONE_NUMBER", ""),
             answer_url=answer_url,
-            hangup_url=hangup_url,
+            hangup_url=webhook_url,
+            webhook_url=webhook_url,
+            client_state=json.dumps(body_data),
         )
-        call_uuid = result.get("request_uuid", "unknown")
+        call_uuid = result.get("call_control_id") or result.get("request_uuid") or "unknown"
     except Exception as e:
         await clear_warmup(call_id)
         raise HTTPException(500, str(e))
 
-    logger.info(f"[start] call_id={call_id}  plivo_uuid={call_uuid}  phone={phone_number}")
+    logger.info(f"[start] call_id={call_id}  telnyx_control_id={call_uuid}  phone={phone_number}")
     return JSONResponse({
         "call_uuid": call_uuid,
         "call_id": call_id,
         "status": "call_initiated",
         "phone_number": phone_number,
         "route": BOT_ROUTE,
+        "telephony_provider": "telnyx",
     })
+
+
+# ── Telnyx Webhook Routes ────────────────────────────────────────────────────
+
+@app.post("/webhooks/telnyx")
+@app.api_route("/telnyx-webhook", methods=["GET", "POST"])
+@limiter.exempt
+async def telnyx_webhook(request: Request):
+    return await handle_telnyx_webhook(request)
 
 
 @app.api_route("/plivo-hangup", methods=["GET", "POST"])
@@ -372,7 +370,6 @@ async def plivo_transfer_xml(
     request: Request,
     session_call_id: str = Query(""),
 ):
-    """Plivo fetches this after Transfer REST; must accept GET and POST."""
     from call_transfer import load_transfer_destination
 
     sid = (session_call_id or "").strip()
@@ -380,21 +377,21 @@ async def plivo_transfer_xml(
         sid = str(request.query_params.get("session_call_id") or "").strip()
     number = await load_transfer_destination(sid)
     logger.info(
-        "plivo-transfer-xml method={} session={} dest={}",
+        "transfer-xml method={} session={} dest={}",
         request.method,
         sid or "?",
         number or "MISSING",
     )
     if not number:
         raise HTTPException(404, "transfer destination not found")
-    caller_id = xml_escape((os.getenv("PLIVO_PHONE_NUMBER") or "").strip())
+    caller_id = xml_escape((os.getenv("TELNYX_PHONE_NUMBER") or "").strip())
     dest = xml_escape(number)
     host = request.headers.get("host", "")
     action = ""
     if sid:
         action_url = (
             f"{public_telephony_base_url(host)}"
-            f"/plivo-dial-status?session_call_id={urllib.parse.quote(sid)}"
+            f"/telnyx-webhook?session_call_id={urllib.parse.quote(sid)}"
         )
         action = f' action="{xml_escape(action_url)}" method="POST"'
     caller_attr = f' callerId="{caller_id}"' if caller_id else ""
@@ -412,14 +409,13 @@ async def plivo_transfer_xml(
 @app.api_route("/plivo-dial-status", methods=["GET", "POST"])
 @limiter.exempt
 async def plivo_dial_status(request: Request, session_call_id: str = Query("")):
-    """Dial action callback — logs whether the transfer ring connected."""
     form: dict = {}
     try:
         form = dict(await request.form())
     except Exception:
         pass
     logger.info(
-        "plivo-dial-status session={} q={} form={}",
+        "dial-status session={} q={} form={}",
         session_call_id or "?",
         dict(request.query_params),
         form,
@@ -430,10 +426,11 @@ async def plivo_dial_status(request: Request, session_call_id: str = Query("")):
     )
 
 
+@app.api_route("/telnyx-recording", methods=["GET", "POST"])
 @app.api_route("/plivo-recording", methods=["GET", "POST"])
 @limiter.exempt
-async def plivo_recording(request: Request):
-    return await handle_plivo_recording(request)
+async def telnyx_recording(request: Request):
+    return await handle_telnyx_recording(request)
 
 
 @app.api_route("/answer", methods=["GET", "POST"])
@@ -443,18 +440,15 @@ async def answer_xml(
     call_id: str = Query(None),
     CallUUID: str = Query(None),
     body_data: str = Query(None),
-) -> HTMLResponse:
+) -> Any:
     """
-    Returns XML that tells Plivo to stream audio to our WebSocket.
+    Returns TeXML / XML that tells Telnyx to stream audio to our WebSocket.
+    If Telnyx sends a webhook event instead, delegate to handle_telnyx_webhook.
+    """
+    content_type = request.headers.get("content-type", "").lower()
+    if "json" in content_type:
+        return await handle_telnyx_webhook(request)
 
-    If call_id is present we wait (up to 3 s) for the Gemini pre-warm to
-    finish before responding. Plivo calls /answer only after the callee
-    picks up, and the prewarm itself usually completes in <2 s — so a
-    tight cap here just prevents long stalls if Google is slow without
-    eating into the typical happy path. A missed prewarm only costs the
-    bot's own Gemini WS cold-start (~1–2 s), which is now overlapped
-    with the rest of pipeline setup by the on_client_connected handler.
-    """
     if call_id:
         ready = await wait_for_warmup(call_id, timeout_s=3.0)
         if ready:
@@ -462,19 +456,19 @@ async def answer_xml(
         else:
             logger.warning(f"[answer:{call_id}] Pre-warm timeout — proceeding anyway")
 
-    if call_id and CallUUID:
+    call_control_id = CallUUID or str(request.query_params.get("call_control_id") or "")
+    if call_id and call_control_id:
         pool = getattr(request.app.state, "pool", None)
         if pool is not None:
-            from background_tasks import spawn_background_task
             spawn_background_task(
-                pg_db.link_call_log_plivo_sid(pool, call_id, CallUUID),
+                pg_db.link_call_log_telnyx_sid(pool, call_id, call_control_id),
                 name=f"link_sid_{call_id}"
             )
             session = getattr(request.app.state, "session", None)
             if session is not None:
                 host = request.headers.get("host", "localhost")
                 spawn_background_task(
-                    start_plivo_recording(session, CallUUID, call_id, host=host),
+                    start_telnyx_recording(session, call_control_id, call_id, host=host),
                     name=f"start_rec_{call_id}"
                 )
 
@@ -482,7 +476,6 @@ async def answer_xml(
     ws_base = public_telephony_base_url(host).replace("https://", "wss://").replace("http://", "ws://")
     ws_url = f"{ws_base}/ws"
 
-    # Pass body_data + call_id through to the WebSocket endpoint.
     params: list[str] = []
     if call_id:
         params.append(f"call_id={urllib.parse.quote(call_id)}")
@@ -497,27 +490,19 @@ async def answer_xml(
     if params:
         ws_url += "?" + "&amp;".join(params)
 
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">
-        {ws_url}
-    </Stream>
-</Response>"""
-
+    xml = build_texml_stream_xml(ws_url)
     return HTMLResponse(content=xml, media_type="application/xml")
 
 
 def _resolve_bot(body_data: dict):
-    """Phase 2: per-call route from _pg; Phase 0: module-level _bot."""
+    """Resolve bot module per call."""
     pg = body_data.get("_pg") if isinstance(body_data.get("_pg"), dict) else None
     if pg and pg.get("route"):
         route = pg["route"]
         if route == "cascaded":
             from bot_cascade import bot as dynamic_bot
-
             return dynamic_bot
         from bot_sts import bot as dynamic_bot
-
         return dynamic_bot
     return _bot
 
@@ -533,12 +518,14 @@ async def ws_endpoint(
     body_data: dict = {}
     if body:
         try:
-            body_data = json.loads(base64.b64decode(urllib.parse.unquote(body)).decode())
+            body_data = json.loads(base64.b64decode(urllib.parse.unquote(body)).decode("utf-8"))
         except Exception:
-            pass
+            try:
+                body_data = json.loads(urllib.parse.unquote(body))
+            except Exception:
+                pass
     if not isinstance(body_data, dict):
         body_data = {}
-    # Correlate with POST /start response `call_id` (UUID). Not set for ad-hoc WS tests.
     if call_id:
         body_data["_session_call_id"] = call_id
         from script_prefetch import pop_prefetched_config
@@ -566,7 +553,7 @@ async def ws_endpoint(
         try:
             await websocket.close()
         except Exception:
-            pass  # already closed / disconnect in flight
+            pass
     finally:
         if call_id and app.state.pool is not None:
             try:
@@ -584,7 +571,11 @@ async def ws_endpoint(
 @app.get("/health")
 @limiter.exempt
 async def health():
-    return {"status": "ok", "route": BOT_ROUTE}
+    return {
+        "status": "ok",
+        "route": BOT_ROUTE,
+        "telephony_provider": "telnyx",
+    }
 
 
 def _register_api_routes() -> None:

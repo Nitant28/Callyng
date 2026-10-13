@@ -18,7 +18,7 @@ from api.script_config_validation import normalize_route, validate_route
 from db import postgres as pg_db
 from dialer.concurrent_dialer import start_dialer, stop_dialer
 from recording import resolve_recording_url
-from telephony import fetch_plivo_cash_credits
+from telephony import fetch_telnyx_balance, fetch_plivo_cash_credits
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -1067,9 +1067,9 @@ async def extended_health(
         "size": pool.get_size(),
         "idle": pool.get_idle_size(),
     }
-    plivo_balance = None
+    telnyx_balance = None
     try:
-        plivo_balance = float(await fetch_plivo_cash_credits(request.app.state.session))
+        telnyx_balance = float(await fetch_telnyx_balance(request.app.state.session))
     except Exception:
         pass
 
@@ -1077,6 +1077,8 @@ async def extended_health(
         "status": "ok",
         "active_calls": active_calls or 0,
         "pool": pool_stats,
-        "plivo_balance": plivo_balance,
+        "telephony_provider": "telnyx",
+        "telnyx_balance": telnyx_balance,
+        "plivo_balance": telnyx_balance,
         "dialer_tasks": len(getattr(request.app.state, "dialer_tasks", {})),
     }

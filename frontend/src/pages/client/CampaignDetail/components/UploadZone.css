@@ -3,7 +3,7 @@
 }
 .cdet-upload {
   background: var(--surface);
-  border: 2px dashed rgba(37, 99, 235, 0.25);
+  border: 2px dashed rgba(4, 120, 87, 0.25);
   border-radius: 20px;
   padding: 40px 32px;
   text-align: center;
@@ -11,7 +11,7 @@
   transition: border-color 150ms ease, background 150ms ease;
 }
 .cdet-upload:hover {
-  border-color: rgba(37, 99, 235, 0.45);
+  border-color: rgba(4, 120, 87, 0.45);
   background: #fafbff;
 }
 .cdet-upload--locked {
@@ -33,8 +33,8 @@
   height: 56px;
   margin: 0 auto 16px;
   border-radius: 16px;
-  background: #eff6ff;
-  color: #2563eb;
+  background: #ECFDF5;
+  color: #047857;
   display: flex;
   align-items: center;
   justify-content: center;

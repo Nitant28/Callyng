@@ -9,7 +9,7 @@
   white-space: nowrap;
 }
 .cl-status--success { background: #dcfce7; color: #15803d; }
-.cl-status--info { background: #dbeafe; color: #1d4ed8; }
+.cl-status--info { background: #D1FAE5; color: #065F46; }
 .cl-status--danger { background: #fee2e2; color: #b91c1c; }
 .cl-status--neutral { background: #f1f5f9; color: #475569; }
 .cl-status--live { background: #ecfdf5; color: #059669; }

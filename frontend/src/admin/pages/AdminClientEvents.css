@@ -84,11 +84,11 @@
 }
 
 .admin-client-events__action--edit {
-  color: #2563eb;
+  color: #047857;
 }
 
 .admin-client-events__action--edit:hover {
-  background: #eff6ff;
+  background: #ECFDF5;
   border-color: #bfdbfe;
 }
 
@@ -360,9 +360,9 @@
 }
 
 .admin-client-events__status--draft {
-  border: 1px solid #dbeafe;
-  background: #eff6ff;
-  color: #2563eb;
+  border: 1px solid #D1FAE5;
+  background: #ECFDF5;
+  color: #047857;
 }
 
 .admin-client-events__status--completed {

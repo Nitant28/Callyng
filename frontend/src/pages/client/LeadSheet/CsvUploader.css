@@ -64,7 +64,7 @@
 }
 .ls-upload__drop--active {
   border-color: var(--primary);
-  background: #eff6ff;
+  background: #ECFDF5;
 }
 .ls-upload__input {
   position: absolute;

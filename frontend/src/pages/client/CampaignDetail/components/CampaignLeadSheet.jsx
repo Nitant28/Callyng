@@ -62,7 +62,7 @@ const LiveTimer = ({ startedAt }) => {
 
   const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const ss = String(elapsed % 60).padStart(2, '0');
-  return <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#2563EB' }}>{mm}:{ss}</span>;
+  return <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#047857' }}>{mm}:{ss}</span>;
 };
 
 const CampaignLeadSheet = ({

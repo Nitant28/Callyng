@@ -258,9 +258,9 @@ export default function AdminOverview() {
             gridTemplateColumns: 'repeat(4, 1fr)',
             gap: 'var(--admin-sp-4)',
           }}>
-            {/* Plivo Balance */}
+            {/* Telnyx Balance */}
             <div className="infra-card">
-              <div className="infra-card__label">Plivo Balance</div>
+              <div className="infra-card__label">Telnyx Balance</div>
               <div className="infra-card__value">{plivoBal}</div>
             </div>
             {/* Dialer Tasks */}

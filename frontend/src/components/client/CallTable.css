@@ -55,11 +55,11 @@
   padding: 0.25rem;
   border: none;
   background: transparent;
-  color: var(--color-primary, #2563eb);
+  color: var(--color-primary, #047857);
   cursor: pointer;
   border-radius: 0.25rem;
 }
 
 .cw-call-table__icon-btn:hover {
-  background: var(--color-primary-container, #dbeafe);
+  background: var(--color-primary-container, #D1FAE5);
 }

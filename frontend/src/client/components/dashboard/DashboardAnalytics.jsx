@@ -104,9 +104,9 @@ const DashboardAnalytics = ({ chartData, callsCount = 0, period, onPeriodChange 
                 type="monotone"
                 dataKey="totalCalls"
                 name="Total calls"
-                stroke="#2563EB"
+                stroke="#047857"
                 strokeWidth={2}
-                dot={{ r: 2, fill: '#2563EB' }}
+                dot={{ r: 2, fill: '#047857' }}
                 activeDot={{ r: 4 }}
               />
             </LineChart>

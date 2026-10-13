@@ -1,12 +1,12 @@
 :root {
   /* Brand colors */
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-primary-light: #dbeafe;
+  --color-primary: #047857;
+  --color-primary-hover: #065F46;
+  --color-primary-light: #D1FAE5;
   --color-bg: #f6f8fc;
-  --color-sidebar: #08162c;
+  --color-sidebar: #052E16;
   --color-sidebar-hover: #0f2347;
-  --color-sidebar-active: #2563eb;
+  --color-sidebar-active: #047857;
   --color-card: #ffffff;
   --color-text: #0f172a;
   --color-text-muted: #64748b;

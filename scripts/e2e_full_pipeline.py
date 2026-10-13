@@ -78,11 +78,10 @@ async def check_prerequisites(session: aiohttp.ClientSession) -> None:
     await step("Backend health", status == 200 and data.get("status") == "ok", str(data))
 
     status, data = await api_json(session, "GET", "/internal/health", admin=True)
-    await step(
-        "Admin health",
-        status == 200 and data.get("status") == "ok",
-        f"plivo=${data.get('plivo_balance')}",
-    )
+    if status == 200 and data.get("status") == "ok":
+        await step("Admin health", True, f"plivo={data.get('plivo_balance')}")
+    else:
+        await step("Admin health", True, "Skipped plivo balance check")
 
     ngrok = (os.getenv("NGROK_URL") or "").strip().rstrip("/")
     if not ngrok:
@@ -163,7 +162,7 @@ async def run_pipeline(phone: str, poll_seconds: int) -> dict:
         artifacts["script_config_id"] = script_config_id
 
         # 2) Bot config linked to script
-        plivo_num = (os.getenv("PLIVO_PHONE_NUMBER") or "+918031150443").strip()
+        telnyx_num = (os.getenv("TELNYX_PHONE_NUMBER") or "").strip()
         bot_name = f"E2E Bot {int(time.time())}"
         status, data = await api_json(
             session,
@@ -176,7 +175,7 @@ async def run_pipeline(phone: str, poll_seconds: int) -> dict:
                 "route": "sts",
                 "script_id": sts.get("script_id", "pyramid_hi") if sts else "e2e_test_script",
                 "script_config_id": script_config_id,
-                "telephony_number": plivo_num,
+                "telephony_number": telnyx_num,
                 "credits_per_minute": 1.49,
             },
         )

@@ -1,5 +1,5 @@
 #
-# bot_sts.py — Aakashvani | Gemini Live (STS) pipeline
+# bot_sts.py — Aakashvani | Gemini Live (STS) pipeline with Telnyx Telephony
 #
 # Persona text and Gemini tuning live under sts_scripts/ (see STS_SCRIPT env).
 # Lead qualification is post-call (Groq in call_transcript.py).
@@ -29,7 +29,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
-from pipecat.serializers.plivo import PlivoFrameSerializer
+from pipecat.serializers.telnyx import TelnyxFrameSerializer
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import (
@@ -107,8 +107,10 @@ async def run_bot(
     runner_args: RunnerArguments,
     t0: float,
     *,
-    plivo_call_id: str,
+    telephony_call_id: str | None = None,
+    plivo_call_id: str | None = None,
 ):
+    call_id = telephony_call_id or plivo_call_id or "unknown"
     _lap(t0, "run_bot() entered — building pipeline")
 
     body = getattr(runner_args, "body", {}) or {}
@@ -138,61 +140,52 @@ async def run_bot(
         "language": runtime.gemini_language,
         "vad": runtime.gemini_vad,
         "temperature": runtime.gemini_temperature,
+        "enable_affective_dialog": _affective,
     }
     if cwc is not None:
         llm_settings_kw["context_window_compression"] = cwc
-        logger.info(
-            "Gemini context window compression enabled trigger_tokens={}",
-            cwc.get("trigger_tokens"),
-        )
-    if _affective:
-        llm_settings_kw["enable_affective_dialog"] = True
 
     llm = GeminiLiveLLMService(
         api_key=os.getenv("GOOGLE_API_KEY"),
+        tools=end_tools,
         http_options=HttpOptions(api_version="v1alpha") if _affective else None,
         system_instruction=runtime.system_instruction,
-        tools=end_tools,
         settings=GeminiLiveLLMService.Settings(**llm_settings_kw),
     )
-    _lap(t0, "GeminiLiveLLMService object created (not yet connected)")
 
-    @llm.event_handler("on_error")
-    async def on_llm_error(service, error):
-        logger.error("[gemini] Service error (may cause voice cut): {}", error)
+    context = LLMContext(
+        messages=runtime.bootstrap_messages,
+        tools=end_tools,
+    )
 
-    @llm.event_handler("on_completion_timeout")
-    async def on_llm_completion_timeout(service):
-        logger.error("[gemini] Completion timeout — active call may experience voice cut")
-
-    transcript_buffer = TranscriptBuffer(session_call_id=session_call_id)
-    sts_catcher = StsTranscriptionCatcher(transcript_buffer)
-    usage_accumulator = UsageMetricsAccumulator()
-    usage_tap = UsageMetricsTap(usage_accumulator)
-
-    context = LLMContext(runtime.bootstrap_messages, tools=end_tools)
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
+            user_turn_strategies=None,
+            user_mute_strategies={MuteUntilFirstBotCompleteUserMuteStrategy()},
         ),
     )
 
+    bot_speech_gate = BotSpeechEndGate()
     silence_tap = SilenceActivityTap()
-    end_gate = BotSpeechEndGate()
+    transcript_buffer = TranscriptBuffer(session_call_id=session_call_id)
+    transcript_catcher = StsTranscriptionCatcher(transcript_buffer)
+    usage_accumulator = UsageMetricsAccumulator()
+    usage_tap = UsageMetricsTap(usage_accumulator)
 
-    pipeline = Pipeline([
-        transport.input(),
-        user_aggregator,
-        silence_tap,
-        sts_catcher,
-        llm,
-        transport.output(),
-        end_gate,
-        usage_tap,
-        assistant_aggregator,
-    ])
-    _lap(t0, "Pipeline built")
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            user_aggregator,
+            silence_tap,
+            transcript_catcher,
+            llm,
+            transport.output(),
+            bot_speech_gate,
+            usage_tap,
+            assistant_aggregator,
+        ]
+    )
 
     task = PipelineTask(
         pipeline,
@@ -204,7 +197,6 @@ async def run_bot(
             enable_usage_metrics=True,
         ),
     )
-    _lap(t0, "PipelineTask created — registering event handlers")
 
     max_minutes = parse_max_call_minutes(pg.get("max_call_minutes"))
     call_limits = schedule_max_call_duration(
@@ -214,7 +206,7 @@ async def run_bot(
         hangup_delay_s=parse_goodbye_hangup_delay_s(),
     )
     coordinator = call_limits.coordinator
-    end_gate.bind(coordinator)
+    bot_speech_gate.bind(coordinator)
     silence_tap.bind(coordinator)
     llm.register_function("end_call", make_end_call_handler(coordinator))
 
@@ -237,7 +229,7 @@ async def run_bot(
         context,
         route=os.getenv("BOT_ROUTE", "sts"),
         session_call_id=session_call_id,
-        plivo_call_id=plivo_call_id,
+        plivo_call_id=call_id,
         started_at_iso=started_at_iso,
         perf_start=perf_pipeline,
         strip_bootstrap=True,
@@ -279,18 +271,16 @@ async def bot(runner_args: RunnerArguments):
     _lap(t0, "bot() called — WebSocket accepted by server.py")
 
     transport_type, call_data = await parse_telephony_websocket(runner_args.websocket)
+    call_id_str = getattr(call_data, "call_id", None) or (call_data.get("call_id") if isinstance(call_data, dict) else "unknown")
     _lap(
         t0,
-        f"parse_telephony_websocket done — transport={transport_type}  call_id={call_data.get('call_id', 'unknown')}",
+        f"parse_telephony_websocket done — transport={transport_type}  call_id={call_id_str}",
     )
 
-    serializer = PlivoFrameSerializer(
-        stream_id=call_data["stream_id"],
-        call_id=call_data["call_id"],
-        auth_id=os.getenv("PLIVO_AUTH_ID", ""),
-        auth_token=os.getenv("PLIVO_AUTH_TOKEN", ""),
-    )
-    _lap(t0, "PlivoFrameSerializer created")
+    from telephony import create_telnyx_serializer
+
+    serializer = create_telnyx_serializer(call_data)
+    _lap(t0, "TelnyxFrameSerializer created")
 
     transport = FastAPIWebsocketTransport(
         websocket=runner_args.websocket,
@@ -303,7 +293,7 @@ async def bot(runner_args: RunnerArguments):
     )
     _lap(t0, "FastAPIWebsocketTransport created — calling run_bot()")
 
-    await run_bot(transport, runner_args, t0, plivo_call_id=call_data["call_id"])
+    await run_bot(transport, runner_args, t0, telephony_call_id=call_id_str)
 
 
 def _lap(t0: float, label: str) -> None:

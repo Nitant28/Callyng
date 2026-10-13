@@ -337,7 +337,7 @@ async def dial_test_script_config(
     from uuid import uuid4
     from dialer.concurrent_dialer import fire_call, _release_lead_to_pending
     
-    for key in ("PLIVO_AUTH_ID", "PLIVO_AUTH_TOKEN", "PLIVO_PHONE_NUMBER"):
+    for key in ("TELNYX_API_KEY", "TELNYX_PHONE_NUMBER"):
         if not (os.getenv(key) or "").strip():
             raise HTTPException(503, f"{key} is not configured in .env")
 

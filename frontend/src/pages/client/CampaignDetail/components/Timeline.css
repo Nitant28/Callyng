@@ -42,8 +42,8 @@
   z-index: 1;
 }
 .cdet-timeline__item--done .cdet-timeline__dot {
-  background: #2563eb;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+  background: #047857;
+  box-shadow: 0 0 0 4px rgba(4, 120, 87, 0.12);
 }
 .cdet-timeline__item--pending .cdet-timeline__dot {
   background: #e2e8f0;

@@ -1,10 +1,31 @@
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import CanvasBackground from '../../components/shared/CanvasBackground';
-import BhuvisXLogo from '../../components/brand/BhuvisXLogo';
+import SwarnaLogo from '../../components/brand/SwarnaLogo';
+import SwarnaHeroArt from '../../components/brand/SwarnaHeroArt';
 import { useTheme } from '../../hooks/useTheme';
 import clientApi from '../../api/client';
 import './Login.css';
+
+const FEATURES = [
+  {
+    icon: 'public',
+    tone: 'mint',
+    title: 'Campaigns that dial',
+    body: 'Start a list. Swarna places the calls and stays on script.',
+  },
+  {
+    icon: 'verified_user',
+    tone: 'peach',
+    title: 'Secure by default',
+    body: 'Organization keys, isolated workspaces, nothing shared by accident.',
+  },
+  {
+    icon: 'graphic_eq',
+    tone: 'sky',
+    title: 'Gemini answers live',
+    body: 'The agent greets from your opening line, then answers from knowledge.',
+  },
+];
 
 const Login = () => {
   const navigate = useNavigate();
@@ -45,6 +66,7 @@ const Login = () => {
     if (!key) {
       setIsShaking(true);
       setTimeout(() => setIsShaking(false), 400);
+      document.getElementById('sign-in')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
 
@@ -67,40 +89,107 @@ const Login = () => {
     }
   }, [apiKey, triggerError, triggerSuccess]);
 
+  const scrollToSignIn = () => {
+    document.getElementById('sign-in')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   return (
     <div className={`cl-login ${theme === 'dark' ? 'dark' : ''} ${isRedirecting ? 'redirect-active' : ''}`}>
-      <CanvasBackground />
       <div className="redirect-overlay" />
 
       <header className="cl-login__header">
-        <div className="cl-login__brand">
-          <BhuvisXLogo variant="dark" size="lg" />
+        <SwarnaLogo variant="dark" size="md" />
+        <nav className="cl-login__nav" aria-label="Page">
+          <a href="#features">Features</a>
+          <a href="#how">How it works</a>
+          <a href="#sign-in">Access</a>
+        </nav>
+        <div className="cl-login__header-actions">
+          <button type="button" className="cl-login__icon-btn" onClick={toggleTheme} aria-label="Toggle theme">
+            <span className="material-symbols-outlined">
+              {theme === 'dark' ? 'light_mode' : 'dark_mode'}
+            </span>
+          </button>
+          <button type="button" className="cl-login__cta" onClick={scrollToSignIn}>
+            Sign in
+          </button>
         </div>
-        <button type="button" className="cl-login__theme-btn" onClick={toggleTheme} aria-label="Toggle theme">
-          <span className="material-symbols-outlined">
-            {theme === 'dark' ? 'light_mode' : 'dark_mode'}
-          </span>
-        </button>
       </header>
 
-      <main className="cl-login__main">
-        <div className="cl-login__card">
+      <section className="cl-login__hero">
+        <div className="cl-login__hero-copy">
+          <span className="cl-login__eyebrow">
+            <span className="material-symbols-outlined">graphic_eq</span>
+            Voice receptionist
+          </span>
+          <h1>You can call anyone, anytime — on script</h1>
+          <p>
+            Swarna places the call, greets in your words, and answers with Gemini.
+            Campaigns, leads, and transcripts stay easy to follow.
+          </p>
+          <div className="cl-login__hero-actions">
+            <button type="button" className="cl-login__cta cl-login__cta--lg" onClick={scrollToSignIn}>
+              Open workspace
+              <span className="material-symbols-outlined">arrow_forward</span>
+            </button>
+            <a className="cl-login__ghost" href="#how">See how it works</a>
+          </div>
+        </div>
+        <SwarnaHeroArt />
+      </section>
+
+      <section className="cl-login__trust" aria-label="What you get">
+        <span>Live calls</span>
+        <span>Script follow-through</span>
+        <span>Gemini answers</span>
+        <span>Private workspaces</span>
+        <span>Clear transcripts</span>
+      </section>
+
+      <section className="cl-login__features" id="features">
+        <p className="cl-login__kicker">Our features</p>
+        <h2>Everything you need to run voice outreach</h2>
+        <div className="cl-login__feature-grid">
+          {FEATURES.map((item) => (
+            <article key={item.title} className="cl-login__feature">
+              <div className={`cl-login__feature-icon cl-login__feature-icon--${item.tone}`}>
+                <span className="material-symbols-outlined">{item.icon}</span>
+              </div>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="cl-login__how" id="how">
+        <div>
+          <p className="cl-login__kicker">How it works</p>
+          <h2>Three steps. Then the phone rings.</h2>
+        </div>
+        <ol className="cl-login__steps">
+          <li><strong>1.</strong> Create a campaign and paste your script.</li>
+          <li><strong>2.</strong> Upload leads. Swarna dials with your voice agent.</li>
+          <li><strong>3.</strong> Watch answers, interest, and transcripts in one view.</li>
+        </ol>
+      </section>
+
+      <section className="cl-login__auth" id="sign-in">
+        <div className={`cl-login__card ${isShaking ? 'cl-login__card--shake' : ''}`}>
           <div className="cl-login__icon" aria-hidden>
             <span className="material-symbols-outlined">vpn_key</span>
           </div>
-          <h1 className="cl-login__title">Client Access</h1>
-          <p className="cl-login__subtitle">
-            Enter your organization&apos;s API key to sign in securely.
-          </p>
+          <h2>Client access</h2>
+          <p className="cl-login__subtitle">Enter your organization key. Nothing else to remember.</p>
 
           <div className="cl-login__field">
-            <label className="cl-login__label" htmlFor="api-key-input">API Key</label>
+            <label className="cl-login__label" htmlFor="api-key-input">API key</label>
             <div className="cl-login__input-wrap">
               <input
                 id="api-key-input"
                 className={`cl-login__input ${isError ? 'cl-login__input--error' : ''} ${isSuccess ? 'cl-login__input--success' : ''}`}
                 type="password"
-                placeholder="Enter client API key"
+                placeholder="Paste your client key"
                 value={apiKey}
                 onChange={(e) => {
                   setApiKey(e.target.value);
@@ -119,21 +208,22 @@ const Login = () => {
 
           <button
             type="button"
-            className={`cl-login__btn ${isShaking ? 'cl-login__btn--shake' : ''}`}
+            className="cl-login__cta cl-login__cta--block"
             onClick={handleAuthenticate}
             disabled={isSuccess || loading}
           >
             {loading && <span className="cl-login__spinner" aria-hidden />}
-            {isSuccess ? 'Success' : loading ? 'Validating…' : 'Authenticate'}
+            {isSuccess ? 'Welcome in' : loading ? 'Checking key…' : 'Enter workspace'}
             {!loading && !isSuccess && (
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>arrow_forward</span>
+              <span className="material-symbols-outlined">arrow_forward</span>
             )}
           </button>
         </div>
-      </main>
+      </section>
 
       <footer className="cl-login__footer">
-        <span>© 2026 AakashVani · Enterprise-grade security</span>
+        <span>© 2026 Swarna</span>
+        <span>Private · Encrypted in transit · Easy to leave</span>
       </footer>
     </div>
   );

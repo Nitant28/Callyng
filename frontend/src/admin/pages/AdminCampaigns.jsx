@@ -258,7 +258,7 @@ export default function AdminCampaigns() {
 
       {/* Create Modal Overlay */}
       {isCreateOpen && (
-        <div className="fixed inset-0 bg-[#0c1941]/40 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={(e) => e.target === e.currentTarget && setIsCreateOpen(false)}>
+        <div className="fixed inset-0 bg-[#064E3B]/40 dark:bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={(e) => e.target === e.currentTarget && setIsCreateOpen(false)}>
           <div className="bg-arctic-surface dark:bg-molten-surface border border-outline-variant dark:border-[#2A345E] rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
             <div className="px-6 py-5 border-b border-outline-variant dark:border-[#2A345E] bg-surface-container-lowest dark:bg-[#1A1E36] flex justify-between items-center">
               <h3 className="font-headline-sm font-bold text-on-surface dark:text-molten-text">Create Campaign</h3>

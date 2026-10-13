@@ -165,6 +165,6 @@
   pointer-events: none;
   z-index: -1;
   background:
-    radial-gradient(ellipse 80% 50% at 20% -10%, rgba(37, 99, 235, 0.05), transparent 50%),
+    radial-gradient(ellipse 80% 50% at 20% -10%, rgba(4, 120, 87, 0.05), transparent 50%),
     var(--background);
 }

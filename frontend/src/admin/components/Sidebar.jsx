@@ -31,7 +31,7 @@ export default function Sidebar() {
         <div style={{ fontFamily: 'var(--admin-font-display)', fontSize: '11px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--admin-text-muted)', marginBottom: '6px' }}>
           Management
         </div>
-        <div className="admin-sidebar__brand">Aakashvani Admin</div>
+        <div className="admin-sidebar__brand">Swarna Admin</div>
         <div className="admin-sidebar__tagline">Global Control Console</div>
       </div>
 

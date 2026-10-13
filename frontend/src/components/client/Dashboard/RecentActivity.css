@@ -70,20 +70,20 @@
 .cd-activity__dot .material-symbols-outlined { font-size: 16px; }
 .cd-activity__dot--success { background: var(--success-light); color: #15803d; }
 .cd-activity__dot--danger { background: var(--danger-light); color: #b91c1c; }
-.cd-activity__dot--blue { background: var(--primary-light); color: #2563eb; }
+.cd-activity__dot--blue { background: var(--primary-light); color: #047857; }
 .cd-activity__dot--neutral { background: var(--surface-alt); color: var(--text-muted); }
 .cd-activity__dot--warning { background: #fef3c7; color: #b45309; }
 .cd-activity__dot--live {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: #D1FAE5;
+  color: #065F46;
   animation: cd-live-pulse 1.6s ease-out infinite;
 }
 .cd-activity__item--live .cd-activity__title {
-  color: #1d4ed8;
+  color: #065F46;
 }
 @keyframes cd-live-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.35); }
-  50% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(4, 120, 87, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(4, 120, 87, 0); }
 }
 .cd-activity__line {
   width: 2px;

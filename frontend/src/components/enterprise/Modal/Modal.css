@@ -45,8 +45,8 @@
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  background: var(--primary-light, #dbeafe);
-  color: var(--primary, #2563eb);
+  background: var(--primary-light, #D1FAE5);
+  color: var(--primary, #047857);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -155,8 +155,8 @@
 .ent-form input:focus,
 .ent-form select:focus,
 .ent-form textarea:focus {
-  border-color: var(--primary, #2563eb);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--primary, #047857);
+  box-shadow: 0 0 0 3px rgba(4, 120, 87, 0.12);
 }
 
 .ent-form textarea {

@@ -231,8 +231,8 @@ const Dashboard = () => {
           <div className="cl-modal animate-scale-up" onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', gap: '16px', borderBottom: '1px solid #E2E8F0', paddingBottom: '16px' }}>
               <div style={{
-                width: '40px', height: '40px', borderRadius: '10px', background: '#EFF6FF',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#2563EB', flexShrink: 0,
+                width: '40px', height: '40px', borderRadius: '10px', background: '#ECFDF5',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#047857', flexShrink: 0,
               }}>
                 <span className="material-symbols-outlined">rocket_launch</span>
               </div>

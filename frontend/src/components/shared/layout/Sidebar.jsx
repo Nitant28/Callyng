@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { SIDEBAR_NAV } from '../../../constants/sidebar';
 import { useDashboardData } from '../../../contexts/DashboardDataContext';
-import BhuvisXLogo from '../../brand/BhuvisXLogo';
+import SwarnaLogo from '../../brand/SwarnaLogo';
 
 const formatCredits = (value) => {
   if (value == null) return '0';
@@ -19,8 +19,8 @@ const Sidebar = ({ onSignOut, isOpen = false }) => {
   return (
     <aside className={`cl-sidebar ${isOpen ? 'cl-sidebar--open' : ''}`}>
       <div className="cl-sidebar__logo">
-        <Link to="/app" className="cl-sidebar__logo-link" aria-label="BhuvisX home">
-          <BhuvisXLogo variant="light" size="md" />
+        <Link to="/app" className="cl-sidebar__logo-link" aria-label="Swarna home">
+          <SwarnaLogo variant="dark" size="md" />
         </Link>
       </div>
 
@@ -45,7 +45,7 @@ const Sidebar = ({ onSignOut, isOpen = false }) => {
       <div className="cl-sidebar__credits">
         <div className="cl-sidebar__credits-label">Credits Remaining</div>
         {loading && balance == null ? (
-          <div style={{ height: '24px', width: '80px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', animation: 'pulse 1.5s infinite' }} />
+          <div style={{ height: '24px', width: '80px', background: '#D1FAE5', borderRadius: '8px', animation: 'pulse 1.5s infinite' }} />
         ) : (
           <div className="cl-sidebar__credits-value">₹{formatCredits(balance)}</div>
         )}

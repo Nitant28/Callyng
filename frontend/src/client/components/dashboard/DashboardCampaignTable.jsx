@@ -64,7 +64,7 @@ const DashboardCampaignTable = ({ campaigns, onCampaignClick }) => (
                   <td>
                     <span style={{
                       fontWeight: 700,
-                      color: camp.status === 'running' ? '#16A34A' : camp.callingLeads > 0 ? '#2563EB' : '#64748B',
+                      color: camp.status === 'running' ? '#16A34A' : camp.callingLeads > 0 ? '#047857' : '#64748B',
                     }}>
                       {camp.status === 'running' ? 'Running' : camp.status || '—'}
                       {camp.callingLeads > 0 ? ` (${camp.callingLeads} live)` : ''}

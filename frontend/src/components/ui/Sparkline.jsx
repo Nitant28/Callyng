@@ -1,7 +1,7 @@
 import { Line, LineChart, ResponsiveContainer, YAxis } from 'recharts';
 import './Sparkline.css';
 
-const Sparkline = ({ data = [], color = '#2563eb', height = 36 }) => {
+const Sparkline = ({ data = [], color = '#047857', height = 36 }) => {
   const points = data.map((v, i) => ({ i, v }));
   const hasData = data.some((v) => v > 0);
 

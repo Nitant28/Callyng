@@ -1,7 +1,7 @@
 [project]
 name = "aakashvani"
 version = "0.1.0"
-description = "Aakashvani - AI-powered outbound voice agent platform (Pipecat + Plivo + Gemini Live)"
+description = "Aakashvani - AI-powered outbound voice agent platform (Pipecat + Telnyx + Gemini Live / ElevenLabs)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
